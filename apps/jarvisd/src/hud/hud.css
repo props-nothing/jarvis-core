@@ -166,6 +166,10 @@ pre code { background: none; border: none; padding: 0; }
 .tabs button.on { color: var(--cyan); background: rgba(94, 227, 255, 0.12); border-color: var(--cyan); }
 .sheet .lead { margin: 0 0 10px; font-size: 12.5px; color: var(--dim); line-height: 1.5; }
 .card { border: 1px solid var(--line); padding: 8px 12px; margin: 8px 0; background: rgba(2, 10, 20, 0.45); }
+.card textarea { box-sizing: border-box; width: 100%; padding: 6px 9px; color: var(--text); background: rgba(2, 10, 20, 0.75); border: 1px solid var(--line); font: 11px var(--mono); resize: vertical; }
+.card textarea:focus { border-color: var(--cyan); outline: 0; }
+.card code { padding: 4px 8px; background: rgba(2, 10, 20, 0.75); border: 1px solid var(--line); font: 12px var(--mono); color: var(--text); word-break: break-all; }
+#settings-body details summary { cursor: pointer; color: var(--cyan); font: 11px var(--mono); letter-spacing: 0.1em; margin: 6px 0; }
 .card h4 { margin: 0 0 4px; font: 600 11px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--cyan); }
 .badge { font: 10px var(--mono); letter-spacing: 0.06em; padding: 0 6px; border: 1px solid var(--line); color: var(--dim); text-transform: uppercase; margin-left: 6px; }
 .badge.on { color: var(--green); border-color: var(--green); } .badge.off { color: var(--dim); }

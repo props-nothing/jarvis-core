@@ -88,7 +88,7 @@ async fn a_schedule_round_trips_and_first_fires_one_interval_after_creation() {
         .await,
     );
     assert_eq!(created.objective(), "check the weather");
-    assert_eq!(created.cadence(), hourly());
+    assert_eq!(created.cadence(), &hourly());
     assert!(created.enabled());
     assert_eq!(created.next_run(), at(3600));
     assert_eq!(created.fire_count(), 0);
@@ -301,4 +301,88 @@ async fn a_schedule_survives_a_restart() {
         1
     );
     second.close().await;
+}
+
+fn instant(text: &str) -> UtcTimestamp {
+    must(text.parse::<UtcTimestamp>())
+}
+
+fn weekday_mornings() -> Cadence {
+    Cadence::Daily(must(jarvis_core::WallClock::parse(
+        "08:00",
+        Some("mon-fri"),
+        "Europe/Amsterdam",
+    )))
+}
+
+/// **A wall-clock schedule keeps its zone, days and time through storage, and its next fire is the zone's.**
+#[tokio::test]
+async fn a_wall_clock_schedule_round_trips_with_its_zone() {
+    let (_directory, database) = database().await;
+    let created = must(
+        create_schedule(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            "morning briefing",
+            weekday_mornings(),
+            instant("2026-03-27T10:00:00Z"),
+        )
+        .await,
+    );
+    assert_eq!(created.cadence(), &weekday_mornings());
+    // Friday 27 March after 08:00: the next is Monday 30 March, 08:00 CEST (06:00 UTC), after the clocks moved.
+    assert_eq!(created.next_run(), instant("2026-03-30T06:00:00Z"));
+    let listed = must(list_schedules(&database, LOCAL_WORKSPACE_ID).await);
+    assert_eq!(listed, vec![created]);
+    database.close().await;
+}
+
+/// **Each claim moves a daily task to the zone's next 08:00, and a pause and resume does not replay the days between.**
+#[tokio::test]
+async fn a_wall_clock_task_advances_by_the_zone_not_by_twenty_four_hours() {
+    let (_directory, database) = database().await;
+    let created = must(
+        create_schedule(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            "a",
+            weekday_mornings(),
+            instant("2026-03-26T10:00:00Z"),
+        )
+        .await,
+    );
+    assert_eq!(created.next_run(), instant("2026-03-27T07:00:00Z"));
+
+    let friday = must(claim_due_schedules(&database, instant("2026-03-27T07:00:05Z"), 10).await);
+    assert_eq!(friday.len(), 1);
+    let after = must(find_schedule(&database, LOCAL_WORKSPACE_ID, created.id()).await);
+    assert_eq!(after.next_run(), instant("2026-03-30T06:00:00Z"));
+    assert!(
+        must(claim_due_schedules(&database, instant("2026-03-27T07:00:06Z"), 10).await).is_empty(),
+        "the same morning must not fire twice"
+    );
+
+    must(
+        set_schedule_enabled(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            created.id(),
+            false,
+            instant("2026-03-27T08:00:00Z"),
+        )
+        .await,
+    );
+    let resumed = must(
+        set_schedule_enabled(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            created.id(),
+            true,
+            instant("2026-04-01T12:00:00Z"),
+        )
+        .await,
+    );
+    assert!(resumed.enabled());
+    assert_eq!(resumed.next_run(), instant("2026-04-02T06:00:00Z"));
+    database.close().await;
 }

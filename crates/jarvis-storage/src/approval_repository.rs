@@ -366,11 +366,39 @@ pub async fn read_workspace_pending_approvals(
         .collect())
 }
 
+/// Drops the held arguments of approvals whose call has already moved past `requested`, and returns how many.
+///
+/// An approved approval keeps its arguments so a daemon that died between the decision and the release can still finish the
+/// call. But once the call has been authorized or submitted, `resume` refuses it (a second delivery would be a second effect), so
+/// the arguments can never be used again: they only keep a dead approval on the list, and keep an action's payload on disk. This
+/// is the case a daemon stopped **during** a call leaves behind.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError::Sqlite`] for a persistence failure.
+pub async fn clear_arguments_of_started_calls(
+    database: &SqliteDatabase,
+) -> Result<u64, DatabaseError> {
+    sqlx::query(
+        "UPDATE approvals SET arguments_json = NULL \
+         WHERE state = 'approved' AND arguments_json IS NOT NULL \
+           AND EXISTS (SELECT 1 FROM tool_calls c WHERE c.approval_id = approvals.id AND c.outcome <> 'requested')",
+    )
+    .execute(database.pool())
+    .await
+    .map(|done| done.rows_affected())
+    .map_err(|source| DatabaseError::Sqlite {
+        operation: "clear the arguments of approvals whose call already started",
+        source,
+    })
+}
+
 /// Reads a workspace's **approved** approvals whose call has not run yet, newest first.
 ///
 /// An approved approval keeps its arguments until the call executes, so "approved and still holding arguments" is
 /// exactly "released by a person but not yet run" — the state a daemon that died between the decision and the
-/// release leaves behind, and which `jarvis approvals resume` finishes.
+/// release leaves behind, and which `jarvis approvals resume` finishes. A call that has **started** is not listed: it
+/// cannot be resumed, so offering it only invites an answer that is refused.
 ///
 /// # Errors
 ///
@@ -384,6 +412,7 @@ pub async fn read_workspace_unreleased_approvals(
                 risk_level, required_strength, nonce_hash, state, decision_channel, \
                 decision_strength, decided_by, correlation_id, created_at, expires_at, occurred_at \
          FROM approvals WHERE workspace_id = ?1 AND state = 'approved' AND arguments_json IS NOT NULL \
+           AND NOT EXISTS (SELECT 1 FROM tool_calls c WHERE c.approval_id = approvals.id AND c.outcome <> 'requested') \
          ORDER BY created_at DESC, id ASC",
     )
     .bind(workspace_id)

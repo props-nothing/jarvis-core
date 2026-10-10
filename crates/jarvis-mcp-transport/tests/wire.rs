@@ -13,10 +13,10 @@
 //!
 //! # The two failures worth being able to see
 //!
-//! 1. **A silent fall back to the legacy handshake.** `initialize` was removed in `2026-07-28`. A
-//!    client that sends it gets a legacy session that *works*, so nothing fails — and the rest of
-//!    this crate does not implement the legacy era's behaviour. The first test here asserts
-//!    `initialize` is never sent.
+//! 1. **The era being a guess.** A modern server must be spoken to with `server/discover` and never
+//!    sent `initialize`; a legacy-only server (every reference server published today) must still
+//!    connect, and say that it did so as `Legacy`. Both directions are tested, the second because the
+//!    first version of this crate refused it and so could reach no real server.
 //! 2. **A server's self-description becoming an identifier.** ADR-0024. The connection carries the
 //!    operator's name and the server's claim as two separate things, and a test asserts they do not
 //!    merge.
@@ -83,16 +83,11 @@ async fn a_modern_connection_discovers_and_never_initializes() {
     );
 }
 
-/// A peer that only knows the legacy handshake must produce a **failure**, not a working connection.
-/// `Auto` would fall back here; `Discover` must not.
+/// A peer that answers **nothing** must produce a bounded failure, not a hang.
 ///
-/// The peer answers nothing at all, which is exactly what a legacy server looks like: it is listening
-/// for an `initialize` request that a modern client never sends, so it never replies. That is why the
-/// failure must be a **bounded timeout** — without one, this exact scenario is a daemon hanging at
-/// startup against a server that will never answer.
-///
-/// The test asserts a refusal, and the deadline is enforced by the client rather than by
-/// `tokio::time::timeout` here, so the guarantee under test is the client's own.
+/// Without a deadline over both handshakes, this exact scenario is a daemon hanging at startup against
+/// a program that started but is not an MCP server. The deadline is enforced by the client rather than
+/// by `tokio::time::timeout` here, so the guarantee under test is the client's own.
 #[tokio::test]
 async fn a_peer_that_does_not_answer_discovery_produces_no_connection() {
     let (client_side, _peer) = peer_pair(ScriptedPeer::new());
@@ -108,10 +103,9 @@ async fn a_peer_that_does_not_answer_discovery_produces_no_connection() {
         matches!(error, ConnectError::DiscoveryTimedOut { .. }),
         "a silent peer must time out rather than fail some other way: {error}"
     );
-    // The refusal must name the deadline, and the remedy it suggests is the protocol era rather than
-    // the network — a legacy server is the likeliest cause of silence here.
+    // The refusal must name both attempts, so an operator knows the legacy handshake was tried too.
     assert!(error.to_string().contains("server/discover"), "{error}");
-    assert!(error.to_string().contains("legacy"), "{error}");
+    assert!(error.to_string().contains("initialize"), "{error}");
     // And it must be bounded: a client that waited forever would hang a daemon, which is the defect
     // this deadline exists to prevent.
     assert!(
@@ -120,36 +114,69 @@ async fn a_peer_that_does_not_answer_discovery_produces_no_connection() {
     );
 }
 
-/// A server that offers a revision older than the modern one is refused **by name**, and the message
-/// says what was asked for. `Discover` has no fallback, but the server still chooses what it reports,
-/// so this is the case where a client could otherwise accept a revision it cannot speak.
+/// **The case that made the first version unusable.** A server that knows only the legacy
+/// `initialize` handshake (the reference servers published today) answers `server/discover` with
+/// "method not found". The client must fall back, connect, say it is `Legacy`, and still list tools.
 #[tokio::test]
-async fn a_server_that_reports_only_a_legacy_revision_is_refused() {
-    let legacy = json!({
-        "resultType": "complete",
-        "supportedVersions": ["2025-11-25"],
-        "capabilities": { "tools": {} },
-        "ttlMs": 0,
-        "cacheScope": "private"
-    });
-    let (client_side, _peer) = peer_pair(ScriptedPeer::new().answering("server/discover", legacy));
+async fn a_legacy_only_server_connects_through_the_fallback_and_says_so() {
+    let script = ScriptedPeer::new()
+        .failing("server/discover", -32601, "Method not found")
+        .answering(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": { "tools": { "listChanged": true } },
+                "serverInfo": { "name": "old-fixture", "version": "2.0.0" }
+            }),
+        )
+        .answering(
+            "tools/list",
+            json!({ "tools": [tool("search", None, Some("Searches"))] }),
+        );
+    let (client_side, peer) = peer_pair(script);
 
-    let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+    let connection = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
         connect_over(&server("old"), client_side),
     )
     .await
-    .unwrap_or_else(|_| panic!("the negotiation must fail rather than wait forever"));
+    .unwrap_or_else(|_| panic!("the fallback must finish rather than wait forever"))
+    .unwrap_or_else(|error| panic!("a legacy-only server must connect: {error}"));
 
-    let error = outcome
-        .err()
-        .unwrap_or_else(|| panic!("a legacy-only server must not yield a connection"));
-    // The failure must be actionable: it names the revision the server offered, so an operator can
-    // tell a protocol mismatch apart from a network fault.
+    assert_eq!(connection.era(), jarvis_mcp_transport::McpEra::Legacy);
+    assert_eq!(connection.negotiated_revision(), "2025-06-18");
+    assert!(connection.capabilities().offers_tools());
+    assert_eq!(connection.reported_identity().name, "old-fixture");
+
+    let mut buffer = jarvis_mcp_transport::ToolBuffer::new();
+    let listings = connection
+        .list_tools(&mut buffer)
+        .await
+        .unwrap_or_else(|error| panic!("a legacy connection must list tools: {error}"));
+    assert_eq!(listings.len(), 1);
+    assert_eq!(listings[0].name, "search");
+
+    drop(connection);
+    let seen = peer.finish().await;
     assert!(
-        error.to_string().contains("2025-11-25"),
-        "the refusal should name what the server offered: {error}"
+        seen.saw("server/discover"),
+        "modern is tried first: {:?}",
+        seen.methods()
     );
+    assert!(seen.saw("initialize"), "{:?}", seen.methods());
+}
+
+/// A modern server is reported as `Modern`, so the era recorded on a connection is a fact about what
+/// the peer said and not a default.
+#[tokio::test]
+async fn a_modern_server_is_reported_as_modern() {
+    let script =
+        ScriptedPeer::new().answering("server/discover", discover_result("fixture", None, true));
+    let (client_side, _peer) = peer_pair(script);
+    let connection = connect_over(&server("fixture"), client_side)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(connection.era(), jarvis_mcp_transport::McpEra::Modern);
 }
 
 /// **A server's tool list translates, end to end, from bytes.** This is the claim `P3-008a` could not
@@ -375,16 +402,10 @@ async fn a_protocol_error_on_the_tool_list_is_not_reported_as_unreachable() {
 fn the_error_types_are_constructible_without_the_sdk() {
     let unreachable = ConnectError::Unreachable("no child process".to_owned());
     let refused = ConnectError::Refused("protocol disagreement".to_owned());
-    let legacy = ConnectError::LegacyNegotiated {
-        negotiated: "2025-11-25".to_owned(),
-        wanted: "2026-07-28".to_owned(),
-    };
     let list_error = jarvis_mcp_transport::ListError::Unavailable("timed out".to_owned());
 
     assert!(unreachable.to_string().contains("could not be reached"));
     assert!(refused.to_string().contains("protocol level"));
-    assert!(legacy.to_string().contains("2025-11-25"));
-    assert!(legacy.to_string().contains("2026-07-28"));
     assert!(list_error.to_string().contains("timed out"));
 }
 

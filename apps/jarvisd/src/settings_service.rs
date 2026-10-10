@@ -82,7 +82,7 @@ pub struct KeyBody {
 
 // The error is the response itself, as every handler here returns it; boxing it would only add an unwrap at each use.
 #[allow(clippy::result_large_err)]
-fn context(state: &GatewayState) -> Result<&SettingsContext, Response> {
+pub(crate) fn context(state: &GatewayState) -> Result<&SettingsContext, Response> {
     state.settings().ok_or_else(|| {
         error_response(
             StatusCode::NOT_FOUND,
@@ -94,7 +94,7 @@ fn context(state: &GatewayState) -> Result<&SettingsContext, Response> {
 
 /// A refusal with its reason. An API error message is one bounded line, so a longer explanation (the CLI lists every
 /// setting) is cut to its first line.
-fn refused(message: &str) -> Response {
+pub(crate) fn refused(message: &str) -> Response {
     let first_line: String = message
         .lines()
         .next()
@@ -247,15 +247,6 @@ pub async fn set_posture(
         Ok(posture) => posture,
         Err(message) => return refused(&message),
     };
-    // These tools write standing instructions or change memory: each call is the owner's own yes, so "run without asking" is refused
-    // rather than accepted and ignored.
-    if posture == settings::Posture::Trusted
-        && jarvis_tools::NEVER_TRUSTED_TOOLS.contains(&tool.as_str())
-    {
-        return refused(
-            "this tool changes what JARVIS is told to do or remember, so every call asks you; it cannot run without asking",
-        );
-    }
     // Only a tool this daemon actually has: a typo in a trust list would otherwise be a silent no-op.
     if let Some(tools) = state.tools()
         && !tools

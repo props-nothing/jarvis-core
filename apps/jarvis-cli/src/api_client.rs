@@ -529,6 +529,148 @@ impl ApiClient {
             .await
     }
 
+    /// Reads the configured MCP servers and what became of each when the daemon started.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] when settings are not available on this daemon.
+    pub async fn mcp_overview(&self) -> Result<serde_json::Value, ApiError> {
+        self.get_json("/api/v1/mcp").await
+    }
+
+    /// Adds an MCP server to the document. Applied on the next start.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] with a `422` for a name in use, a program that is not on this computer, or a
+    /// document the daemon would refuse.
+    pub async fn mcp_add(&self, body: &serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        self.send_json(reqwest::Method::POST, "/api/v1/mcp/servers", body)
+            .await
+    }
+
+    /// Reads whether other apps may connect to JARVIS, where, and the key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] when the daemon does not manage it.
+    pub async fn mcp_access(&self) -> Result<serde_json::Value, ApiError> {
+        self.get_json("/api/v1/mcp/access").await
+    }
+
+    /// Switches letting other apps connect on or off. Applied on the next start.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] when it cannot be changed.
+    pub async fn mcp_access_switch(&self, enabled: bool) -> Result<serde_json::Value, ApiError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/mcp/access",
+            &serde_json::json!({ "enabled": enabled }),
+        )
+        .await
+    }
+
+    /// Makes a new key for other apps. The old one stops working at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] when the key cannot be made.
+    pub async fn mcp_access_new_key(&self) -> Result<serde_json::Value, ApiError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/mcp/access/key",
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
+    /// Makes the endpoint for other apps reachable from the internet, or stops that. Applies at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError`] when the daemon is unreachable or refuses.
+    pub async fn mcp_access_public(&self, on: bool) -> Result<serde_json::Value, ApiError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/mcp/access/public",
+            &serde_json::json!({ "enabled": on }),
+        )
+        .await
+    }
+
+    /// Switches a ready-made ability on or off. Applied on the next start.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] with a `422` for an unknown ability, or for one that needs Node.js when it is not installed.
+    pub async fn mcp_ability(&self, id: &str, on: bool) -> Result<serde_json::Value, ApiError> {
+        let path = format!("/api/v1/mcp/abilities/{}", path_segment(id)?);
+        let method = if on {
+            reqwest::Method::POST
+        } else {
+            reqwest::Method::DELETE
+        };
+        let response = self
+            .bounded_request(method, &path)
+            .send()
+            .await
+            .map_err(|error| ApiError::Transport(classify(&error)))?;
+        if response.status().is_success() {
+            return response
+                .json()
+                .await
+                .map_err(|error| ApiError::Transport(classify(&error)));
+        }
+        Err(self.refusal(response).await)
+    }
+
+    /// Removes an MCP server from the document. Applied on the next start.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] with a `422` when there is no such server.
+    pub async fn mcp_remove(&self, name: &str) -> Result<serde_json::Value, ApiError> {
+        let path = format!("/api/v1/mcp/servers/{}", path_segment(name)?);
+        let response = self
+            .bounded_request(reqwest::Method::DELETE, &path)
+            .send()
+            .await
+            .map_err(|error| ApiError::Transport(classify(&error)))?;
+        if response.status().is_success() {
+            return response
+                .json()
+                .await
+                .map_err(|error| ApiError::Transport(classify(&error)));
+        }
+        Err(self.refusal(response).await)
+    }
+
+    /// Connects to a server once and reports what it offers. Nothing is saved.
+    ///
+    /// Waits longer than other calls, because a first start of a program run with `npx` may download it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] with a `422` for a program that is not on this computer or an unusable entry.
+    pub async fn mcp_test(&self, body: &serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        let response = self
+            .request(reqwest::Method::POST, "/api/v1/mcp/test")
+            .timeout(Duration::from_secs(80))
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| ApiError::Transport(classify(&error)))?;
+        if response.status().is_success() {
+            return response
+                .json()
+                .await
+                .map_err(|error| ApiError::Transport(classify(&error)));
+        }
+        Err(self.refusal(response).await)
+    }
+
     /// Asks the daemon to send one push test message.
     ///
     /// # Errors

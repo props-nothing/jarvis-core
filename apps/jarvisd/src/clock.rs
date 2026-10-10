@@ -25,10 +25,14 @@ pub fn remember_local_offset() {
 /// The sentence a run is given about the present moment.
 #[must_use]
 pub fn clock_line(now: UtcTimestamp) -> String {
-    describe(now, LOCAL_OFFSET.get().copied())
+    describe(
+        now,
+        LOCAL_OFFSET.get().copied(),
+        jarvis_core::system_zone().as_deref(),
+    )
 }
 
-fn describe(now: UtcTimestamp, offset: Option<UtcOffset>) -> String {
+fn describe(now: UtcTimestamp, offset: Option<UtcOffset>, zone: Option<&str>) -> String {
     let Ok(utc) = OffsetDateTime::from_unix_timestamp_nanos(now.unix_nanos()) else {
         return String::new();
     };
@@ -46,8 +50,9 @@ fn describe(now: UtcTimestamp, offset: Option<UtcOffset>) -> String {
     let local = utc.to_offset(offset);
     let (hours, minutes, _) = offset.as_hms();
     let sign = if offset.is_negative() { '-' } else { '+' };
+    let place = zone.map_or_else(String::new, |zone| format!("{zone}, "));
     format!(
-        "The current date and time is {} {:04}-{:02}-{:02} {:02}:{:02} (the user's local time, UTC{sign}{:02}:{:02}); that is {utc_text}.",
+        "The current date and time is {} {:04}-{:02}-{:02} {:02}:{:02} (the user's local time, {place}UTC{sign}{:02}:{:02}); that is {utc_text}.",
         local.weekday(),
         local.year(),
         u8::from(local.month()),
@@ -72,7 +77,7 @@ mod tests {
     #[test]
     fn the_line_names_the_weekday_the_local_time_and_the_instant() {
         let offset = UtcOffset::from_hms(2, 0, 0).unwrap_or_else(|error| panic!("{error}"));
-        let line = describe(at("2026-10-09T23:30:00Z"), Some(offset));
+        let line = describe(at("2026-10-09T23:30:00Z"), Some(offset), None);
         // 23:30 UTC on a Friday is already Saturday 01:30 in UTC+02:00: the date must follow the offset.
         assert!(
             line.contains("Saturday 2026-10-10 01:30") && line.contains("UTC+02:00"),
@@ -82,10 +87,24 @@ mod tests {
     }
 
     #[test]
+    fn the_zone_name_is_given_when_the_machine_has_one() {
+        let offset = UtcOffset::from_hms(2, 0, 0).unwrap_or_else(|error| panic!("{error}"));
+        let line = describe(
+            at("2026-10-09T12:00:00Z"),
+            Some(offset),
+            Some("Europe/Amsterdam"),
+        );
+        assert!(
+            line.contains("local time, Europe/Amsterdam, UTC+02:00"),
+            "{line}"
+        );
+    }
+
+    #[test]
     fn a_negative_offset_and_an_unknown_offset_are_both_stated_honestly() {
         let west = UtcOffset::from_hms(-5, -30, 0).unwrap_or_else(|error| panic!("{error}"));
-        assert!(describe(at("2026-10-09T12:00:00Z"), Some(west)).contains("UTC-05:30"));
-        let unknown = describe(at("2026-10-09T12:00:00Z"), None);
+        assert!(describe(at("2026-10-09T12:00:00Z"), Some(west), None).contains("UTC-05:30"));
+        let unknown = describe(at("2026-10-09T12:00:00Z"), None, None);
         assert_eq!(
             unknown,
             "The current date and time is Friday 2026-10-09 12:00 UTC."

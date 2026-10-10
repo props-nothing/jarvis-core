@@ -24,11 +24,11 @@
 //! | Field | Set to | Left alone would mean |
 //! | --- | --- | --- |
 //! | `allowed_origins` / `validate_empty_origin_allowlist` | disabled, because the check is JARVIS's | `Origin` validation off, or a port wildcard |
-//! | `legacy_session_mode` | `false` | mints an `Mcp-Session-Id` that `2026-07-28` removed |
-//! | `stateless_protocol_metadata_required` | `true` | an absent `MCP-Protocol-Version` treated as `2025-03-26` |
+//! | `legacy_session_mode` | `true` (`ADR-0170`; it was `false`) | a client on a legacy revision could not open a session, so no shipped client connected |
+//! | `stateless_protocol_metadata_required` | `false` (it was `true`) | rejects every ordinary request from a legacy client |
 //! | `max_request_body_bytes` | the configured bound | the SDK's own default, which nothing here stated |
 //! | `allowed_hosts` | loopback only, from the policy | already fail-closed, but stated so a change is visible |
-//! | session manager | `NeverSessionManager` | an in-memory session store for a protocol with no sessions |
+//! | session manager | `LocalSessionManager` (it was `NeverSessionManager`) | legacy clients need a session; the modern revision never uses one |
 //!
 //! # Why nothing is bound here
 //!
@@ -39,7 +39,7 @@
 
 use std::sync::Arc;
 
-use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::{
     StreamableHttpServerConfig, StreamableHttpService,
 };
@@ -48,7 +48,7 @@ use crate::serve::JarvisMcpServer;
 use jarvis_mcp::{OriginVerdict, ServerExposure};
 
 /// The SDK's Streamable HTTP service, named once and **privately**.
-type SdkService = StreamableHttpService<JarvisMcpServer, NeverSessionManager>;
+type SdkService = StreamableHttpService<JarvisMcpServer, LocalSessionManager>;
 
 /// The most bytes one request body may carry.
 ///
@@ -187,12 +187,14 @@ impl ServingConfig {
     #[must_use]
     fn sdk(&self) -> StreamableHttpServerConfig {
         StreamableHttpServerConfig::default()
-            // The session the revision removed. `NeverSessionManager` refuses `create_session`, so even a
-            // legacy `initialize` cannot mint one.
-            .with_legacy_session_mode(false)
-            // A per-request `MCP-Protocol-Version` is required rather than an absent header defaulting to
-            // `2025-03-26`.
-            .with_stateless_protocol_metadata_required(true)
+            // **Both eras are served (`ADR-0170`).** A client on `2025-11-25` or earlier (Claude Code, Cursor, VS Code,
+            // every client published before the modern revision) opens a session with `initialize`; this is what lets it.
+            // A request that negotiates `2026-07-28` is still served statelessly whatever this says (the SDK documents
+            // it). The first version refused legacy outright, and so served nobody that exists.
+            .with_legacy_session_mode(true)
+            // Off, because the SDK's own note says it rejects ordinary requests from a client negotiated below
+            // `2026-07-28`, which do not attach per-request metadata.
+            .with_stateless_protocol_metadata_required(false)
             .with_max_request_body_bytes(self.max_request_body_bytes)
             // Stated so a change to the SDK's loopback default is visible here. The policy refuses a remote
             // bind outright, so this list and that refusal are two statements of one decision.
@@ -227,7 +229,8 @@ impl ServingConfig {
     pub(crate) fn service(&self, server: JarvisMcpServer) -> SdkService {
         StreamableHttpService::new(
             move || Ok(server.clone()),
-            Arc::new(NeverSessionManager::default()),
+            // In-memory sessions for legacy clients; each idles out after five minutes (the SDK's default).
+            Arc::new(LocalSessionManager::default()),
             self.sdk(),
         )
     }
@@ -534,16 +537,16 @@ mod tests {
         let sdk = config.sdk();
         let default = StreamableHttpServerConfig::default();
 
-        assert!(
-            !sdk.legacy_session_mode,
-            "sessions were removed by the revision"
+        // Both eras are served (`ADR-0170`): a legacy client opens a session, and a legacy client's ordinary requests carry no
+        // per-request metadata, so requiring it would refuse them. These two are stated even though they equal the SDK's
+        // defaults, so a change to the SDK's defaults is visible here.
+        assert!(sdk.legacy_session_mode, "a legacy client needs a session");
+        assert_eq!(sdk.legacy_session_mode, default.legacy_session_mode);
+        assert!(!sdk.stateless_protocol_metadata_required);
+        assert_eq!(
+            sdk.stateless_protocol_metadata_required,
+            default.stateless_protocol_metadata_required
         );
-        assert!(
-            default.legacy_session_mode,
-            "and the SDK default mints them"
-        );
-        assert!(sdk.stateless_protocol_metadata_required);
-        assert!(!default.stateless_protocol_metadata_required);
         assert_eq!(sdk.allowed_hosts, vec!["localhost", "127.0.0.1", "::1"]);
         assert_eq!(sdk.max_request_body_bytes, MAX_REQUEST_BODY_BYTES);
         // The origin fields: both off, because the check is elsewhere.

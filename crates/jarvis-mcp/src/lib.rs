@@ -103,7 +103,7 @@ pub use exposure::{
 };
 pub use served::{
     ExposureError as ServedExposureError, ExposureExclusion, MAX_EXPOSED_TOOLS, ServableName,
-    ServedTool, served_tools,
+    ServedTool, served_tools, served_tools_vetting,
 };
 pub use server::{
     CanonicalToolName, MAX_REPORTED_TEXT_CHARS, MAX_SERVER_NAME_CHARS, NameAssignments,

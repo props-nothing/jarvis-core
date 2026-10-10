@@ -23,7 +23,7 @@ jarvis project add Prospecting --goal "Book five demos with Dutch logistics firm
 | --- | --- |
 | Console | Pick the project in the selector next to "Conversation", or press **Chat** on a project. A conversation stays in its project. |
 | Terminal | `jarvis ask --project Prospecting find three new leads`, or `jarvis chat --project Prospecting` |
-| On a schedule | `jarvis schedule add check replies and follow up --every 6h --project Prospecting` |
+| On a schedule | `jarvis schedule add check replies and follow up --every 6h --project Prospecting`, or at a clock time: `jarvis schedule add send the briefing --at-time 08:00 --days mon-fri --zone Europe/Amsterdam` (it stays at 08:00 through daylight saving; leave `--zone` out for this computer's) |
 | By JARVIS | A task it schedules from inside a project joins it, and a sub-agent it starts there gets the project's brief. |
 
 ## Let JARVIS make one

@@ -52,7 +52,7 @@ In the console, **Settings, Brain** has one card for the **main model** and one 
 | `push_topic` | none | Set a long, unguessable [ntfy](https://ntfy.sh) topic and JARVIS also pushes to your phone when no console is open: that an approval is waiting (and for which tool), or that a scheduled task finished. **It never sends an answer, a question or an argument.** The topic name is the only secret, so make it random. Try it with `jarvis push test`. |
 | `push_server` | `https://ntfy.sh` | The ntfy server. Use your own (`https://` only) to keep even the metadata off a third party. |
 | `http_port` | 8765 | The default port. |
-| `mcp_serve_port` | none | **Off by design.** JARVIS opens no inbound MCP port unless you ask it to (`ADR-0039`). |
+| `mcp_serve_port` | none | **Off by design.** Switch it on from the **Connect apps** tab (or `jarvis mcp access on`); it then listens on 127.0.0.1 only, and only a program holding your key can use it (`ADR-0170`). |
 
 ## Not settings yet (and why)
 
@@ -61,7 +61,10 @@ feature exists.
 
 - **Connectors (Gmail, Calendar)**: the contract and a 38k-line library exist, but nothing in the daemon calls them yet
   (`ROADMAP.md`, order of work item 1). Their sign-in and scopes will get a tab when they do.
-- **Other MCP servers JARVIS can use**: configured today in `mcp-servers.toml`, not in the console (`P9-020`).
+- **The memory and project tools** (`project.create`, `project.update`, `project.assign_schedule`, `memory.correct`, `memory.forget`) ask by default and **can** be set to "Run without asking" here, one at a time (`ADR-0177`); the approval card never offers a one-click "Always allow" for them.
+- **"Run without asking" is honoured for tools from programs you added** (the browser, documentation lookup, your own), one tool at a time. It is honoured for **every** tool, including the ones that send mail or add calendar events (`ADR-0178`): choosing it for a tool that reaches other people asks you to confirm once, and any tool can be set back to "Always ask first".
+- **Browsing and documentation lookup** come with JARVIS and are listed under **Permissions** like every other tool ([abilities.md](abilities.md)). Your own tool programs (for developers) are under Advanced: [mcp.md](mcp.md).
+- **Let other apps use JARVIS (port)** in Advanced is the reverse: it lets *another* program use JARVIS's tools. It is now the **Connect apps** tab; it is off until you switch it on ([connect-apps.md](connect-apps.md)).
 - **Local (non-cloud) speech recognition and synthesis, telephony, an always-on wake word**: Phase 8.
 - **Coding-agent runtimes, and routing sub-agents to a cheaper model**: Phase 7 and the order-of-work list.
 - **Scheduling, memory and skills** have their own commands and panels, not settings: `jarvis schedule`, `jarvis memory`,

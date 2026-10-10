@@ -29,7 +29,7 @@
 //! | The served set | **Yes** | `JarvisMcpServer` refuses a name that was never advertised **before** the runner is consulted (`P3-009e`). |
 //! | The two inbound policies | **Yes** | `ServedEndpoint` applies the `Origin` and caller decisions to every request (`P3-009c-a`). |
 //! | Output limits | **Yes** | The adapter's own bound, which is a property of the adapter rather than of the path. |
-//! | Approval | **Refused, not bypassed** | There is no run to park in `awaiting_approval`, so a decision requiring one is **refused**. A deployment serving such a tool gets every call refused rather than any call run unapproved. |
+//! | Approval | **Asked of the owner, and refused without a yes** | There is no run to park, so the call **waits in memory** for the owner's answer (`inbound_approvals`, `ADR-0180`): listed with the owner's other approvals, answered by one click, command or word. A denial, no answer within two minutes, or a full list is a refusal; nothing runs without the yes. |
 //! | Audit | **Partial, and recorded as such** | A remote call is logged and has **no `tool_calls` row**, because that row needs a run. `P3-012` owns the durable link. |
 //!
 //! # Why the runner is the daemon's, which is why the port exists
@@ -45,13 +45,14 @@ use async_trait::async_trait;
 use jarvis_core::CorrelationId;
 use jarvis_mcp_transport::{
     CallerAdmission, JarvisMcpServer, ServedEndpoint, ServedExposureError, ServedToolRunner,
-    ServerExposure, ServingConfig, served_tools,
+    ServerExposure, ServingConfig, served_tools_vetting,
 };
 use jarvis_tools::{AdapterError, ToolCallResult, ToolDefinition};
 use serde_json::Value;
 
+use crate::inbound_approvals::InboundApprovals;
 use crate::tool_actor::ToolActor;
-use crate::tool_pipeline::{ToolPipeline, ToolPipelineError, ToolPipelineOutcome};
+use crate::tool_pipeline::{OwnerApproval, ToolPipeline, ToolPipelineError, ToolPipelineOutcome};
 
 /// The policy version label recorded on a remote call's receipt.
 ///
@@ -76,6 +77,12 @@ pub struct RemoteMcpRunner {
     /// grant must be the scopes of the tools **this endpoint advertises**, and reading them from the pipeline on
     /// every call would let the grant follow a registry change the served surface did not.
     served: Vec<ToolDefinition>,
+    /// Calls waiting for the owner's answer, shared with the console's approvals list.
+    approvals: Arc<InboundApprovals>,
+    /// How long a call waits for the owner before it is refused.
+    wait: std::time::Duration,
+    /// Who answers: the profile's own local identity, recorded on the receipt as the approver.
+    owner_id: String,
 }
 
 impl RemoteMcpRunner {
@@ -94,7 +101,91 @@ impl RemoteMcpRunner {
             pipeline,
             workspace_id: workspace_id.into(),
             served,
+            approvals: Arc::new(InboundApprovals::default()),
+            wait: crate::inbound_approvals::WAIT,
+            owner_id: "local-owner".to_owned(),
         }
+    }
+
+    /// Shares the list the owner answers from, says who answers, and how long a call waits.
+    #[must_use]
+    pub fn with_approvals(
+        mut self,
+        approvals: Arc<InboundApprovals>,
+        owner_id: impl Into<String>,
+        wait: std::time::Duration,
+    ) -> Self {
+        self.approvals = approvals;
+        self.owner_id = owner_id.into();
+        self.wait = wait;
+        self
+    }
+
+    /// Puts a call that needs the owner's yes in front of them, waits, and runs it only on a yes.
+    async fn ask_owner(
+        &self,
+        name: &str,
+        arguments: Value,
+        correlation_id: CorrelationId,
+    ) -> Result<ToolCallResult, AdapterError> {
+        let refuse = |reason: &str| AdapterError::RefusedBeforeReaching {
+            reason: reason.to_owned(),
+        };
+        let definition = self
+            .served
+            .iter()
+            .find(|definition| definition.id().to_string() == name)
+            .ok_or_else(|| refuse("that tool is not offered here"))?;
+        let preview = format!("{} (asked by another app)", definition.title());
+        let (id, answer) = self
+            .approvals
+            .ask(
+                name,
+                definition.version(),
+                definition.risk().level(),
+                &preview,
+                &arguments,
+                self.wait,
+            )
+            .map_err(|_| {
+                refuse("too many calls are already waiting for the owner, so this one was refused")
+            })?;
+        // If this task is cancelled while waiting, the question goes with it.
+        let _withdraw = crate::inbound_approvals::Withdraw::new(&self.approvals, &id);
+        tracing::info!(tool = name, approval = %id, "a call from another app is waiting for the owner's answer");
+        // Timed out, or the list was dropped: nobody said yes.
+        let Ok(Ok(approved)) = tokio::time::timeout(self.wait, answer).await else {
+            self.approvals.forget(&id);
+            tracing::info!(tool = name, approval = %id, "no answer from the owner, so the call from another app was refused");
+            return Err(refuse(
+                "the owner did not answer in time, so the call was not run",
+            ));
+        };
+        if !approved {
+            tracing::info!(tool = name, approval = %id, "the owner refused a call from another app");
+            return Err(refuse("the owner said no, so the call was not run"));
+        }
+        tracing::info!(tool = name, approval = %id, "the owner approved a call from another app");
+        let now = jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock);
+        let actor = ToolActor::remote(
+            self.workspace_id.clone(),
+            correlation_id,
+            POLICY_VERSION,
+            &self.served,
+        );
+        let owner = OwnerApproval {
+            approval_id: id,
+            approver_id: self.owner_id.clone(),
+            approved_at: now,
+            expires_at: jarvis_core::UtcTimestamp::from_unix_nanos(
+                now.unix_nanos() + i128::try_from(self.wait.as_nanos()).unwrap_or(i128::MAX / 4),
+            )
+            .unwrap_or(now),
+        };
+        self.pipeline
+            .call_remote_tool_with(name, arguments, &actor, correlation_id, Some(owner))
+            .await
+            .map_or_else(|error| Err(map_pipeline_error(error, name)), map_outcome)
     }
 }
 
@@ -104,6 +195,9 @@ impl Clone for RemoteMcpRunner {
             pipeline: Arc::clone(&self.pipeline),
             workspace_id: self.workspace_id.clone(),
             served: self.served.clone(),
+            approvals: Arc::clone(&self.approvals),
+            wait: self.wait,
+            owner_id: self.owner_id.clone(),
         }
     }
 }
@@ -123,10 +217,17 @@ impl ServedToolRunner for RemoteMcpRunner {
             &self.served,
         );
 
-        self.pipeline
-            .call_remote_tool(name, arguments, &actor, correlation_id)
+        match self
+            .pipeline
+            .call_remote_tool(name, arguments.clone(), &actor, correlation_id)
             .await
-            .map_or_else(|error| Err(map_pipeline_error(error, name)), map_outcome)
+        {
+            // The call needs the owner's yes: it waits for it here, and runs only on one.
+            Ok(ToolPipelineOutcome::AwaitingApproval { .. }) => {
+                self.ask_owner(name, arguments, correlation_id).await
+            }
+            other => other.map_or_else(|error| Err(map_pipeline_error(error, name)), map_outcome),
+        }
     }
 }
 
@@ -190,11 +291,19 @@ pub enum RemoteMcpError {
     /// The serving configuration was refused.
     #[error("the MCP serving configuration could not be built: {0}")]
     Serving(#[from] jarvis_mcp_transport::ServingConfigError),
+    /// The caller policy for the access key was refused.
+    #[error("the access key's caller policy could not be built: {0}")]
+    Admission(#[from] jarvis_mcp_transport::AdmissionError),
+    /// The access key could not be made.
+    #[error("{0}")]
+    Key(String),
     /// The endpoint could not be constructed.
     #[error("the MCP endpoint could not be built: {0}")]
     Endpoint(#[from] jarvis_mcp_transport::ServiceError),
     /// The loopback address could not be bound.
-    #[error("failed to bind the loopback MCP endpoint on port {port}")]
+    #[error(
+        "port {port} could not be used for letting other apps connect (another program may be using it); choose another with `jarvis config set daemon.mcp_serve_port N`"
+    )]
     Bind {
         /// The configured port.
         port: u16,
@@ -213,7 +322,8 @@ pub(crate) fn servable_definitions(definitions: &[ToolDefinition]) -> Vec<ToolDe
         .iter()
         .filter(|definition| {
             let id = definition.id().to_string();
-            id != jarvis_tools::WRITE_TOOL
+            id != crate::tool_search::SEARCH_TOOL
+                && id != jarvis_tools::WRITE_TOOL
                 && id != jarvis_tools::EDIT_TOOL
                 && id != jarvis_tools::MOVE_TOOL
         })
@@ -228,11 +338,37 @@ pub(crate) fn servable_definitions(definitions: &[ToolDefinition]) -> Vec<ToolDe
 /// Returns a [`RemoteMcpError`] for every reason the endpoint cannot be built: nothing to serve, a refused
 /// exposure policy, or an empty served surface. Each is a **startup** failure, because a daemon that bound a
 /// port it cannot answer on would report itself ready while being unusable.
+#[cfg(test)]
 pub fn build_endpoint(
     pipeline: Arc<ToolPipeline>,
     definitions: &[ToolDefinition],
     workspace_id: impl Into<String>,
     caller_policy: CallerAdmission,
+) -> Result<(RemoteMcpRunner, ServedEndpoint), RemoteMcpError> {
+    build_endpoint_vetting(
+        pipeline,
+        definitions,
+        workspace_id,
+        caller_policy,
+        &[],
+        &Arc::new(InboundApprovals::default()),
+        "local-owner",
+    )
+}
+
+/// As [`build_endpoint`], also serving the tools of the servers named by `vetted_prefixes` (such as `mcp.browser.`).
+///
+/// # Errors
+///
+/// As [`build_endpoint`].
+pub fn build_endpoint_vetting(
+    pipeline: Arc<ToolPipeline>,
+    definitions: &[ToolDefinition],
+    workspace_id: impl Into<String>,
+    caller_policy: CallerAdmission,
+    vetted_prefixes: &[String],
+    approvals: &Arc<InboundApprovals>,
+    owner_id: &str,
 ) -> Result<(RemoteMcpRunner, ServedEndpoint), RemoteMcpError> {
     let definitions = servable_definitions(definitions);
     let definitions = definitions.as_slice();
@@ -242,7 +378,12 @@ pub fn build_endpoint(
 
     // The served surface, built through the same function the operator-facing inventory uses, so *which tools
     // may be advertised* is one decision rather than two.
-    let (served, exclusions) = served_tools(definitions.iter())?;
+    let (served, exclusions) = served_tools_vetting(definitions.iter(), |definition| {
+        let id = definition.id().to_string();
+        vetted_prefixes
+            .iter()
+            .any(|prefix| id.starts_with(prefix.as_str()))
+    })?;
     if !exclusions.is_empty() {
         // Logged rather than silent: an operator who configured a server and finds its tools absent from a
         // client's list needs to know that this is why.
@@ -252,7 +393,11 @@ pub fn build_endpoint(
         );
     }
 
-    let runner = RemoteMcpRunner::new(pipeline, definitions.to_vec(), workspace_id);
+    let runner = RemoteMcpRunner::new(pipeline, definitions.to_vec(), workspace_id).with_approvals(
+        Arc::clone(approvals),
+        owner_id,
+        crate::inbound_approvals::WAIT,
+    );
     let handler = JarvisMcpServer::new(served, Arc::new(runner.clone()));
 
     // **`loopback_only`, built through `ServingConfig::new` rather than from configuration.** An operator's
@@ -287,6 +432,7 @@ impl ServingMcp {
     pub async fn bind(
         port: u16,
         endpoint: ServedEndpoint,
+        access: Arc<crate::mcp_access::McpAccess>,
     ) -> Result<(Self, tokio::sync::oneshot::Receiver<()>), RemoteMcpError> {
         // Loopback only, unconditionally. `ServingConfig::new` already refuses an exposure policy that would
         // require a remote bind, so this and that refusal are two statements of one decision.
@@ -301,7 +447,14 @@ impl ServingMcp {
         // methods, so it is mounted as the router's **fallback** rather than on a route. `axum`'s `Router`
         // accepts any `Service` whose future is `Send`, which is why the binding layer pins its associated
         // future type rather than returning a bare `impl Service`.
-        let app = axum::Router::new().fallback_service(endpoint.into_service());
+        // The access key is required first; a request without it never reaches the endpoint (`ADR-0170`).
+        let app = axum::Router::new()
+            .fallback_service(endpoint.into_service())
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&access),
+                crate::mcp_access::require_key,
+            ));
+        access.set_serving_port(port);
 
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let (stopped_tx, stopped) = tokio::sync::oneshot::channel::<()>();

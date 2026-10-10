@@ -1294,7 +1294,10 @@ impl SkillQuery {
         if revision.superseded_by().is_some() {
             return Err(SkillIneligibility::Superseded);
         }
-        if !self.text.is_empty() && !matches_text(revision, &self.text) {
+        if !self.text.is_empty()
+            && !matches_text(revision, &self.text)
+            && !matches_trigger(revision, &self.text)
+        {
             return Err(SkillIneligibility::NoTextMatch);
         }
         Ok(())
@@ -1323,6 +1326,62 @@ pub fn matches_text(revision: &SkillRevision, text: &str) -> bool {
     let haystack = skill_haystack(revision);
     text.split_whitespace()
         .all(|word| matches_word(&haystack, word))
+}
+
+/// Words that say nothing about what a procedure is for, in English and Dutch.
+const TRIGGER_STOPWORDS: &[&str] = &[
+    "the", "and", "for", "with", "from", "that", "this", "into", "then", "when", "your", "you",
+    "are", "was", "all", "any", "can", "use", "its", "per", "via", "will", "should", "een", "het",
+    "van", "voor", "met", "naar", "die", "dat", "wat", "als", "dan", "ook", "aan", "uit", "bij",
+    "zijn", "deze", "dit", "niet",
+];
+
+/// The fraction of a procedure's trigger words a request must contain, in percent.
+const TRIGGER_COVERAGE_PERCENT: usize = 75;
+
+/// The fewest distinct trigger words a procedure needs before this rule may offer it.
+const MIN_TRIGGER_WORDS: usize = 2;
+
+/// Returns whether a request is the kind of task a procedure says it is for.
+///
+/// # Why a second rule beside [`matches_text`]
+///
+/// [`matches_text`] needs **every word of the request** to appear in the procedure. A real request is a sentence
+/// or a paragraph, so a procedure the owner approved last week would almost never be offered for the next
+/// similar request, and a skill that is never offered cannot save a single step. This rule asks the question the
+/// other way round: the **first line of the procedure's description** states when to use it, and the procedure
+/// is offered when the request contains at least three quarters of that line's distinctive words (at least two
+/// of them; stop words, short words and a plural `s` do not count).
+///
+/// It is still literal and word-bounded, and an offer costs little: a skill reaches the prompt fenced as data
+/// (`ADR-0117` §3), only after the owner approved it, at most [`MAX_SELECTED_SKILLS`] at a time.
+#[must_use]
+pub fn matches_trigger(revision: &SkillRevision, request: &str) -> bool {
+    let trigger = revision
+        .description()
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let wanted = distinctive_words(trigger);
+    if wanted.len() < MIN_TRIGGER_WORDS {
+        return false;
+    }
+    let present = distinctive_words(request);
+    let found = wanted.iter().filter(|word| present.contains(*word)).count();
+    found * 100 >= wanted.len() * TRIGGER_COVERAGE_PERCENT
+}
+
+/// The lowercased words of a text that carry meaning, with a plural `s` removed.
+fn distinctive_words(text: &str) -> BTreeSet<String> {
+    text.split(|character: char| !character.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|word| word.chars().count() >= 3 && !TRIGGER_STOPWORDS.contains(&word.as_str()))
+        .map(|word| match word.strip_suffix('s') {
+            Some(stem) if stem.chars().count() >= 3 => stem.to_owned(),
+            _ => word,
+        })
+        .collect()
 }
 
 /// The combined text a query matches against: the prose, then each step's instruction.

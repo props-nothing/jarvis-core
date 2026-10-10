@@ -33,6 +33,7 @@ jarvis-tools.workspace = true
 # `async_trait` because the `ToolExecutor` port is an async trait, and implementing it requires the
 # same macro the trait is declared with. Already in the graph via `jarvis-tools`.
 async-trait.workspace = true
+futures-util.workspace = true
 jarvis-core.workspace = true
 jarvis-mcp.workspace = true
 # Declared directly rather than reached through `rmcp`, because this crate **builds the HTTP client**

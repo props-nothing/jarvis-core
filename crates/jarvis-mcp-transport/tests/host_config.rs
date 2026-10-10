@@ -246,6 +246,36 @@ async fn a_server_with_no_stated_posture_defaults_to_held() {
     assert!(host.close().await.is_ok());
 }
 
+/// **A server that mixes reading and acting**: the tool the operator named reads freely, the other still asks.
+/// The names are the operator's, so a server cannot add one.
+#[tokio::test]
+async fn named_read_only_tools_read_freely_and_the_rest_of_the_server_still_asks() {
+    let Some(fixture) = fixture_or_skip() else {
+        return;
+    };
+    let mut document = document_for(&fixture, "mixed", None);
+    document.push_str("[servers.posture]\nread_only_tools = [\"search\"]\n");
+    let config = McpHostConfig::parse(&document).unwrap_or_else(|error| panic!("{error}"));
+    let host = config
+        .connect(&[])
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    for definition in host.definitions() {
+        match definition.id().to_string().as_str() {
+            "mcp.mixed.search" => {
+                assert_eq!(definition.risk().level(), 0);
+                assert_eq!(definition.approval(), ApprovalPolicy::Auto);
+            }
+            "mcp.mixed.fetch" => {
+                assert_eq!(definition.risk().level(), 3);
+                assert_eq!(definition.approval(), ApprovalPolicy::Ask);
+            }
+            other => panic!("unexpected tool {other}"),
+        }
+    }
+    assert!(host.close().await.is_ok());
+}
 /// **A collision refuses the whole host**, which is the first caller of
 /// `McpCatalog::has_cross_server_collision()`. Two servers offering the same tool under a strategy that
 /// drops the namespace cannot be served: which one survived would depend on the order they were written.

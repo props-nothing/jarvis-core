@@ -77,3 +77,5 @@ playwright-report/
 # Scratch output from local gate runs and probes (never commit these)
 /summary.txt
 /probe*.txt
+# Page snapshots the built-in browser writes into the working directory of whoever started the daemon
+.playwright-mcp/

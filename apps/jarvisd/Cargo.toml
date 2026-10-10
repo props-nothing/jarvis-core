@@ -48,8 +48,11 @@ jarvis-web.workspace = true
 # The code-running tool drives the container backend; confinement itself stays in that crate.
 jarvis-sandbox.workspace = true
 reqwest.workspace = true
+# Checks the downloaded tunnel program against its pinned checksum.
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 thiserror.workspace = true
 # The machine's UTC offset, read once at startup so the model knows the local time (clock).
 time = { workspace = true, features = ["local-offset"] }

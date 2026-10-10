@@ -16,12 +16,23 @@ use serde::{Deserialize, Serialize};
 pub struct CreateScheduleRequest {
     /// What each run is asked to do.
     pub objective: String,
-    /// A repeat interval such as `30m`, `6h` or `2d`. Exactly one of `every` and `at`.
+    /// A repeat interval such as `30m`, `6h` or `2d`. Exactly one of `every`, `at` and `at_time`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every: Option<String>,
-    /// A single future instant (RFC 3339). Exactly one of `every` and `at`.
+    /// A single future instant (RFC 3339). Exactly one of `every`, `at` and `at_time`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<UtcTimestamp>,
+    /// A time of day such as `08:00` (24-hour), repeated on `days` in `time_zone`. Exactly one of `every`, `at` and
+    /// `at_time`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_time: Option<String>,
+    /// With `at_time`: the days it fires on, such as `mon-fri`, `weekends` or `daily` (the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days: Option<String>,
+    /// With `at_time`: the IANA time zone the time is in, such as `Europe/Amsterdam`. Absent means this machine's zone,
+    /// which is then stored with the task so that travelling does not move it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
     /// The project every run of this task belongs to, by identifier or name (ADR-0151).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
@@ -43,11 +54,20 @@ pub struct ScheduleReply {
     pub schedule_id: String,
     /// What each run is asked to do.
     pub objective: String,
-    /// `every` or `once`.
+    /// `every`, `once` or `daily`.
     pub cadence: String,
     /// The repeat interval in seconds, present for `every`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interval_seconds: Option<u64>,
+    /// The time of day (`08:00`), present for `daily`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_time: Option<String>,
+    /// The days it fires on in words (`weekdays`, `mon, wed, fri`), present for `daily`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days: Option<String>,
+    /// The IANA time zone the time of day is in, present for `daily`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
     /// Whether it is active. A paused task, and a one-off that has fired, are not.
     pub enabled: bool,
     /// The name of the project it belongs to, if any.

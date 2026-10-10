@@ -24,8 +24,15 @@
 //! `LATEST` as "newest stable version this SDK defaults to" while the same file states the SDK
 //! implements `2026-07-28`. So the SDK's prose points one way and its source the other, and only the
 //! source is a contract. **Every connection here names `V_2026_07_28` explicitly through
-//! `ClientLifecycleMode::Discover`, and a test asserts the SDK's `LATEST` is not that revision**, so
+//! `ClientLifecycleMode::Auto`, and a test asserts the SDK's `LATEST` is not that revision**, so
 //! that a future bump which changes this is caught rather than absorbed.
+//!
+//! **Why `Auto` and not `Discover` (changed 2026-10-10, `ADR-0168`).** The first version used
+//! `Discover` and refused every legacy server. The first real server tried, the reference
+//! `@modelcontextprotocol/server-everything` 2026.8.31, answers only the legacy `initialize` and
+//! replies "Method not found" to `server/discover`, so nothing that exists today could connect. The
+//! specification's own stdio procedure is to probe `server/discover` and fall back, which is what
+//! `Auto` does. The era is recorded on the connection ([`McpEra`]) instead of being hidden.
 //!
 //! # A note on the two directions
 //!
@@ -87,8 +94,8 @@ pub use binding::{
     ServedEndpoint,
 };
 pub use client::{
-    McpCallResult, McpConnection, OwnedListing, ServerCapabilities, StdioCommand, ToolBuffer,
-    connect_http, connect_over, connect_stdio,
+    McpCallResult, McpConnection, McpEra, OwnedListing, ServerCapabilities, StdioCommand,
+    ToolBuffer, connect_http, connect_over, connect_stdio, server_environment,
 };
 pub use endpoint::{EndpointError, MAX_ENDPOINT_BYTES, McpHttpEndpoint};
 pub use enforcement::{RequestAdmission, RequestGate, RequestRefusal};
@@ -107,6 +114,7 @@ pub use serving::{
 // without taking `jarvis-mcp` as a dependency of its own. A daemon declaring the pure translation crate
 // just to name a strategy would be a dependency in the direction `repository-layout.md` reserves for
 // adapters, and the choice belongs to the crate that builds the host.
+pub use jarvis_mcp::CatalogExclusion;
 pub use jarvis_mcp::NamingStrategy;
 // The scope every MCP tool requires, re-exported for the same reason as the strategy: the daemon must grant
 // it to an actor, and **two copies of this literal that must match** is the defect class this project keeps
@@ -126,7 +134,7 @@ pub use jarvis_mcp::DEFAULT_MCP_SCOPE as DEFAULT_MCP_CALL_SCOPE;
 // is exactly the trap this comment exists to prevent: importing the wrong one compiles as a name and fails as a
 // missing `From` impl at the `?` site. This re-exports the **served** one, because that is what `served_tools`
 // returns; an origin allowlist that cannot be built is reached through `ServingConfigError` instead.
-pub use jarvis_mcp::{ServedExposureError, ServerExposure, served_tools};
+pub use jarvis_mcp::{ServedExposureError, ServerExposure, served_tools, served_tools_vetting};
 pub use revision::{
     MODERN_REVISION, describe_negotiated, modern_revision, sdk_default_is_modern,
     sdk_default_revision,

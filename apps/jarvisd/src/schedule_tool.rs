@@ -21,8 +21,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jarvis_core::{
-    Cadence, InvalidSchedule, IsolatedText, Sensitivity, SystemClock, UtcTimestamp, parse_interval,
-    validate_objective,
+    Cadence, IsolatedText, Sensitivity, SystemClock, UtcTimestamp, validate_objective,
 };
 use jarvis_storage::{DatabaseError, SqliteDatabase, StoredSchedule};
 use jarvis_tools::{
@@ -54,8 +53,11 @@ const ADD_INPUT: &str = r#"{
   "required": ["objective"],
   "properties": {
     "objective": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "What to do each time it fires, written as the instruction you would be given then, complete on its own: it runs later with no memory of this chat." },
-    "every": { "type": "string", "pattern": "^[0-9]{1,6}[mhd]$", "description": "Repeat on this interval: 30m, 6h or 2d. At least 1 minute. Give this or `at`, not both." },
-    "at": { "type": "string", "description": "Run once at this UTC time, RFC 3339, for example 2026-10-10T07:00:00Z. Must be in the future. Work it out from the current date and time you were given, converting from the user's local time. Give this or `every`, not both." }
+    "every": { "type": "string", "pattern": "^[0-9]{1,6}[mhd]$", "description": "Repeat on this interval: 30m, 6h or 2d. At least 1 minute. Give exactly one of `every`, `at` and `at_time`." },
+    "at": { "type": "string", "description": "Run once at this UTC time, RFC 3339, for example 2026-10-10T07:00:00Z. Must be in the future. Work it out from the current date and time you were given, converting from the user's local time. Give exactly one of `every`, `at` and `at_time`." },
+    "at_time": { "type": "string", "pattern": "^[0-9]{1,2}:[0-9]{2}$", "description": "Repeat at this wall-clock time of day, 24-hour HH:MM, for example 08:00. Use this for 'every morning at 8' or 'weekdays at 17:30': it stays at 8 o'clock through daylight-saving changes, which `every` does not. Give exactly one of `every`, `at` and `at_time`." },
+    "days": { "type": "string", "maxLength": 40, "description": "With `at_time` only: the days, such as mon-fri, sat,sun, weekdays, weekends or daily. Default daily." },
+    "time_zone": { "type": "string", "maxLength": 64, "description": "With `at_time` only: the IANA zone the time is in, such as Europe/Amsterdam. Leave it out to use the user's own zone, named in the current date line." }
   }
 }"#;
 
@@ -124,7 +126,8 @@ impl ScheduleTool {
                 ADD_TOOL,
                 "Schedule a task",
                 "Schedules a task to run later or repeatedly, for example a reminder tomorrow at nine or a check every \
-                 morning, using `at` (one UTC time) or `every` (30m, 6h, 2d). The task runs as an ordinary run with the same \
+                 morning, using `at` (one UTC time), `every` (30m, 6h, 2d), or `at_time` (a wall-clock time such as 08:00 \
+                 on chosen days, kept right through daylight saving). The task runs as an ordinary run with the same \
                  tools and approval rules, with no memory of this conversation, so write the objective complete. The user is \
                  asked first.",
                 ADD_INPUT,
@@ -221,17 +224,23 @@ impl ScheduleTool {
         let objective =
             validate_objective(objective).map_err(|error| refused(&error.to_string()))?;
         let every = arguments.get("every").and_then(Value::as_str);
-        let at = arguments.get("at").and_then(Value::as_str);
-        let cadence = match (every, at) {
-            (Some(every), None) => parse_interval(every).and_then(Cadence::every_seconds),
-            (None, Some(at)) => {
-                let at = at.parse::<UtcTimestamp>().map_err(|_| {
+        let at = arguments
+            .get("at")
+            .and_then(Value::as_str)
+            .map(|at| {
+                at.parse::<UtcTimestamp>().map_err(|_| {
                     refused("`at` must be an RFC 3339 time such as 2026-10-10T07:00:00Z")
-                })?;
-                Cadence::once_at(at, now)
-            }
-            _ => Err(InvalidSchedule::ExactlyOneCadence),
-        }
+                })
+            })
+            .transpose()?;
+        let cadence = Cadence::from_request(
+            every,
+            at,
+            arguments.get("at_time").and_then(Value::as_str),
+            arguments.get("days").and_then(Value::as_str),
+            arguments.get("time_zone").and_then(Value::as_str),
+            now,
+        )
         .map_err(|error| refused(&error.to_string()))?;
         let workspace = self.workspace().await?;
         let stored =
@@ -311,15 +320,19 @@ impl ScheduleTool {
 
 /// One schedule as the model reads it. The objective is text a model (or a page it read) once wrote, so it is fenced as data.
 fn describe(schedule: &StoredSchedule) -> Value {
-    let (cadence, interval) = match schedule.cadence() {
-        Cadence::Every(seconds) => ("every", Some(seconds)),
-        Cadence::Once(_) => ("once", None),
+    let (cadence, interval, daily) = match schedule.cadence() {
+        Cadence::Every(seconds) => ("every", Some(*seconds), None),
+        Cadence::Once(_) => ("once", None, None),
+        Cadence::Daily(clock) => ("daily", None, Some(clock)),
     };
     json!({
         "schedule_id": schedule.id(),
         "objective": IsolatedText::new(schedule.objective()).ok().map(|text| text.render()),
         "cadence": cadence,
         "interval_seconds": interval,
+        "at_time": daily.map(|clock| crate::schedule_service::clock_text(clock.minute_of_day())),
+        "days": daily.map(|clock| clock.days().describe()),
+        "time_zone": daily.map(|clock| clock.zone().to_owned()),
         "enabled": schedule.enabled(),
         "next_run_at": schedule.enabled().then(|| schedule.next_run().to_string()),
         "fire_count": schedule.fire_count(),

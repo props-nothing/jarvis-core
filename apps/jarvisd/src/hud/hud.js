@@ -176,6 +176,22 @@
     currentChat.session = id;
     saveChats();
   }
+  // What scheduled tasks found goes into its own conversation, never into the one you are in the middle of. The History button
+  // says how many results are unread.
+  function scheduledInbox() {
+    var found = chats.filter(function (item) { return item.kind === "scheduled"; })[0];
+    if (!found) {
+      found = newChatRecord();
+      found.kind = "scheduled";
+      found.title = "Scheduled results";
+      chats.push(found);
+    }
+    return found;
+  }
+  function paintUnread() {
+    var total = chats.reduce(function (sum, item) { return sum + (item.unread || 0); }, 0);
+    $("chats-btn").textContent = total ? "History (" + total + ")" : "History";
+  }
   function scroll() { chat.scrollTop = chat.scrollHeight; }
   function clearEmpty() {
     var empty = chat.querySelector(".empty");
@@ -222,6 +238,7 @@
     scroll();
   }
   renderChat();
+  paintUnread();
 
   // ---- new chat, and the earlier ones ------------------------------------------------------------------------------
   function switchChat(target) {
@@ -231,6 +248,8 @@
     currentChat = target;
     transcript = target.transcript || [];
     S.session = target.session || null;
+    target.unread = 0;
+    paintUnread();
     saveChats();
     renderChat();
     closeChats();
@@ -252,6 +271,7 @@
     host.replaceChildren();
     var shown = chats.filter(function (item) { return item.transcript && item.transcript.length; });
     if (!shown.length) host.appendChild(el("div", "none", "no earlier conversations"));
+    paintUnread();
     shown.forEach(function (item) {
       var row = el("div", "chatrow" + (item === currentChat ? " on" : ""));
       var open = el("button", "chatopen", (item.project ? "[" + item.project + "] " : "") + (item.title || "(untitled)"));
@@ -281,7 +301,7 @@
   var VERBS = {
     "jarvis.files.write": "writing", "jarvis.files.edit": "editing", "jarvis.files.move": "moving a file", "jarvis.files.read": "reading", "jarvis.files.list": "listing", "jarvis.files.search": "searching files",
     "jarvis.web.fetch": "fetching a page", "jarvis.agent.delegate": "handing off a task", "jarvis.agent.result": "collecting a result",
-    "jarvis.memory.propose": "noting a memory", "jarvis.code.run": "running code", "jarvis.command.run": "running",
+    "jarvis.memory.propose": "noting a memory", "jarvis.skill.propose": "writing down a procedure", "jarvis.code.run": "running code", "jarvis.command.run": "running",
     "jarvis.web.search": "searching the web", "jarvis.memory.search": "checking memory", "jarvis.gmail.search": "searching your mail", "jarvis.gmail.read": "reading an email", "jarvis.calendar.events": "checking your calendar", "jarvis.gmail.send": "sending an email", "jarvis.calendar.create": "adding a calendar event", "jarvis.project.note": "writing a project note", "jarvis.project.list": "checking the projects", "jarvis.memory.correct": "correcting a memory", "jarvis.memory.forget": "forgetting a memory", "jarvis.project.use": "joining a project", "jarvis.project.create": "creating a project", "jarvis.project.update": "updating a project", "jarvis.project.assign_schedule": "filing a schedule under a project", "jarvis.schedule.pause": "pausing a scheduled task", "jarvis.schedule.resume": "resuming a scheduled task", "jarvis.schedule.add": "scheduling a task", "jarvis.schedule.list": "checking the schedule", "jarvis.schedule.remove": "removing a scheduled task", "jarvis.files.read_document": "reading a document", "jarvis.gmail.save_attachment": "saving an email attachment", "jarvis.gmail.draft": "drafting an email", "jarvis.contacts.save": "saving a contact", "jarvis.contacts.search": "checking the contacts", "jarvis.contacts.stats": "counting the contacts"
   };
   function describeCall(tool, target) {
@@ -1023,6 +1043,13 @@
         if (approve) feel("pleased", 2.2, "nod"); else feel("neutral", 1.8, "shake");
       },
       function (error) {
+        if (error.status === 409) {
+          // Already answered, or no longer waiting (for example the daemon restarted while the call was running). Offering the same
+          // button again would only repeat the refusal, so the list is refreshed and the question drops out of it.
+          say("that question is no longer waiting");
+          notice("That question was already answered or is no longer waiting, so it was cleared. If the work did not finish, ask again.");
+          return;
+        }
         say("could not record that (" + (error.status || "no reply") + ")");
         notice("Could not record that answer (" + (error.status || "no reply") + "). It is still waiting.");
       })
@@ -1305,10 +1332,15 @@
     if (seconds % 60 === 0) return "every " + seconds / 60 + "m";
     return "every " + seconds + "s";
   }
+  function cadenceLabel(schedule) {
+    if (schedule.interval_seconds) return every(schedule.interval_seconds);
+    if (schedule.cadence === "daily") return schedule.at_time + " " + schedule.days + " (" + schedule.time_zone + ")";
+    return schedule.cadence;
+  }
   function scheduleCard(schedule) {
     var item = el("div", "item");
     var row = el("div", "row");
-    row.appendChild(el("span", "tag" + (schedule.enabled ? " work" : ""), schedule.interval_seconds ? every(schedule.interval_seconds) : schedule.cadence));
+    row.appendChild(el("span", "tag" + (schedule.enabled ? " work" : ""), cadenceLabel(schedule)));
     if (!schedule.enabled) row.appendChild(el("span", "tag", schedule.fire_count > 0 && schedule.cadence === "once" ? "done" : "paused"));
     if (schedule.project) row.appendChild(el("span", "tag ok", schedule.project));
     if (schedule.next_run_at) {
@@ -1807,19 +1839,69 @@
     item.appendChild(buttons);
     return item;
   }
+  // A procedure JARVIS wrote down for itself waits here the same way: it is used by no run until you approve it.
+  function skillCard(skill) {
+    var item = el("div", "item");
+    var row = el("div", "row");
+    row.appendChild(el("span", "tag wait", "learn this?"));
+    item.appendChild(row);
+    var lines = String(skill.description || "").split("\n");
+    item.appendChild(el("div", "obj", clip(lines[0], 200)));
+    var steps = el("div", "meta");
+    skill.steps.forEach(function (step) {
+      steps.appendChild(el("div", "dim", step.position + ". " + step.tool + " \u2014 " + clip(step.instruction, 120)));
+    });
+    item.appendChild(steps);
+    var buttons = el("div", "row cmd");
+    var yes = el("button", "yes", "Approve");
+    var no = el("button", "danger", "Dismiss");
+    function settle(approve) {
+      yes.disabled = true;
+      no.disabled = true;
+      api("/skills/" + encodeURIComponent(skill.revision_id) + (approve ? "/approve" : "/dismiss"), "POST", {})
+        .then(function () {
+          notice(approve ? "Learned: " + clip(lines[0], 120) : "Dismissed. I will not use that.");
+          if (approve) feel("pleased", 2.2, "nod");
+          proposalsAt = 0;
+          refreshProposals();
+        }, function (error) {
+          yes.disabled = false;
+          no.disabled = false;
+          proposalsAt = 0;
+          notice("Could not " + (approve ? "approve" : "dismiss") + " that (" + (error.status || "no reply") + ").");
+        });
+    }
+    yes.addEventListener("click", function () { settle(true); });
+    no.addEventListener("click", function () { settle(false); });
+    buttons.appendChild(yes);
+    buttons.appendChild(no);
+    item.appendChild(buttons);
+    return item;
+  }
+  function offerCard(card) { return card.skill ? skillCard(card.skill) : proposalCard(card); }
   function refreshProposals() {
     if (Date.now() - proposalsAt < 8000) return;
     proposalsAt = Date.now();
-    api("/memories?limit=50").then(function (list) {
+    var memories = api("/memories?limit=50").then(function (list) {
       var proposed = (list.memories || []).filter(function (memory) { return memory.status === "proposed"; }).slice(0, 5);
       return Promise.all(proposed.map(function (memory) {
         return api("/memories/" + encodeURIComponent(memory.memory_id)).then(function (detail) {
           return { memory_id: memory.memory_id, memory_type: memory.memory_type, version: detail.version, content: detail.content };
         });
       }));
-    }).then(function (cards) {
-      $("remember").replaceChildren.apply($("remember"), cards.map(proposalCard));
-      $("tray-remember").replaceChildren.apply($("tray-remember"), cards.map(proposalCard));
+    });
+    var skills = api("/skills?limit=50").then(function (list) {
+      var proposed = (list.skills || []).filter(function (skill) { return skill.state === "proposed"; }).slice(0, 5);
+      return Promise.all(proposed.map(function (skill) {
+        return api("/skills/" + encodeURIComponent(skill.revision_id)).then(function (detail) {
+          return { skill: { revision_id: skill.revision_id, description: detail.description, steps: detail.steps || [] } };
+        });
+      }));
+    }).catch(function () { return []; });
+    Promise.all([memories, skills]).then(function (both) {
+      var cards = both[0].concat(both[1]);
+      $("remember").replaceChildren.apply($("remember"), cards.map(offerCard));
+      $("tray-remember").replaceChildren.apply($("tray-remember"), cards.map(offerCard));
       S.proposals = cards.length;
     }, function () { proposalsAt = 0; });
   }
@@ -1831,7 +1913,7 @@
     ["Web", /^jarvis\.web\./, "94,227,255"], ["Files", /^jarvis\.files\./, "107,226,160"], ["Memory", /^jarvis\.memory\./, "176,150,255"],
     ["Sub-agents", /^jarvis\.agent\./, "255,120,214"], ["Commands & code", /^jarvis\.(command|code)\./, "255,138,92"],
     ["Mail & calendar", /^jarvis\.(gmail|calendar)\./, "255,180,84"], ["Schedule", /^jarvis\.schedule\./, "120,240,214"],
-    ["Projects", /^jarvis\.project\./, "150,200,255"], ["Contacts", /^jarvis\.contacts\./, "255,214,120"]
+    ["Projects", /^jarvis\.project\./, "150,200,255"], ["Contacts", /^jarvis\.contacts\./, "255,214,120"], ["Skills", /^jarvis\.skill\./, "200,255,150"]
   ];
   function families(tools) {
     var groups = FAMILIES.map(function (family) { return { name: family[0], rgb: family[2], tools: [] }; });
@@ -1962,12 +2044,20 @@
         var objective = awaitingResults[run.run_id];
         delete awaitingResults[run.run_id];
         var text = run.outcome === "succeeded" && run.answer ? run.answer : "A scheduled task did not finish: " + objective;
-        notice("Scheduled: " + objective);
-        show("jarvis", text);
-        remember("jarvis", text);
-        scroll();
-        feel("pleased", 2, "nod");
-        if (S.speak) speak(text);
+        var inbox = scheduledInbox();
+        inbox.transcript = (inbox.transcript || []).concat([{ role: "system", text: "Scheduled: " + objective }, { role: "jarvis", text: text }]).slice(-60);
+        inbox.updated = Date.now();
+        if (inbox === currentChat) {
+          transcript = inbox.transcript;
+          show("system", "Scheduled: " + objective);
+          show("jarvis", text);
+          scroll();
+        } else {
+          inbox.unread = (inbox.unread || 0) + 1;
+          say("a scheduled task finished: its result is in History");
+        }
+        paintUnread();
+        saveChats();
       });
     }, function () {});
   }

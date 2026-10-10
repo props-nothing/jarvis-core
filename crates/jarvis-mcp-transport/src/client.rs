@@ -6,11 +6,15 @@
 //!
 //! # Two decisions worth knowing before reading the code
 //!
-//! **The lifecycle is named, never defaulted.** The SDK's `serve()` performs the `initialize`
-//! handshake, which protocol revision `2026-07-28` removed. `Discover` is used explicitly, and
-//! [`crate::revision`] pins the reason. A connection that negotiates a legacy revision is a hard
-//! failure rather than a warning, because the two eras differ in ways the rest of this crate does
-//! not implement.
+//! **The lifecycle is named, never defaulted, and it is dual-era.** The SDK's `serve()` performs the
+//! legacy `initialize` handshake, which protocol revision `2026-07-28` removed. `Auto` is used
+//! explicitly: probe with `server/discover` and fall back to `initialize` when the peer does not know
+//! it, which is the stdio backward-compatibility procedure the specification itself gives
+//! (`basic/versioning`, read 2026-10-10). The first version of this module refused every legacy
+//! server, and the first real server it met, the reference `server-everything` 2026.8.31, answers
+//! only `initialize`, so it could reach nothing that exists today. Which era was used is recorded
+//! ([`McpEra`]), never hidden, and only the era-independent parts of the protocol are used (`tools/list`,
+//! `tools/call`).
 //!
 //! **A server's `annotations` never reach the translation.** [`rmcp::model::Tool`] carries
 //! `annotations`, and `AGENTS.md` plus ADR-0025 require the posture of a tool to come from an
@@ -38,15 +42,23 @@ use crate::revision::{MODERN_REVISION, modern_revision};
 const CLIENT_NAME: &str = "jarvis";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// How long a server has to answer `server/discover` before the connection is abandoned.
+/// How long a server has to complete the whole handshake before the connection is abandoned.
 ///
-/// **Required, because the SDK does not bound this in `Discover` mode.** Its own
-/// `DEFAULT_AUTO_DISCOVER_TIMEOUT` is applied only in `ClientLifecycleMode::Auto` — the mode this
-/// crate deliberately does not use, because `Auto` falls back to the legacy handshake. So a silent
-/// peer would leave the client waiting indefinitely, and a daemon starting against a dead or legacy
-/// server would hang at startup instead of reporting. Verified in the pinned SDK's
-/// `service/client.rs` rather than assumed.
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
+/// Covers both attempts: the SDK waits up to ten seconds for `server/discover` in `Auto` mode and
+/// then runs the legacy `initialize` with no deadline of its own, so a peer that answers neither
+/// would otherwise hold a daemon at startup. Twenty seconds leaves the second attempt about as long
+/// as the first.
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Which generation of the protocol a connection speaks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum McpEra {
+    /// `2026-07-28` or later: stateless, per-request metadata, no `initialize`.
+    Modern,
+    /// `2025-11-25` or earlier: an `initialize` handshake and a session. Every server published
+    /// before the modern revision speaks this, and many still do.
+    Legacy,
+}
 
 /// How a local MCP server is launched.
 ///
@@ -131,7 +143,28 @@ impl ServerCapabilities {
 /// several listings, but no SDK type appears in its public surface.
 pub struct McpConnection {
     server: ServerName,
-    service: RunningService<rmcp::RoleClient, ClientConfig>,
+    /// The running service. Replaced when the server stopped and was started again; held in an `Arc` so a call in
+    /// flight keeps the service it started on, and never across an `await` while locked.
+    service: std::sync::RwLock<std::sync::Arc<Service>>,
+    /// How to start the server again, when this connection knows. `None` for a connection made over a
+    /// transport handed in by a test.
+    recipe: Option<Recipe>,
+    /// When the last attempt to start it again failed. Also serialises the attempts.
+    restart: tokio::sync::Mutex<Option<std::time::Instant>>,
+}
+
+/// The SDK's running service for a client.
+type Service = RunningService<rmcp::RoleClient, ClientConfig>;
+
+/// How long to wait after a failed restart before trying again, so a server that crashes at start is not
+/// hammered once per tool call.
+const RESTART_BACKOFF: Duration = Duration::from_secs(10);
+
+/// How a server is started, kept so it can be started again.
+#[derive(Clone, Debug)]
+enum Recipe {
+    Stdio(StdioCommand),
+    Http(McpHttpEndpoint),
 }
 
 impl std::fmt::Debug for McpConnection {
@@ -158,9 +191,90 @@ impl McpConnection {
     /// over.
     #[must_use]
     pub fn negotiated_revision(&self) -> String {
-        self.service.peer_info().map_or_else(String::new, |info| {
+        self.live().peer_info().map_or_else(String::new, |info| {
             info.protocol_version.as_str().to_owned()
         })
+    }
+
+    /// Returns the service this connection is on now.
+    fn live(&self) -> std::sync::Arc<Service> {
+        std::sync::Arc::clone(
+            &self
+                .service
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Whether the server's side of the connection is gone. `is_closed` alone is not enough: it reports only a
+    /// cancellation, and a child that exited leaves the transport closed with nothing cancelled.
+    fn has_stopped(&self) -> bool {
+        let service = self.live();
+        service.is_closed() || service.peer().is_transport_closed()
+    }
+
+    /// Starts the server again when it has stopped, so a crash costs one failed call instead of every call
+    /// until the daemon restarts.
+    ///
+    /// Nothing has been sent when this fails, so a caller may report the call as **not sent** (safe to retry)
+    /// rather than as ambiguous. A server that fails to start is not tried again for [`RESTART_BACKOFF`].
+    async fn ensure_live(&self) -> Result<(), String> {
+        if !self.has_stopped() {
+            return Ok(());
+        }
+        let Some(recipe) = &self.recipe else {
+            return Err(
+                "the server has stopped and this connection cannot start it again".to_owned(),
+            );
+        };
+        let mut last_failure = self.restart.lock().await;
+        // Another call may have restarted it while this one waited for the lock.
+        if !self.has_stopped() {
+            return Ok(());
+        }
+        if last_failure.is_some_and(|at| at.elapsed() < RESTART_BACKOFF) {
+            return Err(
+                "the server has stopped and did not restart a moment ago; it will be tried again shortly"
+                    .to_owned(),
+            );
+        }
+        let started = match recipe {
+            Recipe::Stdio(command) => match stdio_transport(command) {
+                Ok(transport) => negotiate(transport).await,
+                Err(error) => Err(error),
+            },
+            Recipe::Http(endpoint) => match http_transport(endpoint) {
+                Ok(transport) => negotiate(transport).await,
+                Err(error) => Err(error),
+            },
+        };
+        match started {
+            Ok(service) => {
+                *self
+                    .service
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    std::sync::Arc::new(service);
+                *last_failure = None;
+                Ok(())
+            }
+            Err(error) => {
+                *last_failure = Some(std::time::Instant::now());
+                Err(format!(
+                    "the server has stopped and could not be started again: {error}"
+                ))
+            }
+        }
+    }
+
+    /// Returns the era this connection speaks.
+    #[must_use]
+    pub fn era(&self) -> McpEra {
+        if self.negotiated_revision() == MODERN_REVISION {
+            McpEra::Modern
+        } else {
+            McpEra::Legacy
+        }
     }
 
     /// Returns what the server reported about itself, when it reported anything.
@@ -176,7 +290,7 @@ impl McpConnection {
     /// seeing, and treating it as a failure would discard exactly that observation.
     #[must_use]
     pub fn reported_identity(&self) -> ReportedIdentity {
-        self.service
+        self.live()
             .peer_info()
             .and_then(|info| info.server_info.clone())
             .map_or_else(
@@ -192,7 +306,7 @@ impl McpConnection {
             tools: false,
             tool_list_changed: false,
         };
-        self.service
+        self.live()
             .peer_info()
             .map_or(NONE, |info| ServerCapabilities {
                 tools: info.capabilities.tools.is_some(),
@@ -218,8 +332,9 @@ impl McpConnection {
         &self,
         buffer: &'a mut ToolBuffer,
     ) -> Result<Vec<McpToolListing<'a>>, ListError> {
+        self.ensure_live().await.map_err(ListError::Unavailable)?;
         let tools = self
-            .service
+            .live()
             .list_all_tools()
             .await
             .map_err(|error| classify_list(&error))?;
@@ -237,11 +352,22 @@ impl McpConnection {
     /// Returns the SDK's message when cancellation failed, as text: a caller deciding whether to log
     /// a shutdown failure does not need the SDK's error type to do it.
     pub async fn close(self) -> Result<(), String> {
-        self.service
-            .cancel()
-            .await
-            .map(|_reason| ())
-            .map_err(|error| error.to_string())
+        let service = self
+            .service
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match std::sync::Arc::try_unwrap(service) {
+            Ok(service) => service
+                .cancel()
+                .await
+                .map(|_reason| ())
+                .map_err(|error| error.to_string()),
+            // A call still holds the service: stop it by token, which ends the child the same way.
+            Err(shared) => {
+                shared.cancellation_token().cancel();
+                Ok(())
+            }
+        }
     }
 
     /// Calls one of the server's tools by its **server-side** name.
@@ -275,8 +401,10 @@ impl McpConnection {
         // this crate declared no capability for, so they are refused by name rather than silently
         // treated as a result — a server that returned `task` and got an empty success back would
         // make the caller believe work was finished that had not started.
+        // Started again first if it had stopped. Failing here means nothing was sent.
+        self.ensure_live().await.map_err(CallError::NotSent)?;
         let response = self
-            .service
+            .live()
             .call_tool_once(params)
             .await
             .map_err(|error| CallError::from_sdk(&error))?;
@@ -467,20 +595,109 @@ fn client_config() -> ClientConfig {
 ///
 /// Returns [`ConnectError::Unreachable`] when the child cannot be spawned,
 /// [`ConnectError::Refused`] when the negotiation fails at the protocol level, and
-/// [`ConnectError::LegacyNegotiated`] when the server settles on a revision older than
-/// [`MODERN_REVISION`].
+/// [`ConnectError::DiscoveryTimedOut`] when the peer completes neither handshake.
 pub async fn connect_stdio(
     server: &ServerName,
     command: &StdioCommand,
 ) -> Result<McpConnection, ConnectError> {
+    let transport = stdio_transport(command)?;
+    let service = negotiate(transport).await?;
+    Ok(McpConnection::new(
+        server,
+        service,
+        Some(Recipe::Stdio(command.clone())),
+    ))
+}
+
+/// Builds the child-process transport for a command.
+fn stdio_transport(
+    command: &StdioCommand,
+) -> Result<rmcp::transport::TokioChildProcess, ConnectError> {
     use rmcp::transport::TokioChildProcess;
     use tokio::process::Command;
 
     let mut child = Command::new(command.program());
     child.args(command.args());
-    let transport = TokioChildProcess::new(child)
-        .map_err(|error| ConnectError::Unreachable(error.to_string()))?;
-    connect_over(server, transport).await
+    // **The server starts with an allowlisted environment, not the daemon's.** The first real server
+    // tried (`server-everything`) has a `get-env` tool that returns every variable it was given, and
+    // inheriting the daemon's environment would hand it, and through it the model, whatever key the
+    // owner exported (found 2026-10-10). A server that needs a credential gets it by a deliberate route,
+    // not by leaking.
+    child.env_clear();
+    child.envs(allowed_environment(std::env::vars_os()));
+    TokioChildProcess::new(child).map_err(|error| ConnectError::Unreachable(error.to_string()))
+}
+
+/// The variables a server is given: what a program needs to start and find its way around, and nothing
+/// that is a credential. Compared without regard to case, because Windows names are case-insensitive.
+///
+/// The proxy variables are included because `npx` cannot download a package without them behind a
+/// corporate proxy; they can carry a proxy login, which is the owner's own network configuration.
+const INHERITED_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "TZ",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+];
+
+/// The environment a server is started with, taken from this process: [`INHERITED_ENVIRONMENT`] and nothing else.
+///
+/// Public so the one-time preparation of a program (downloading it before its first start) runs under the same
+/// rule as the server itself.
+#[must_use]
+pub fn server_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    allowed_environment(std::env::vars_os())
+}
+
+/// Filters an environment down to [`INHERITED_ENVIRONMENT`].
+pub(crate) fn allowed_environment<I>(variables: I) -> Vec<(std::ffi::OsString, std::ffi::OsString)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    variables
+        .into_iter()
+        .filter(|(name, _)| {
+            let name = name.to_string_lossy().to_uppercase();
+            INHERITED_ENVIRONMENT.contains(&name.as_str())
+        })
+        .collect()
 }
 
 /// Connects to a remote MCP server over Streamable HTTP.
@@ -504,28 +721,39 @@ pub async fn connect_http(
     server: &ServerName,
     endpoint: &McpHttpEndpoint,
 ) -> Result<McpConnection, ConnectError> {
+    let transport = http_transport(endpoint)?;
+    let service = negotiate(transport).await?;
+    Ok(McpConnection::new(
+        server,
+        service,
+        Some(Recipe::Http(endpoint.clone())),
+    ))
+}
+
+/// Builds the Streamable HTTP transport for an endpoint.
+fn http_transport(
+    endpoint: &McpHttpEndpoint,
+) -> Result<StreamableHttpClientTransport<reqwest::Client>, ConnectError> {
     // No client-level total timeout: an MCP connection is long-lived and a total bound would kill a
     // healthy session. This is the same defect `docs/research/integrations/mcp.md` records for the
     // model client's stream, where a total `timeout` terminated every healthy stream at the deadline.
     let client = build_http_client(endpoint)?;
     let config = StreamableHttpClientTransportConfig::with_uri(endpoint.as_str().to_owned());
-    let transport = StreamableHttpClientTransport::with_client(client, config);
-    connect_over(server, transport).await
+    Ok(StreamableHttpClientTransport::with_client(client, config))
 }
 
 /// Runs the negotiation over any transport the SDK supports.
 ///
-/// Public so a test can drive the real negotiation over an in-process duplex pair. That matters:
-/// `P3-007` recorded that `tracing`/`reqwest`-style defects and a *revision* defect are invisible to
-/// a fixture that shares the code's assumptions, and the only way to prove `Discover` does not fall
-/// back is to send it a peer that answers `server/discover` and nothing else.
+/// Public so a test can drive the real negotiation over an in-process duplex pair: one peer that
+/// answers `server/discover` and nothing else (it must never be sent `initialize`), and one that
+/// refuses `server/discover` and answers only the legacy handshake (it must still connect, as
+/// `Legacy`).
 ///
 /// # Errors
 ///
 /// Returns [`ConnectError::Unreachable`] or [`ConnectError::Refused`] when the transport or the
-/// negotiation fails, [`ConnectError::DiscoveryTimedOut`] when the peer never answers
-/// `server/discover`, and [`ConnectError::LegacyNegotiated`] when the peer settles on a revision
-/// other than [`MODERN_REVISION`].
+/// negotiation fails (both `server/discover` and the legacy `initialize`), and
+/// [`ConnectError::DiscoveryTimedOut`] when the peer completes neither in time.
 pub async fn connect_over<T, E, A>(
     server: &ServerName,
     transport: T,
@@ -534,15 +762,28 @@ where
     T: rmcp::transport::IntoTransport<rmcp::RoleClient, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
+    let service = negotiate(transport).await?;
+    Ok(McpConnection::new(server, service, None))
+}
+
+/// Runs the handshake and checks the peer named a revision.
+async fn negotiate<T, E, A>(transport: T) -> Result<Service, ConnectError>
+where
+    T: rmcp::transport::IntoTransport<rmcp::RoleClient, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
     let config = client_config();
-    // Bounded, because `Discover` has no deadline of its own. See `DISCOVERY_TIMEOUT`.
+    // Bounded as a whole. See `DISCOVERY_TIMEOUT`.
     let negotiation = config.serve_with_lifecycle(
         transport,
-        // `Discover`, not `Auto`: `Auto` falls back to the legacy handshake when the peer does
-        // not answer `server/discover` within ten seconds, which would negotiate a different era
-        // silently. `Discover` has no fallback path, so a legacy peer fails here and is named.
-        ClientLifecycleMode::Discover {
+        // `Auto`: ask for the modern revision, and fall back to the legacy `initialize` handshake
+        // when the peer reports it does not know `server/discover` (or is silent for ten seconds).
+        // The era that resulted is read back and exposed as `McpConnection::era`, so the fallback
+        // is a recorded fact rather than a silent substitution. `legacy_version: None` keeps the
+        // SDK's own legacy version; the server answers with the one it supports.
+        ClientLifecycleMode::Auto {
             preferred_versions: vec![modern_revision()],
+            legacy_version: None,
         },
     );
     let service = tokio::time::timeout(DISCOVERY_TIMEOUT, negotiation)
@@ -552,25 +793,31 @@ where
         })?
         .map_err(|error| ConnectError::from_sdk(&error))?;
 
-    // The server states which revision it settled on. Checked rather than trusted: `Discover` has no
-    // fallback, but the *server* may still answer a revision JARVIS does not implement, and a
-    // connection that appeared to work while speaking another era is exactly the failure `P3-007`
-    // recorded.
+    // The server states which revision it settled on. A peer that reports none is refused rather than
+    // assumed to be either era, so `McpConnection::era` is always a statement about something the
+    // peer said.
     let negotiated = service.peer_info().map_or_else(String::new, |info| {
         info.protocol_version.as_str().to_owned()
     });
-    if negotiated != MODERN_REVISION {
+    if negotiated.is_empty() {
         let _ = service.cancel().await;
-        return Err(ConnectError::LegacyNegotiated {
-            negotiated,
-            wanted: MODERN_REVISION.to_owned(),
-        });
+        return Err(ConnectError::Refused(
+            "the server completed the handshake without naming a protocol revision".to_owned(),
+        ));
     }
 
-    Ok(McpConnection {
-        server: server.clone(),
-        service,
-    })
+    Ok(service)
+}
+
+impl McpConnection {
+    fn new(server: &ServerName, service: Service, recipe: Option<Recipe>) -> Self {
+        Self {
+            server: server.clone(),
+            service: std::sync::RwLock::new(std::sync::Arc::new(service)),
+            recipe,
+            restart: tokio::sync::Mutex::new(None),
+        }
+    }
 }
 
 /// A tool listing that owns its data, for a caller that cannot hold a buffer.
@@ -625,6 +872,34 @@ mod tests {
 
     fn server(name: &str) -> ServerName {
         ServerName::new(name).unwrap_or_else(|error| panic!("fixture server {name}: {error}"))
+    }
+
+    /// **A credential in the daemon's environment never reaches a server.** The allowlist keeps what a
+    /// program needs to start and drops everything else, whatever the variable is called.
+    #[test]
+    fn a_server_is_not_given_the_daemons_secrets() {
+        let environment = [
+            ("PATH", "/usr/bin"),
+            ("Path", "C:\\Windows"),
+            ("SystemRoot", "C:\\Windows"),
+            ("ELEVENLABS_API_KEY", "secret-1"),
+            ("OPENAI_API_KEY", "secret-2"),
+            ("GITHUB_TOKEN", "secret-3"),
+            ("JARVIS_ANYTHING", "secret-4"),
+            ("AWS_SECRET_ACCESS_KEY", "secret-5"),
+        ]
+        .map(|(name, value)| (name.into(), value.into()));
+        let kept = allowed_environment(environment);
+        let names: Vec<String> = kept
+            .iter()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["PATH", "Path", "SystemRoot"], "{names:?}");
+        assert!(
+            kept.iter()
+                .all(|(_, value)| !value.to_string_lossy().starts_with("secret")),
+            "no secret value may be passed on"
+        );
     }
 
     /// **The property this whole module is arranged around.** A server's `annotations` claim what its

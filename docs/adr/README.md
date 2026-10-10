@@ -183,3 +183,20 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0164](0164-the-brain-settings-choose-a-provider-and-a-model-from-a-list.md) | The Brain settings choose a provider and a model from a list | Accepted |
 | [0165](0165-a-project-can-cap-the-tokens-its-scheduled-work-uses-in-a-day.md) | A project can cap the tokens its scheduled work uses in a day | Accepted |
 | [0166](0166-an-evaluation-harness-measures-whether-the-assistant-is-getting-better.md) | An evaluation harness measures whether the assistant is getting better | Accepted |
+| [0167](0167-capability-and-reach-come-from-open-protocols-before-bespoke-code.md) | Capability and reach come from open protocols before bespoke code | Accepted |
+| [0168](0168-mcp-servers-are-managed-from-settings-speak-either-protocol-era-and-are-untrusted.md) | MCP servers are managed from Settings, speak either protocol era, and are untrusted | Accepted |
+| [0169](0169-abilities-are-one-click-and-a-server-can-have-read-only-tools.md) | Abilities are one click, and a server can have read-only tools | Accepted |
+| [0170](0170-other-apps-connect-to-jarvis-with-one-switch-and-one-key.md) | Other apps connect to JARVIS with one switch and one key | Accepted |
+| [0171](0171-the-browser-and-documentation-lookup-come-with-jarvis.md) | The web browser and documentation lookup come with JARVIS | Accepted |
+| [0172](0172-the-endpoint-for-other-agents-serves-the-built-in-browser-and-documentation-tools.md) | The endpoint for other agents serves the built-in browser and documentation tools | Accepted |
+| [0173](0173-one-switch-makes-the-endpoint-for-other-agents-reachable-from-the-internet.md) | One switch makes the endpoint for other agents reachable from the internet | Accepted |
+| [0174](0174-scheduled-results-stay-out-of-the-open-chat-and-an-approval-whose-call-started-stops-asking.md) | Scheduled results stay out of the open chat, and an approval whose call started stops asking | Accepted |
+| [0175](0175-trusting-a-third-party-tool-by-name-releases-it.md) | Trusting a third-party tool by name releases it | Accepted |
+| [0176](0176-a-big-tool-catalog-costs-no-tokens-until-a-tool-is-needed.md) | A big tool catalog costs no tokens until a tool is needed | Accepted |
+| [0177](0177-the-owner-can-trust-the-memory-and-project-tools-by-name.md) | The owner can trust the memory and project tools by name | Accepted |
+| [0178](0178-a-tool-that-reaches-other-people-can-be-trusted-by-name.md) | A tool that reaches other people can be trusted by name | Accepted |
+| [0179](0179-a-call-a-stopped-daemon-left-half-way-is-settled-as-failed-or-unknown.md) | A call a stopped daemon left half-way is settled as failed or unknown | Accepted |
+| [0180](0180-a-call-from-another-app-that-needs-the-owner-waits-for-the-owner.md) | A call from another app that needs the owner waits for the owner | Accepted |
+| [0181](0181-a-daemon-that-cannot-start-says-why-and-connect-apps-takes-a-free-port.md) | A daemon that cannot start says why, and Connect apps takes a free port | Accepted |
+| [0182](0182-a-schedule-can-mean-a-time-of-day-in-a-named-time-zone.md) | A schedule can mean a time of day in a named time zone | Accepted |
+| [0183](0183-the-model-proposes-skills-and-the-owner-approves-with-one-click.md) | The model proposes skills, the owner approves them with one click | Accepted |

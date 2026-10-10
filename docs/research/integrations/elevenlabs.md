@@ -79,6 +79,7 @@ These settings change what the caller hears and are part of JARVIS voice-session
 ### MCP Consumer Mode
 
 - ElevenLabs agents can connect to external MCP servers over SSE and Streamable HTTP.
+- Re-read 2026-10-10: the dashboard form takes a *Server URL*, an optional *Secret Token* described as "Authorization header value", and optional extra headers; the connection is made from ElevenLabs' cloud, so JARVIS must be reachable from the internet (`cloudflare-tunnel.md`, `ADR-0173`). Whether the token is sent with or without `Bearer` is not stated; JARVIS accepts both.
 - Workspace MCP use is opt-in and disabled by default.
 - Server- and tool-level approval modes include always ask, fine-grained, and no approval.
 - MCP is currently unavailable for Zero Retention Mode or HIPAA-required workspaces.

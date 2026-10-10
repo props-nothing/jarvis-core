@@ -1,7 +1,7 @@
 ---
 integration: model-context-protocol
 status: researched
-last_verified: 2026-09-22
+last_verified: 2026-10-10
 owners: []
 selected_spec_version: "2026-07-28"
 selected_sdk: "rmcp 3.4.0 (Apache-2.0, Tier 1)"
@@ -36,6 +36,39 @@ apps, skills) are **not** selected here.
 | Rust SDK source | https://github.com/modelcontextprotocol/rust-sdk (`main`) | 2026-09-22 | negotiation behaviour, version constants |
 | Deprecated features | https://modelcontextprotocol.io/specification/2026-07-28/deprecated.md | 2026-09-22 | features new implementations must not adopt |
 | Separate docs `llms.txt` | `not found` — the single `llms.txt` above covers both docs and specification | 2026-09-22 | — |
+
+## Live findings against real servers (2026-10-10, `P11-001`, `ADR-0168`)
+
+Until this date the client had only met scripted peers and a hand-written fixture. Connecting the official reference servers
+(`@modelcontextprotocol/server-everything` and `server-memory`, both npm version `2026.8.31`, run with `npx` on Windows) found four
+differences between the documents this record was written from and what is deployed. Each is now a decision and a test.
+
+| What the spec says | What a real server did | Decision |
+| --- | --- | --- |
+| Modern clients probe `server/discover`; `basic/versioning` ("Backward Compatibility with Initialization-Based Versions") lets a client fall back, and for stdio gives the procedure | `server-everything` answers `server/discover` with `-32601 Method not found` and `initialize` with `protocolVersion 2025-06-18` | The client uses `ClientLifecycleMode::Auto` and records the era ([`McpEra`]). The earlier "legacy is a hard failure" rule made every shipped server unreachable. |
+| Tool input schemas are JSON Schema 2020-12 unless `$schema` says otherwise (default dialect) | Every tool of both servers declares `http://json-schema.org/draft-07/schema#` (the TypeScript SDK emits it) | Draft-07 is read as 2020-12 **only where it means the same**: `dependencies` and `additionalItems` are refused by name, and tuple `items` / boolean `exclusiveMinimum` fail the 2020-12 metaschema check. Draft-04 and 2019-09 stay refused. |
+| `tools/call` returns text and structured content | A result is text that can carry anything, including instructions | MCP output is fenced as untrusted data before the model sees it (as `jarvis.web.fetch` already was). |
+| A stdio server is a child process of the client | `server-everything` has a `get-env` tool that returns every variable it was given | The child starts with an allowlisted environment (no keys, no `JARVIS_*`), checked live: a variable set in the daemon did not appear in the tool's output. |
+
+Smaller facts recorded so they are not rediscovered:
+
+- On Windows `npx` is a shell script next to `npx.cmd`; only the second can be started, and a bare name does not resolve from a child with a cleared working
+  directory (`%~dp0` fails). The program is resolved to an absolute path when a server is added.
+- `ClientLifecycleMode::Auto` waits up to 10 seconds for `server/discover` before the legacy `initialize`; JARVIS bounds both together at 20 seconds. A first `npx` run
+  can download the package and exceed that; the second run is cached.
+- `RunningService::is_closed()` reports only a cancellation; a child that exited needs `peer().is_transport_closed()`.
+- The Rust SDK's own message for a failed fallback (`discover and legacy initialize both failed`) drops both causes; JARVIS keeps them.
+
+### The JARVIS server, against the official TypeScript client (2026-10-10, `ADR-0170`)
+
+The server half had the same blind spot: it had only met the Rust SDK's own test client. The official `@modelcontextprotocol/sdk` TypeScript client (the one most tools embed) connected to it as follows:
+
+- **Refused at first:** the server accepted only protocol 2026-07-28, so the client failed with "Unsupported protocol version". It now also accepts 2025-11-25, 2025-06-18 and 2025-03-26 (legacy sessions); the client negotiated 2025-11-25.
+- **Authentication is JARVIS's, not the protocol's:** a Bearer key is checked before the endpoint (401 otherwise). No OAuth is offered, so a client that insists on OAuth discovery is not supported yet.
+- `tools/list` returned 26 tools (21 without a granted folder); `tools/call` of `jarvis.agent.delegate` returned a fenced result; a tool needing approval returned `mcp_call_cannot_hold_an_approval`.
+
+Still unverified: Streamable HTTP against a real remote server, authorization (`401`, OAuth) for a remote server, `tools/list_changed`, and a server that needs a
+credential in its environment (the allowlist deliberately gives it none; a deliberate route for one is open work in `P11-001`).
 
 ## Verified Contract
 

@@ -116,6 +116,14 @@ fn tools_are_matched_with_or_without_the_jarvis_prefix_and_limits_are_checked() 
     assert!(tool_matches("jarvis.web.fetch", "jarvis.web.fetch"));
     assert!(!tool_matches("jarvis.web.fetch", "fetch"));
     assert!(!tool_matches("jarvis.web.fetcher", "web.fetch"));
+    assert!(tool_matches(
+        "mcp.browser.browser_navigate",
+        "browser.browser_navigate"
+    ));
+    assert!(!tool_matches(
+        "mcp.browser.browser_navigate",
+        "browser_navigate"
+    ));
 
     let expect = Expect {
         tools_used: vec!["web.fetch".to_owned()],

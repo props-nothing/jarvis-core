@@ -28,9 +28,9 @@ mod workspace_repository;
 
 pub use approval_repository::{
     MAX_APPROVAL_ARGUMENTS_BYTES, attach_approval_arguments, clear_approval_arguments,
-    create_approval, find_approval, read_approval_arguments, read_pending_approvals,
-    read_run_approvals, read_workspace_pending_approvals, read_workspace_unreleased_approvals,
-    record_decision,
+    clear_arguments_of_started_calls, create_approval, find_approval, read_approval_arguments,
+    read_pending_approvals, read_run_approvals, read_workspace_pending_approvals,
+    read_workspace_unreleased_approvals, record_decision,
 };
 pub use config::{
     CURRENT_CONFIG_VERSION, Config, ConfigError, ConfigMigration, ConfigStore, DaemonConfig,
@@ -119,6 +119,6 @@ pub use summary_repository::{
 pub use tool_call_repository::{
     CallBinding, CallOrigin, CallTarget, NewToolCall, StoredToolCall, admit_tool_call,
     advance_tool_call, count_tool_calls, find_tool_call, link_tool_call_approval,
-    read_run_tool_calls, read_unrepeatable_calls, record_tool_outcome,
+    read_run_tool_calls, read_unrepeatable_calls, record_tool_outcome, settle_orphaned_calls,
 };
 pub use workspace_repository::{DataPolicy, NewWorkspace, WorkspaceMode, record_workspace};

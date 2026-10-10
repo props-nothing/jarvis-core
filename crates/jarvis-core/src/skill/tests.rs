@@ -1101,6 +1101,63 @@ fn text_matching_is_on_word_boundaries_and_splits_tool_identifiers() {
     );
 }
 
+/// **A procedure is offered for a request that contains what its first line says it is for, even when the request has other words.**
+///
+/// The realistic case: the owner's sentence is longer than the procedure's text, so the literal rule of
+/// `every_query_word_must_appear` could never offer it. The control is that a request which only shares a
+/// word, or which names another kind of task, is still refused.
+#[test]
+fn a_procedure_is_offered_when_a_request_covers_its_trigger_line() {
+    let workspace = WorkspaceId::new();
+    let revision = selectable(
+        workspace,
+        "Research a Dutch company and add it to the prospects sheet.\nUse when asked to find new leads.",
+        "Search the web for the company.",
+        Sensitivity::Internal,
+        SkillState::Active,
+    );
+    let offered = |text: &str| {
+        select_skills(
+            std::slice::from_ref(&revision),
+            &SkillQuery::new(workspace, Sensitivity::Internal).with_text(text),
+        )
+        .offered
+        .len()
+    };
+    assert_eq!(
+        offered(
+            "Please research this Dutch company called Acme and add it to the prospects sheet, thanks"
+        ),
+        1
+    );
+    // Plurals and case do not matter.
+    assert_eq!(
+        offered("RESEARCH Dutch companies, then ADD them to the prospect sheets"),
+        1
+    );
+    // Half of the trigger is not enough, and neither is a shared word.
+    assert_eq!(offered("research a company in Germany"), 0);
+    assert_eq!(offered("add this to my calendar"), 0);
+}
+
+/// **A trigger of fewer than two distinctive words never offers a procedure on its own.**
+#[test]
+fn a_one_word_trigger_is_not_enough_to_offer_a_procedure() {
+    let workspace = WorkspaceId::new();
+    let revision = selectable(
+        workspace,
+        "Inbox.",
+        "Call jarvis.files.read on the path.",
+        Sensitivity::Internal,
+        SkillState::Active,
+    );
+    let selection = select_skills(
+        std::slice::from_ref(&revision),
+        &SkillQuery::new(workspace, Sensitivity::Internal).with_text("please tidy my inbox now"),
+    );
+    assert!(selection.offered.is_empty(), "{selection:?}");
+}
+
 /// **⭐⭐ The text rule is conjunctive: every word must appear.**
 ///
 /// The property that makes "offered" mean "this procedure applies". A disjunctive match would offer a

@@ -352,12 +352,11 @@ async fn a_request_without_a_protocol_version_header_is_refused() {
     );
 }
 
-/// **A request with no protocol signals at all is refused, and this is the test that isolates
-/// `stateless_protocol_metadata_required(true)`.**
+/// **A request with no protocol signals at all is still refused: a legacy client must `initialize` first (`ADR-0170`).**
 ///
-/// Neither the header nor a body `_meta` version is present, so the SDK's body-versus-header rule has nothing
-/// to compare — which leaves the flag as the only thing that can refuse it. Falsified by removing that line
-/// from `ServingConfig::sdk`: this request is then routed by the legacy rule, so the refusal changes.
+/// Neither the header nor a body `_meta` version is present, so the request is routed by the legacy rule, which
+/// answers that an `initialize` was expected. (This used to be a `400` header-mismatch while the server refused
+/// legacy outright.) The point that matters is unchanged: nothing runs without a handshake.
 #[tokio::test]
 async fn a_request_with_no_protocol_signals_at_all_is_refused() {
     let body = json!({
@@ -368,14 +367,13 @@ async fn a_request_with_no_protocol_signals_at_all_is_refused() {
     });
     let (status, _, raw) = post(&config(), handler(CountingRunner::new()), body, None).await;
 
-    assert_eq!(
-        status,
-        http::StatusCode::BAD_REQUEST,
+    assert!(
+        status.is_client_error(),
         "a request with no protocol signals must be refused, got {status}: {raw}"
     );
     assert!(
-        raw.contains("32020"),
-        "the refusal must be the header-mismatch error, got: {raw}"
+        raw.contains("initialize"),
+        "the refusal must say a handshake is expected, got: {raw}"
     );
 }
 
@@ -413,7 +411,7 @@ async fn a_configured_loopback_origin_is_admitted() {
     assert!(!config.origin_check(Some("http://localhost:3001")).permits());
 }
 
-/// **`server/discover` answers with the modern revision, because the handler narrowed it.**
+/// **`server/discover` leads with the modern revision and lists the legacy ones clients send.**
 ///
 /// The SDK's default would advertise `LATEST` = `2025-11-25`, so this is the functional form of `P3-009e`'s
 /// override: the value a client actually reads is the one this build implements.
@@ -447,9 +445,14 @@ async fn discovering_the_server_reports_the_modern_revision() {
         text.contains(served_protocol_version()),
         "the modern revision must be advertised, got: {body}"
     );
+    // Both eras are advertised (`ADR-0170`), the modern one first; the one that predates Streamable HTTP is not.
     assert!(
-        !text.contains("2025-11-25"),
-        "the legacy revision must not be advertised, got: {body}"
+        text.contains("2025-11-25"),
+        "the legacy revisions clients send must be advertised, got: {body}"
+    );
+    assert!(
+        !text.contains("2024-11-05"),
+        "the revision that predates Streamable HTTP must not be advertised, got: {body}"
     );
 }
 
@@ -482,9 +485,10 @@ async fn a_call_without_the_name_header_is_refused_as_a_header_mismatch() {
     );
 }
 
-/// A `GET` to the endpoint is `405`, because the revision defines no GET stream — POST is the only method.
+/// A `GET` with no session is refused, never served (`ADR-0170`).
 ///
-/// `P3-009a` recorded this as a spec obligation; this is it proven against the real service.
+/// The modern revision defines no GET stream, so this was a `405`. A legacy client opens a GET stream **inside a
+/// session**, so a GET that names none is refused as a bad request instead. Either way nothing is served to it.
 #[tokio::test]
 async fn a_get_to_the_endpoint_is_method_not_allowed() {
     let service = config().sdk_service_for_test(handler(CountingRunner::new()));
@@ -499,7 +503,11 @@ async fn a_get_to_the_endpoint_is_method_not_allowed() {
         .oneshot(request)
         .await
         .unwrap_or_else(|error| panic!("the service is infallible: {error:?}"));
-    assert_eq!(response.status(), http::StatusCode::METHOD_NOT_ALLOWED);
+    assert!(
+        response.status().is_client_error(),
+        "a GET with no session must be refused, got {}",
+        response.status()
+    );
 }
 
 /// **The request-body bound is enforced.** An oversized body is refused rather than read.

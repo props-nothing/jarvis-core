@@ -178,6 +178,11 @@ struct PostureDocument {
     /// The posture class. Absent means `unclassified`.
     #[serde(default)]
     class: PostureClass,
+    /// Tools of this server that only read, by the server's own names, for a server that mixes reading and
+    /// acting (a browser). These run without asking; every other tool keeps the class. The operator's
+    /// statement, like the class: nothing the server reports can add a name.
+    #[serde(default)]
+    read_only_tools: Vec<String>,
 }
 
 /// The postures a configuration file can express.
@@ -280,7 +285,11 @@ impl McpHostConfig {
             let transport = ServerTransport::from_document(&name, entry.transport)?;
             servers.push(ConfiguredServer {
                 name,
-                policy: entry.posture.class.policy()?,
+                policy: entry
+                    .posture
+                    .class
+                    .policy()?
+                    .with_read_only_tools(entry.posture.read_only_tools),
             });
             transports.push(transport);
         }
@@ -375,8 +384,18 @@ impl McpHostConfig {
         let mut unreachable = Vec::new();
         let mut opened: Vec<(ConfiguredServer, Arc<McpConnection>)> =
             Vec::with_capacity(self.servers.len());
-        for (configured, transport) in self.servers.iter().zip(&self.transports) {
-            match transport.connect(&configured.name).await {
+        // Connected **at the same time**: each can take most of the handshake deadline (a first start of
+        // `npx` downloads the program), and one after another a slow or dead server delayed the daemon's
+        // start by its whole wait. The order of the results is the order configured.
+        let attempts =
+            self.servers
+                .iter()
+                .zip(&self.transports)
+                .map(|(configured, transport)| async move {
+                    (configured, transport.connect(&configured.name).await)
+                });
+        for (configured, outcome) in futures_util::future::join_all(attempts).await {
+            match outcome {
                 Ok(connection) => opened.push((configured.clone(), connection)),
                 Err(reason) => unreachable.push(UnreadableServer {
                     server: configured.name.clone(),
@@ -492,6 +511,19 @@ impl ServerTransport {
     }
 }
 
+/// What one connected server reported, for a status display.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectedServer {
+    /// The operator's name for the server.
+    pub server: String,
+    /// The protocol era the connection speaks.
+    pub era: crate::McpEra,
+    /// The revision the server settled on.
+    pub revision: String,
+    /// The name the server gave itself; evidence, never an identifier.
+    pub reported_name: String,
+}
+
 /// A connected host: one catalog and the adapters that can run its tools.
 ///
 /// Everything a caller needs to offer MCP tools, in one value — which is what makes it possible for the
@@ -525,6 +557,20 @@ impl McpHost {
     #[must_use]
     pub fn unreadable(&self) -> &[UnreadableServer] {
         &self.unreadable
+    }
+
+    /// Returns what each connected server said about itself and which protocol era it speaks.
+    #[must_use]
+    pub fn connected(&self) -> Vec<ConnectedServer> {
+        self.connections
+            .iter()
+            .map(|hosted| ConnectedServer {
+                server: hosted.connection.server().to_string(),
+                era: hosted.connection.era(),
+                revision: hosted.connection.negotiated_revision(),
+                reported_name: hosted.connection.reported_identity().name,
+            })
+            .collect()
     }
 
     /// Returns the adapters, one per connected server.

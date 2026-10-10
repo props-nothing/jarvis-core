@@ -142,9 +142,12 @@ fn check(name: impl Into<String>, passed: bool, detail: impl Into<String>) -> Ch
     }
 }
 
-/// Whether a requested tool is the one an expectation names (`web.fetch` matches `jarvis.web.fetch`).
+/// Whether a requested tool is the one an expectation names (`web.fetch` matches `jarvis.web.fetch`, and `browser.browser_navigate`
+/// matches `mcp.browser.browser_navigate`).
 pub(crate) fn tool_matches(seen: &str, wanted: &str) -> bool {
-    seen == wanted || seen.strip_prefix("jarvis.") == Some(wanted)
+    seen == wanted
+        || seen.strip_prefix("jarvis.") == Some(wanted)
+        || seen.strip_prefix("mcp.") == Some(wanted)
 }
 
 /// Scores one run against what was expected of it. Pure: nothing here reads a clock or the daemon.

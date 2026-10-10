@@ -694,6 +694,9 @@ pub fn start(paths: &AppPaths, arguments: &[String]) -> ExitStatus {
         eprintln!("jarvis: could not locate this program to start the daemon with");
         return ExitStatus::Unavailable;
     };
+    // A reason left by an earlier failed start is stale now.
+    let startup_error = paths.runtime().join(jarvisd::STARTUP_ERROR_FILE);
+    let _ = std::fs::remove_file(&startup_error);
     let mut daemon = match spawn_daemon(&binary, flag_value(arguments, "--root").as_deref()) {
         Ok(daemon) => daemon,
         Err(message) => {
@@ -714,9 +717,14 @@ pub fn start(paths: &AppPaths, arguments: &[String]) -> ExitStatus {
         // The daemon exiting is the answer, and a far better one than waiting out the clock: it refuses to start
         // for a reason (a bad folder, a missing key) that `jarvis daemon` itself would have printed.
         if daemon.has_exited() {
-            eprintln!(
-                "jarvis: the daemon exited at startup. Run `jarvis daemon` in a terminal to see why."
-            );
+            match std::fs::read_to_string(&startup_error) {
+                Ok(reason) if !reason.trim().is_empty() => {
+                    eprintln!("jarvis: the daemon could not start: {}", reason.trim());
+                }
+                _ => eprintln!(
+                    "jarvis: the daemon exited at startup. Run `jarvis daemon` in a terminal to see why."
+                ),
+            }
             return ExitStatus::Unavailable;
         }
         std::thread::sleep(Duration::from_millis(200));

@@ -30,8 +30,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use jarvis_core::{
-    Cadence, ErrorCode, InvalidSchedule, SystemClock, UtcTimestamp, parse_interval,
-    validate_objective,
+    Cadence, ErrorCode, InvalidSchedule, SystemClock, UtcTimestamp, validate_objective,
 };
 use jarvis_protocol::{
     CreateScheduleRequest, RunListReply, RunSummaryReply, ScheduleListReply, ScheduleReply,
@@ -348,16 +347,25 @@ async fn project_name(state: &GatewayState, schedule: &StoredSchedule) -> Option
     .map(|project| project.name)
 }
 
+/// `HH:MM` for a minute of the day.
+pub(crate) fn clock_text(minute_of_day: u16) -> String {
+    format!("{:02}:{:02}", minute_of_day / 60, minute_of_day % 60)
+}
+
 fn schedule_reply(schedule: &StoredSchedule, project: Option<String>) -> ScheduleReply {
-    let (cadence, interval) = match schedule.cadence() {
-        Cadence::Every(seconds) => ("every", Some(seconds)),
-        Cadence::Once(_) => ("once", None),
+    let (cadence, interval, daily) = match schedule.cadence() {
+        Cadence::Every(seconds) => ("every", Some(*seconds), None),
+        Cadence::Once(_) => ("once", None, None),
+        Cadence::Daily(clock) => ("daily", None, Some(clock)),
     };
     ScheduleReply {
         schedule_id: schedule.id().to_owned(),
         objective: schedule.objective().to_owned(),
         cadence: cadence.to_owned(),
         interval_seconds: interval,
+        at_time: daily.map(|clock| clock_text(clock.minute_of_day())),
+        days: daily.map(|clock| clock.days().describe()),
+        time_zone: daily.map(|clock| clock.zone().to_owned()),
         enabled: schedule.enabled(),
         project,
         next_run_at: schedule.enabled().then_some(schedule.next_run()),
@@ -448,11 +456,14 @@ pub async fn create(
         Err(error) => return invalid_response(error),
     };
     let now = UtcTimestamp::now(&SystemClock);
-    let cadence = match (&request.every, request.at) {
-        (Some(every), None) => parse_interval(every).and_then(Cadence::every_seconds),
-        (None, Some(at)) => Cadence::once_at(at, now),
-        _ => Err(InvalidSchedule::ExactlyOneCadence),
-    };
+    let cadence = Cadence::from_request(
+        request.every.as_deref(),
+        request.at,
+        request.at_time.as_deref(),
+        request.days.as_deref(),
+        request.time_zone.as_deref(),
+        now,
+    );
     let cadence = match cadence {
         Ok(cadence) => cadence,
         Err(error) => return invalid_response(error),

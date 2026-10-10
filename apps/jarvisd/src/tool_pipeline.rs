@@ -176,6 +176,19 @@ pub struct PolicyInventoryEntry {
     pub offer_chars: usize,
 }
 
+/// The owner's yes to one call from another app: who said it, and when (`ADR-0180`).
+#[derive(Clone, Debug)]
+pub struct OwnerApproval {
+    /// The identifier the owner was shown.
+    pub approval_id: String,
+    /// Who decided: the profile's own local identity.
+    pub approver_id: String,
+    /// When they said yes.
+    pub approved_at: UtcTimestamp,
+    /// When that yes would have lapsed.
+    pub expires_at: UtcTimestamp,
+}
+
 /// What one pipeline call produced.
 ///
 /// Three variants, and each is a different answer to "what should the caller do next": report the
@@ -1244,6 +1257,29 @@ impl ToolPipeline {
         actor: &ToolActor,
         correlation_id: CorrelationId,
     ) -> Result<ToolPipelineOutcome, ToolPipelineError> {
+        self.call_remote_tool_with(tool, arguments, actor, correlation_id, None)
+            .await
+    }
+
+    /// As [`Self::call_remote_tool`], for a call the owner has now said yes to (`ADR-0180`).
+    ///
+    /// Without `owner`, a decision that needs an approval comes back as [`ToolPipelineOutcome::AwaitingApproval`] (with empty
+    /// identifiers: there is no run or stored approval, the caller of this method is the one holding the call). With it, the call runs
+    /// and the receipt **cites the owner's answer**, so the adapter sees the same shape of authority a local approved call carries.
+    /// Everything else is unchanged: the same validation, the same decision, a denial still refuses, and a call that needs no approval
+    /// ignores `owner`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call_remote_tool`].
+    pub async fn call_remote_tool_with(
+        &self,
+        tool: &str,
+        arguments: Value,
+        actor: &ToolActor,
+        correlation_id: CorrelationId,
+        owner: Option<OwnerApproval>,
+    ) -> Result<ToolPipelineOutcome, ToolPipelineError> {
         let id = ToolId::new(tool)?;
         let definition = match self.registry.get(&id) {
             Ok(definition) => definition.clone(),
@@ -1275,19 +1311,16 @@ impl ToolPipeline {
                 reason_code: decision.reason_code(),
             });
         }
-        // A held decision is a refusal on this path, and the reason code says so rather than reporting the
-        // workspace's `require_approval` code as if an approval were obtainable.
-        if decision.decision() == jarvis_tools::Decision::RequireApproval {
-            return Ok(ToolPipelineOutcome::Refused {
-                reason_code: "mcp_call_cannot_hold_an_approval",
-            });
-        }
-        // A second, independent statement, because `ApprovalPolicy` is a declaration on the **tool** and the
-        // engine's threshold is a **workspace** setting. A tool declaring an approval its workspace would not
-        // ask for must still not run here, and a test varying only the workspace would not catch removing this.
-        if definition.approval() != jarvis_tools::ApprovalPolicy::Auto {
-            return Ok(ToolPipelineOutcome::Refused {
-                reason_code: "mcp_call_cannot_hold_an_approval",
+        // Two independent statements of "this needs the owner": the engine's decision (a **workspace** setting) and the tool's own
+        // declaration (`ApprovalPolicy`). Either one is enough, and a test varying only the workspace would not catch removing the
+        // second. Without the owner's answer the call is not run: it comes back as awaiting one.
+        let needs_owner = decision.decision() == jarvis_tools::Decision::RequireApproval
+            || definition.approval() != jarvis_tools::ApprovalPolicy::Auto;
+        if needs_owner && owner.is_none() {
+            return Ok(ToolPipelineOutcome::AwaitingApproval {
+                call_id: String::new(),
+                approval_id: String::new(),
+                reason_code: decision.reason_code(),
             });
         }
 
@@ -1307,10 +1340,19 @@ impl ToolPipeline {
             arguments: arguments.clone(),
             intent_hash: intent,
             policy_version: actor.policy_version().to_owned(),
-            decision: decision.clone(),
-            // No approval, and none is possible: a held decision returned above. A citation here would be
-            // inventing authority this path never obtained.
-            approval: None,
+            // A held decision becomes the shape a local approved call carries, and the receipt cites the owner's answer: the receipt
+            // constructor refuses a held decision with nothing cited, so authority cannot be invented here.
+            decision: if decision.decision() == jarvis_tools::Decision::RequireApproval {
+                jarvis_tools::PolicyDecision::held_by_approval(decision.effective_risk().level())
+            } else {
+                decision.clone()
+            },
+            approval: owner.map(|answer| jarvis_tools::ApprovalCitation {
+                approval_id: answer.approval_id,
+                approver_id: answer.approver_id,
+                approved_at: answer.approved_at,
+                expires_at: answer.expires_at,
+            }),
             correlation_id,
             issued_at: now,
         })?;

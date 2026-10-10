@@ -135,7 +135,10 @@ sha2 = { version = "=0.10.9", default-features = false }
 # loopback connection is the only one this slice can justify.
 sqlx = { version = "=0.9.0", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite-bundled", "postgres"] }
 thiserror = "2.0.20"
-time = { version = "0.3.55", features = ["serde", "serde-well-known"] }
+# Wall-clock schedules (`P6-003`, `docs/research/integrations/jiff-time-zones.md`). The whole zone database is
+# bundled so a schedule means the same on every platform and never depends on a system file.
+jiff = { version = "=0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-bundle-always"] }
+time =  { version = "0.3.55", features = ["serde", "serde-well-known"] }
 tokio = { version = "=1.53.1", features = ["macros", "rt"] }
 tower = { version = "0.5.3", features = ["util"] }
 toml = "1.1.6"

@@ -8,6 +8,8 @@ Every external integration requires a dated record based on current official sou
 | --- | --- | --- | --- |
 | MCP | https://modelcontextprotocol.io/llms.txt | [mcp.md](mcp.md) | `P3-007` complete: spec `2026-07-28` and `rmcp` 3.4.0 selected; not implemented |
 | Web fetch (`jarvis.web.fetch`) | not applicable; IANA special-purpose registries and the pinned `reqwest` 0.13.5 source | [web-fetch.md](web-fetch.md) | `P3-027` implemented; exfiltration through a model-chosen URL is an open question, held for approval by default |
+| Cloudflare quick tunnel (`cloudflared`) | https://developers.cloudflare.com/tunnel/llms.txt | [cloudflare-tunnel.md](cloudflare-tunnel.md) | `ADR-0173` implemented and run live on Windows (download, checksum, tunnel, calls through the public address); **not** run against ElevenLabs, macOS or Linux |
+| Time zones (`jiff`, IANA database) | not applicable; crates.io and docs.rs for jiff 0.2.38 | [jiff-time-zones.md](jiff-time-zones.md) | `P6-003` in progress: wall-clock schedules across daylight-saving changes |
 | ElevenLabs | https://elevenlabs.io/docs/llms.txt | [elevenlabs.md](elevenlabs.md) | architecture researched; both custom-brain transports and turn-taking config recorded; not implemented |
 | Twilio | no usable single index; official TwiML/Media Streams/pricing pages | [twilio.md](twilio.md) | architecture researched; not implemented |
 | Deepgram (Flux) | https://developers.deepgram.com/llms.txt | [deepgram.md](deepgram.md) | architecture researched; not implemented |

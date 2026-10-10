@@ -20,7 +20,7 @@
 //!
 //! This crate's invariant is that **no provider SDK type appears in its public surface**
 //! (`repository-layout.md`, from `AGENTS.md`), and the SDK's service is
-//! `StreamableHttpService<JarvisMcpServer, NeverSessionManager>`. So the field type is a private alias, every
+//! `StreamableHttpService<JarvisMcpServer, LocalSessionManager>`. So the field type is a private alias, every
 //! public signature names `http`'s `Request`/`Response`, and [`ServedEndpoint::into_service`] returns
 //! `impl Service<...>` — an opaque type a caller can mount on a router without this crate naming it.
 //!
@@ -43,7 +43,7 @@ use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use http_body::Body;
 use http_body_util::combinators::BoxBody;
-use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use tower::Service;
 
@@ -56,7 +56,7 @@ use crate::serving::{MCP_ENDPOINT_PATH, ServiceError, ServingConfig};
 ///
 /// A private alias is the only place the SDK's service type is written down. A public one would put the SDK in
 /// this crate's contract, and `boundary_tests.rs` checks that no public signature names it.
-type SdkService = StreamableHttpService<JarvisMcpServer, NeverSessionManager>;
+type SdkService = StreamableHttpService<JarvisMcpServer, LocalSessionManager>;
 
 /// The body this layer produces.
 ///

@@ -383,18 +383,18 @@ async fn a_workspace_requiring_an_approval_refuses_the_remote_call() {
     );
 
     match outcome {
-        ToolPipelineOutcome::Refused { reason_code } => {
-            assert_eq!(
-                reason_code, "mcp_call_cannot_hold_an_approval",
-                "the refusal must name the approval, not a generic policy denial"
-            );
+        // The call is **not run** and says it needs the owner (`ADR-0180`): the runner that holds the caller's request is what
+        // asks. Empty identifiers because there is no run or stored approval on this path.
+        ToolPipelineOutcome::AwaitingApproval {
+            call_id,
+            approval_id,
+            ..
+        } => {
+            assert!(call_id.is_empty() && approval_id.is_empty());
         }
-        // **The bug this test exists to catch.** `AwaitingApproval` here would hand an MCP caller a shape it
-        // cannot complete — there is no run to park and no way to present a decision — and a caller that treated
-        // it as "wait and retry" would retry forever.
-        ToolPipelineOutcome::AwaitingApproval { reason_code, .. } => panic!(
-            "a remote call must be refused rather than held for an approval it cannot complete ({reason_code})"
-        ),
+        ToolPipelineOutcome::Refused { reason_code } => {
+            panic!("a held remote call must wait for the owner, not be refused ({reason_code})")
+        }
         ToolPipelineOutcome::Executed(result) => {
             panic!("a call the workspace holds for approval must not run, got {result:?}")
         }
@@ -564,18 +564,168 @@ async fn a_tool_declaring_an_approval_is_refused_even_where_the_workspace_would_
     );
 
     assert!(
-        matches!(
-            &outcome,
-            ToolPipelineOutcome::Refused { reason_code }
-                if *reason_code == "mcp_call_cannot_hold_an_approval"
-        ),
-        "a tool that declares an approval must be refused remotely, got: {outcome:?}"
+        matches!(&outcome, ToolPipelineOutcome::AwaitingApproval { .. }),
+        "a tool that declares an approval must wait for the owner remotely, got: {outcome:?}"
     );
     assert_eq!(
         adapter.calls(),
         0,
         "the adapter must not have run: a refusal that still dispatched is not a refusal"
     );
+}
+
+/// A runner over a pipeline whose one tool declares an approval, with the file it reads present, and the adapter that counts calls.
+async fn approval_runner(
+    wait: std::time::Duration,
+) -> (
+    crate::mcp_serve::RemoteMcpRunner,
+    Arc<crate::inbound_approvals::InboundApprovals>,
+    Arc<crate::approval_fixture::RecordingApprovalAdapter>,
+    TempRoot,
+) {
+    let root = TempRoot::new();
+    root.write("notes/todo.txt", "buy milk");
+    let (database, _pipeline) = pipeline_over(&root).await;
+    let roots = must(WorkspaceRoots::new([root.path()]));
+    let adapter = Arc::new(crate::approval_fixture::RecordingApprovalAdapter::default());
+    let pipeline = Arc::new(must(ToolPipeline::with_adapters(
+        Arc::clone(&database),
+        Some(roots),
+        WorkspacePolicy::default(),
+        vec![(
+            vec![approval_declaring_definition()],
+            Arc::clone(&adapter) as Arc<dyn jarvis_tools::ToolExecutor>,
+        )],
+    )));
+    let served = must(pipeline.definitions());
+    let approvals = Arc::new(crate::inbound_approvals::InboundApprovals::default());
+    let runner = crate::mcp_serve::RemoteMcpRunner::new(pipeline, served, LOCAL_WORKSPACE_ID)
+        .with_approvals(Arc::clone(&approvals), "owner", wait);
+    (runner, approvals, adapter, root)
+}
+
+/// Waits (briefly) until a call is waiting for the owner, and returns its identifier.
+async fn waiting_id(approvals: &crate::inbound_approvals::InboundApprovals) -> String {
+    for _ in 0..100 {
+        if let Some(first) = approvals.list().first() {
+            return first.approval_id.clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("no call came to wait for the owner");
+}
+
+/// **A call from another app that needs the owner waits, and runs only after a yes.**
+///
+/// Falsified by letting the runner run the call without the answer: the adapter would have been called before the answer.
+#[tokio::test]
+async fn a_call_that_needs_the_owner_waits_and_runs_only_after_a_yes() {
+    let (runner, approvals, adapter, _root) =
+        approval_runner(std::time::Duration::from_secs(30)).await;
+    let task = tokio::spawn({
+        let runner = runner.clone();
+        async move {
+            runner
+                .run(
+                    APPROVAL_TOOL,
+                    json!({ "path": "notes/todo.txt" }),
+                    CorrelationId::new(),
+                )
+                .await
+        }
+    });
+    let id = waiting_id(&approvals).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(
+        adapter.calls(),
+        0,
+        "nothing runs while the owner has not answered"
+    );
+    assert_eq!(approvals.list()[0].tool, APPROVAL_TOOL);
+    assert!(approvals.decide(&id, true).is_some());
+    let result = must(must(task.await));
+    assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+    assert_eq!(adapter.calls(), 1, "it ran once, after the yes");
+    assert!(approvals.list().is_empty());
+}
+
+/// **A no, silence and a full list each refuse the call, and the tool never runs.**
+#[tokio::test]
+async fn a_no_silence_or_a_full_list_refuse_the_call_and_the_tool_never_runs() {
+    // No.
+    let (runner, approvals, adapter, _root) =
+        approval_runner(std::time::Duration::from_secs(30)).await;
+    let task = tokio::spawn({
+        let runner = runner.clone();
+        async move {
+            runner
+                .run(
+                    APPROVAL_TOOL,
+                    json!({ "path": "notes/todo.txt" }),
+                    CorrelationId::new(),
+                )
+                .await
+        }
+    });
+    let id = waiting_id(&approvals).await;
+    approvals.decide(&id, false);
+    let refused = must(task.await)
+        .err()
+        .unwrap_or_else(|| panic!("a refusal must not look like a result"));
+    assert!(matches!(
+        refused,
+        jarvis_tools::AdapterError::RefusedBeforeReaching { .. }
+    ));
+    assert_eq!(adapter.calls(), 0);
+
+    // Silence: the wait is short, and nobody answers.
+    let (runner, approvals, adapter, _root) =
+        approval_runner(std::time::Duration::from_millis(300)).await;
+    let refused = runner
+        .run(
+            APPROVAL_TOOL,
+            json!({ "path": "notes/todo.txt" }),
+            CorrelationId::new(),
+        )
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("no answer must not run the call"));
+    assert!(refused.to_string().contains("did not answer"), "{refused}");
+    assert!(
+        approvals.list().is_empty(),
+        "a call that timed out is withdrawn"
+    );
+    assert_eq!(adapter.calls(), 0);
+
+    // A full list: the call is refused at once, not queued.
+    let (runner, approvals, adapter, _root) =
+        approval_runner(std::time::Duration::from_secs(30)).await;
+    let mut held = Vec::new();
+    for _ in 0..crate::inbound_approvals::MAX_WAITING {
+        held.push(must(
+            approvals
+                .ask(
+                    "x.y.z",
+                    "1.0.0",
+                    2,
+                    "filler",
+                    &json!({}),
+                    std::time::Duration::from_secs(30),
+                )
+                .map_err(|e| format!("{e:?}")),
+        ));
+    }
+    let refused = runner
+        .run(
+            APPROVAL_TOOL,
+            json!({ "path": "notes/todo.txt" }),
+            CorrelationId::new(),
+        )
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("a full list must refuse"));
+    assert!(refused.to_string().contains("too many"), "{refused}");
+    assert_eq!(adapter.calls(), 0);
 }
 
 /// The identifier the approval-declaring fixture registers.

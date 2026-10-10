@@ -130,6 +130,7 @@ struct RunningDaemon {
 impl RunningDaemon {
     fn start(daemon: &Path, root: &Path, extra: &[&str]) -> Self {
         let child = Command::new(daemon)
+            .env("JARVIS_NO_BUILTIN_ABILITIES", "1")
             .arg("--root")
             .arg(root)
             .args(extra)

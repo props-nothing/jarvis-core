@@ -287,10 +287,10 @@ const SETTINGS: &[Setting] = &[
         table: "daemon",
         field: "mcp_serve_port",
         kind: Kind::Port,
-        help: "serve JARVIS tools to other programs over MCP on this port",
+        help: "let other programs (such as another AI app) use JARVIS's tools, on this port. Not needed for JARVIS's own built-in tools",
         group: "advanced",
         default: None,
-        unset_means: "Off by design: JARVIS opens no inbound MCP port unless you ask it to.",
+        unset_means: "Off by design: no other program can use JARVIS unless you choose a port here.",
         example: "8766",
     },
 ];

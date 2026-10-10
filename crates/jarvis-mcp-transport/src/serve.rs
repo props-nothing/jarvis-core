@@ -397,10 +397,16 @@ impl ServerHandler for JarvisMcpServer {
     }
 
     fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
-        // **Narrowed rather than inherited.** The SDK's default is every version it knows, including the
-        // legacy ones, so a server inheriting it would accept an `initialize` handshake whose semantics
-        // this build does not implement — and the client would have no way to tell.
-        std::borrow::Cow::Borrowed(&[SERVED_PROTOCOL_VERSION])
+        // **Stated, not inherited, and wider than it was (`ADR-0170`).** The modern revision first, then the three
+        // legacy ones clients actually send. It used to be the modern one alone, which refused every client
+        // published before it ("Unsupported protocol version"). The oldest (`2024-11-05`) is left out: it
+        // predates Streamable HTTP, so a client speaking it cannot be talking to this transport.
+        std::borrow::Cow::Borrowed(&[
+            SERVED_PROTOCOL_VERSION,
+            ProtocolVersion::V_2025_11_25,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2025_03_26,
+        ])
     }
 
     /// Answers `tools/list` with the served set.
@@ -794,31 +800,29 @@ pub(crate) mod tests {
         );
     }
 
-    /// **The supported list is narrowed to one version, not inherited from the SDK's full list.**
-    ///
-    /// Falsified by removing the override: the default is `ProtocolVersion::KNOWN_VERSIONS`, which contains
-    /// versions that use the `initialize` handshake this build does not drive — so the server would accept a
-    /// handshake whose semantics it does not implement, and the client could not tell.
+    /// **The supported list is stated, and both eras are in it (`ADR-0170`).** The modern revision leads; the three
+    /// legacy revisions clients actually send follow. The first version listed the modern one alone, which answered
+    /// "Unsupported protocol version" to every client published before it, found when the first real client connected.
+    /// `2024-11-05` is left out because it predates Streamable HTTP.
     #[test]
-    fn only_the_modern_revision_is_supported() {
+    fn the_modern_and_the_legacy_revisions_clients_send_are_supported() {
         let server =
             JarvisMcpServer::new(vec![served("jarvis.files.read")], NeverCalledRunner::new());
         let supported = server.supported_protocol_versions();
-        assert_eq!(supported.as_ref(), &[ProtocolVersion::V_2026_07_28]);
-        assert!(
-            supported.len() < ProtocolVersion::KNOWN_VERSIONS.len(),
-            "the supported set must be narrower than every version the SDK knows"
+        assert_eq!(
+            supported.as_ref(),
+            &[
+                ProtocolVersion::V_2026_07_28,
+                ProtocolVersion::V_2025_11_25,
+                ProtocolVersion::V_2025_06_18,
+                ProtocolVersion::V_2025_03_26,
+            ]
         );
-        for version in ProtocolVersion::KNOWN_VERSIONS {
-            if *version != ProtocolVersion::V_2026_07_28 {
-                assert!(
-                    !supported.contains(version),
-                    "{version} must not be advertised as supported"
-                );
-            }
-        }
+        assert!(
+            !supported.contains(&ProtocolVersion::V_2024_11_05),
+            "2024-11-05 predates Streamable HTTP"
+        );
     }
-
     /// A served tool's schema travels as declared, so a caller sees the contract the daemon enforces.
     #[test]
     fn the_advertised_schema_is_the_declared_schema() {

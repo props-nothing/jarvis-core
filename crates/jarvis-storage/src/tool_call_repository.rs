@@ -767,6 +767,66 @@ pub async fn link_tool_call_approval(
     Ok(())
 }
 
+/// What a call left unfinished by a stopped daemon is settled as.
+pub const ORPHANED_BEFORE_SENDING: &str =
+    "the daemon stopped before this call was sent, so it did not run";
+
+/// What a call that had been handed to its adapter is settled as.
+pub const ORPHANED_WHILE_RUNNING: &str =
+    "the daemon stopped while this call was running, so it may or may not have happened";
+
+/// Settles every call a stopped daemon left half-way, and returns each with the outcome it was given.
+///
+/// Run at start, before anything is served, when no other process can be driving a call. Two cases, and the difference is the point:
+///
+/// - **`authorized`**: the pipeline records `authorized`, then `submitted`, and only then hands the call to the adapter. A call still at
+///   `authorized` therefore never reached an adapter, so it is settled as **`failed`** (nothing happened, and repeating it is safe).
+/// - **`submitted`**: the adapter may have been reached and the answer lost. It is settled as **`unknown`**, which says nobody can tell
+///   and is not safe to repeat blindly (`ToolOutcome::may_have_had_an_effect`). Calling it `failed` would claim it did not happen.
+///
+/// Without this, such a call stays unfinished for ever: its approval keeps asking, a re-drive guard refuses it, and nothing tells the
+/// owner or the model that its effect is uncertain.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError`] when the scan or a write fails.
+pub async fn settle_orphaned_calls(
+    database: &SqliteDatabase,
+    at: UtcTimestamp,
+) -> Result<Vec<(String, ToolOutcome)>, DatabaseError> {
+    let rows = sqlx::query(
+        "SELECT id, outcome FROM tool_calls WHERE outcome IN ('authorized', 'submitted')",
+    )
+    .fetch_all(database.pool())
+    .await
+    .map_err(|source| DatabaseError::Sqlite {
+        operation: "scan for calls a stopped daemon left unfinished",
+        source,
+    })?;
+    let mut settled = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: String = row.try_get("id").map_err(|source| DatabaseError::Sqlite {
+            operation: "decode an unfinished call id",
+            source,
+        })?;
+        let outcome: String = row
+            .try_get("outcome")
+            .map_err(|source| DatabaseError::Sqlite {
+                operation: "decode an unfinished call outcome",
+                source,
+            })?;
+        let record = if outcome == "authorized" {
+            ToolOutcomeRecord::failed(ORPHANED_BEFORE_SENDING)
+        } else {
+            ToolOutcomeRecord::from_stored(ToolOutcome::Unknown, None, Some(ORPHANED_WHILE_RUNNING))
+        }
+        .map_err(|_| DatabaseError::InvalidToolCallRequest { field: "outcome" })?;
+        let stored = record_tool_outcome(database, &id, &record, None, at).await?;
+        settled.push((id, stored.outcome()));
+    }
+    Ok(settled)
+}
+
 /// Moves an admitted call to `authorized` or `submitted`, with no output attached.
 ///
 /// A convenience for the states the pipeline reaches before anything is known about an effect, and the

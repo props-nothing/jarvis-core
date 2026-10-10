@@ -32,8 +32,19 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
-/// Reads arguments of the form `--name <server name>` and `--tool <tool name>`, repeatable.
-fn parse_arguments() -> (String, Vec<String>) {
+/// What the fixture was asked to do beyond answering.
+#[derive(Default)]
+struct Behaviour {
+    /// Exit without answering when this tool is called, as a crash in the middle of a call would.
+    crash_on: Option<String>,
+    /// Start only the first time: a marker file is written, and a start that finds it exits at once.
+    once_marker: Option<String>,
+}
+
+/// Reads arguments of the form `--name <server name>` and `--tool <tool name>`, repeatable, plus
+/// `--crash-on <tool>` and `--once <marker file>`.
+fn parse_arguments() -> (String, Vec<String>, Behaviour) {
+    let mut behaviour = Behaviour::default();
     let mut name = "fixture-vendor".to_owned();
     let mut tools = vec!["search".to_owned(), "fetch".to_owned()];
     let mut explicit_tools = Vec::new();
@@ -50,6 +61,8 @@ fn parse_arguments() -> (String, Vec<String>) {
                     explicit_tools.push(value);
                 }
             }
+            "--crash-on" => behaviour.crash_on = arguments.next(),
+            "--once" => behaviour.once_marker = arguments.next(),
             // An unrecognized argument is ignored rather than refused: this is a test fixture, and a
             // fixture that exited on an unexpected flag would make a test failure look like a crash
             // in the transport instead of a mistake in the test.
@@ -59,7 +72,7 @@ fn parse_arguments() -> (String, Vec<String>) {
     if !explicit_tools.is_empty() {
         tools = explicit_tools;
     }
-    (name, tools)
+    (name, tools, behaviour)
 }
 
 /// The `server/discover` result, in the shape a modern server sends.
@@ -112,7 +125,13 @@ fn call_result(tool: &str) -> Value {
 }
 
 fn main() {
-    let (name, tools) = parse_arguments();
+    let (name, tools, behaviour) = parse_arguments();
+    if let Some(marker) = &behaviour.once_marker {
+        if std::path::Path::new(marker).exists() {
+            return;
+        }
+        let _ = std::fs::write(marker, "started");
+    }
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut line = String::new();
@@ -157,6 +176,9 @@ fn main() {
                     .and_then(|params| params.get("name"))
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                if behaviour.crash_on.as_deref() == Some(called) {
+                    return;
+                }
                 json!({ "jsonrpc": "2.0", "id": id, "result": call_result(called) })
             }
             // An unscripted method is answered with a protocol error rather than silence, so a client

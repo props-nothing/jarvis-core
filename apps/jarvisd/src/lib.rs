@@ -22,9 +22,14 @@ mod google_service;
 mod google_tools;
 mod health;
 mod hud;
+mod inbound_approvals;
 mod mail_mime;
+mod mcp_abilities;
+mod mcp_access;
+mod mcp_admin;
 mod mcp_host;
 mod mcp_serve;
+mod mcp_tunnel;
 mod memory_manage;
 mod memory_propose;
 mod memory_search;
@@ -44,12 +49,14 @@ mod schedule_tool;
 mod settings_service;
 mod singleton;
 mod skill_service;
+mod skill_tool;
 mod speech_service;
 mod sse;
 mod stop;
 mod tool_activity;
 mod tool_actor;
 mod tool_pipeline;
+mod tool_search;
 
 #[cfg(test)]
 mod approval_fixture;
@@ -230,6 +237,20 @@ enum DaemonError {
         #[source]
         source: crate::delegate::DelegateToolError,
     },
+    /// The skill-proposal tool could not state its own contract.
+    #[error("the skill-proposal tool could not be defined")]
+    SkillTool {
+        /// Which part was rejected, named by the variant.
+        #[source]
+        source: crate::skill_tool::SkillToolError,
+    },
+    /// The tool-search tool could not state its own contract.
+    #[error("the tool-search tool could not be defined")]
+    ToolSearchTool {
+        /// Which part was rejected, named by the variant.
+        #[source]
+        source: crate::tool_search::ToolSearchToolError,
+    },
     /// The code-running tool could not state its own contract.
     #[error("the code-running tool could not be defined")]
     CodeRunTool {
@@ -274,7 +295,7 @@ enum DaemonError {
         #[source]
         source: crate::tool_pipeline::ToolPipelineError,
     },
-    #[error("the MCP endpoint could not be served")]
+    #[error("the MCP endpoint could not be served: {source}")]
     McpServe {
         /// Why the endpoint could not be built or bound, which names the reason.
         #[source]
@@ -376,13 +397,39 @@ async fn daemon_main(arguments: Vec<String>) -> ExitCode {
             () = stop::requested() => Ok(()),
         }
     };
+    let root_for_report = root.clone();
     match run(build, root, shutdown).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("jarvis daemon startup failed: {error}");
+            record_startup_error(root_for_report.as_deref(), &error);
             ExitCode::FAILURE
         }
     }
+}
+
+/// The file a daemon that could not start leaves its reason in, beside its other runtime files, so `jarvis start` (and the console's
+/// restart) can say why instead of "exited at startup".
+pub const STARTUP_ERROR_FILE: &str = "startup-error.txt";
+
+/// Writes why startup failed: the error and its causes, on one line. Best effort: a failure to write it must not hide the original one.
+fn record_startup_error(root: Option<&Path>, error: &DaemonError) {
+    use std::error::Error as _;
+    let Ok(paths) = resolve_paths(root) else {
+        return;
+    };
+    let mut reason = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        let text = next.to_string();
+        if !reason.contains(&text) {
+            reason.push_str(": ");
+            reason.push_str(&text);
+        }
+        cause = next.source();
+    }
+    let _ = std::fs::create_dir_all(paths.runtime());
+    let _ = std::fs::write(paths.runtime().join(STARTUP_ERROR_FILE), reason);
 }
 
 /// What the gateway drives runs with, and the runs recovery just settled as interrupted.
@@ -391,6 +438,8 @@ struct Services {
     tools: Option<Arc<crate::tool_pipeline::ToolPipeline>>,
     speech: Option<Arc<jarvis_voice::ElevenLabsSpeech>>,
     interrupted: Vec<String>,
+    mcp_snapshot: Arc<crate::mcp_admin::McpSnapshot>,
+    mcp_access: Arc<crate::mcp_access::McpAccess>,
 }
 
 /// Everything the daemon must hold for its lifetime, constructed in startup order.
@@ -412,6 +461,10 @@ struct Running {
     speech: Option<Arc<jarvis_voice::ElevenLabsSpeech>>,
     /// The runs recovery just settled as interrupted, which may get one continuation once runs can be driven.
     interrupted: Vec<String>,
+    /// What the MCP servers turned out to be at start, for the management routes.
+    mcp_snapshot: Arc<crate::mcp_admin::McpSnapshot>,
+    /// The key for other apps that connect to JARVIS, and whether the endpoint is serving.
+    mcp_access: Arc<crate::mcp_access::McpAccess>,
     /// The connected MCP host, held so its connections stay open and can be closed on shutdown.
     ///
     /// Held **beside** the pipeline rather than inside it because the two have different lifetimes: the
@@ -461,6 +514,29 @@ async fn settle_interrupted_runs(
     database: &SqliteDatabase,
     daemon_id: DaemonRunId,
 ) -> Result<Vec<String>, DaemonError> {
+    // A call the previous process left half-way is settled honestly first (not sent: failed; handed over: unknown), so nothing is left
+    // unfinished for ever and a continuation can tell the model which effects are uncertain.
+    match jarvis_storage::settle_orphaned_calls(database, UtcTimestamp::now(&SystemClock)).await {
+        Ok(calls) if calls.is_empty() => {}
+        Ok(calls) => tracing::warn!(
+            count = calls.len(),
+            calls = ?calls.iter().map(|(id, outcome)| format!("{id}:{outcome}")).collect::<Vec<_>>(),
+            "settled tool calls a previous process left unfinished"
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "calls left unfinished by a previous process could not be settled");
+        }
+    }
+    // A call that had started when the previous process died can never be resumed, so its approval must stop asking for an answer.
+    // Not fatal: the approvals list also hides such an approval, this only drops the payload kept for it.
+    match jarvis_storage::clear_arguments_of_started_calls(database).await {
+        Ok(0) => {}
+        Ok(count) => tracing::warn!(
+            count,
+            "approvals whose call had already started when the daemon stopped were withdrawn from the waiting list"
+        ),
+        Err(error) => tracing::warn!(%error, "approvals of started calls could not be tidied"),
+    }
     match jarvis_storage::recover_interrupted_runs(database, UtcTimestamp::now(&SystemClock)).await
     {
         Ok(recovered) if !recovered.is_empty() => {
@@ -517,10 +593,16 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     // The daemon is the sole issuer of the profile credential.
     let credential_store = CredentialStore::at(paths.config().join(LOCAL_CREDENTIAL_FILE_NAME));
     let credential = credential_store.load_or_create(paths.config())?;
+    // The MCP access key, when one exists, is masked in logs like the console credential. Created later (when the owner
+    // switches it on) it is never logged at all, and the next start masks it.
+    let mcp_access = Arc::new(crate::mcp_access::McpAccess::open(paths.config()));
+    let secrets: Vec<String> = std::iter::once(credential.expose().to_owned())
+        .chain(mcp_access.key())
+        .collect();
     let logging = Logging::init(
         paths.logs(),
         loaded_config.config().logging().level(),
-        Redactor::new([credential.expose()]),
+        Redactor::new(secrets),
     )?;
 
     let lock_path = paths.runtime().join(DAEMON_LOCK_FILE_NAME);
@@ -587,7 +669,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     // Extracted into its own function because composing them carries its own failure policy — an MCP failure
     // is not fatal while a pipeline failure is — and `start` was at the length where clippy's `too_many_lines`
     // is a signal that a function has grown a second responsibility.
-    let (mcp, tools) = compose_tools(
+    let (mcp, tools, mcp_snapshot) = compose_tools(
         loaded_config.config(),
         &paths,
         Arc::clone(&database),
@@ -604,6 +686,8 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         &database,
         tools.as_ref(),
         loaded_config.config().daemon().mcp_serve_port(),
+        &mcp_access,
+        &crate::mcp_abilities::vetted_prefixes(mcp_snapshot.loaded.as_deref()),
     )
     .await?;
 
@@ -616,6 +700,8 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         credential,
         http_port,
         mcp,
+        mcp_snapshot,
+        mcp_access,
         serving_mcp,
         mcp_stop,
         executor,
@@ -779,6 +865,45 @@ fn compose_executor(
 ///
 /// Returns [`DaemonError::ToolWorkspaceRoots`] or [`DaemonError::ToolPipeline`] for an unusable grant or a
 /// rejected registration.
+/// Connects the configured MCP servers and says what became of them.
+///
+/// Never fatal: a missing, unreadable or unusable document, or a server that does not answer, means those tools are
+/// not offered, and the reason is logged. Also returns the document as it was read, so the management routes can tell
+/// whether the file has changed since.
+async fn compose_mcp(paths: &AppPaths) -> (Option<crate::mcp_host::ComposedHost>, Option<String>) {
+    let (mcp, loaded) = match crate::mcp_abilities::startup_document(paths.config()).await {
+        Ok(document) => match crate::mcp_host::compose_host(document.as_deref()).await {
+            Ok(host) => (host, document),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "the configured MCP servers are unavailable; their tools will not be offered"
+                );
+                (None, document)
+            }
+        },
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "the MCP server configuration could not be read; its tools will not be offered"
+            );
+            (None, None)
+        }
+    };
+    if let Some(host) = &mcp {
+        // Logged with the counts, so an operator learns how many servers answered rather than only that
+        // something did; the ones that did not, and the tools left out, are named just after.
+        tracing::info!(
+            reachable = host.reachable_servers(),
+            tools = host.definitions().len(),
+            unreadable = host.unreadable().len(),
+            "composed the MCP host"
+        );
+        host.log_problems();
+    }
+    (mcp, loaded)
+}
+
 async fn compose_tools(
     config: &jarvis_storage::Config,
     paths: &AppPaths,
@@ -788,39 +913,11 @@ async fn compose_tools(
     (
         Option<crate::mcp_host::ComposedHost>,
         Option<Arc<crate::tool_pipeline::ToolPipeline>>,
+        Arc<crate::mcp_admin::McpSnapshot>,
     ),
     DaemonError,
 > {
-    let mcp = match crate::mcp_host::load_document(paths.config()) {
-        Ok(document) => match crate::mcp_host::compose_host(document.as_deref()).await {
-            Ok(host) => host,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "the configured MCP servers are unavailable; their tools will not be offered"
-                );
-                None
-            }
-        },
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "the MCP server configuration could not be read; its tools will not be offered"
-            );
-            None
-        }
-    };
-    if let Some(host) = &mcp {
-        // Logged with the counts, so an operator learns how many servers answered rather than only that
-        // something did. The servers that did *not* answer are named in the warn above when the whole host
-        // fails, and are available from `unreadable()` for a caller that reports them.
-        tracing::info!(
-            reachable = host.reachable_servers(),
-            tools = host.definitions().len(),
-            unreadable = host.unreadable().len(),
-            "composed the MCP host"
-        );
-    }
+    let (mcp, loaded_document) = compose_mcp(paths).await;
 
     // The pipeline takes the adapters by value, so they are cloned out of the host. Each clone shares the
     // host's connection through the adapter's own `Arc`, which is why the host can still close them.
@@ -868,6 +965,17 @@ async fn compose_tools(
         ))) as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
     push_project_tool(&database, &mut additional)?;
+    // The model can propose a skill; the owner approves it in the console (`skill_tool`).
+    let skill_tool = Arc::new(crate::skill_tool::SkillProposeTool::new(Arc::clone(
+        &database,
+    )));
+    additional.push((
+        vec![
+            crate::skill_tool::SkillProposeTool::definition()
+                .map_err(|source| DaemonError::SkillTool { source })?,
+        ],
+        Arc::clone(&skill_tool) as Arc<dyn jarvis_tools::ToolExecutor>,
+    ));
     additional.push((
         vec![
             crate::memory_search::MemorySearchTool::definition()
@@ -876,6 +984,15 @@ async fn compose_tools(
         Arc::new(crate::memory_search::MemorySearchTool::new(Arc::clone(
             &database,
         ))) as Arc<dyn jarvis_tools::ToolExecutor>,
+    ));
+    // Finds the tools of big MCP servers, which are held back from the model until it asks (`ADR-0176`).
+    let tool_search = Arc::new(crate::tool_search::ToolSearchTool::new());
+    additional.push((
+        vec![
+            crate::tool_search::ToolSearchTool::definition()
+                .map_err(|source| DaemonError::ToolSearchTool { source })?,
+        ],
+        Arc::clone(&tool_search) as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
     push_search_tool(config, &mut additional)?;
     push_google_tools(config, paths, &database, &mut additional)?;
@@ -911,7 +1028,15 @@ async fn compose_tools(
     if let (Some(agent), Some(pipeline)) = (&agent, &tools) {
         agent.bind(pipeline);
     }
-    Ok((mcp, tools))
+    if let Some(pipeline) = &tools {
+        tool_search.bind(pipeline);
+        skill_tool.bind(pipeline);
+    }
+    let snapshot = Arc::new(crate::mcp_admin::McpSnapshot::capture(
+        mcp.as_ref(),
+        loaded_document,
+    ));
+    Ok((mcp, tools, snapshot))
 }
 
 /// Opens the granted folders a second time for a tool that reads or writes files beside the file tools (`ADR-0157`, `ADR-0158`), or `None`
@@ -1342,6 +1467,8 @@ async fn compose_serving_mcp(
     database: &Arc<SqliteDatabase>,
     tools: Option<&Arc<crate::tool_pipeline::ToolPipeline>>,
     port: Option<u16>,
+    access: &Arc<crate::mcp_access::McpAccess>,
+    vetted: &[String],
 ) -> Result<
     (
         Option<crate::mcp_serve::ServingMcp>,
@@ -1375,21 +1502,34 @@ async fn compose_serving_mcp(
         .map_err(|source| DaemonError::ToolPipeline { source })?;
     let workspace_id = identity.workspace_id().to_owned();
 
-    let (runner, endpoint) = crate::mcp_serve::build_endpoint(
+    let (runner, endpoint) = crate::mcp_serve::build_endpoint_vetting(
         Arc::clone(pipeline),
         &definitions,
         &workspace_id,
-        // **`local_only`**, which is `P3-009g`'s safe default: it admits nobody remotely, so the endpoint
-        // serves the tools an operator's own MCP client can reach on this machine and refuses every remote
-        // caller. A remote allowlist needs audience-bound tokens (RFC 8707) that are not built, which is what
-        // that default records.
-        jarvis_mcp_transport::CallerAdmission::local_only(),
+        // **One admitted caller: the holder of the access key** (`ADR-0170`). The key is checked in front of the endpoint
+        // (`mcp_access::require_key`), which then presents this fixed caller, so the allowlist and the rate bound still run.
+        // `local_only` admitted nobody, which is why no client could connect before.
+        access_admission().map_err(|source| DaemonError::McpServe { source })?,
+        vetted,
+        access.approvals(),
+        identity.user_id(),
     )
     .map_err(|source| DaemonError::McpServe { source })?;
 
-    let (serving, stopped) = crate::mcp_serve::ServingMcp::bind(port, endpoint)
+    // A port set by hand still needs a key to be usable.
+    access
+        .ensure_key()
+        .map_err(|message| DaemonError::McpServe {
+            source: crate::mcp_serve::RemoteMcpError::Key(message),
+        })?;
+    let (serving, stopped) = crate::mcp_serve::ServingMcp::bind(port, endpoint, Arc::clone(access))
         .await
         .map_err(|source| DaemonError::McpServe { source })?;
+
+    // The owner asked for the internet address earlier, so it comes back with the daemon (`ADR-0173`).
+    if access.tunnel().wanted() {
+        access.tunnel().start(serving.port());
+    }
 
     tracing::info!(
         port = serving.port(),
@@ -1403,6 +1543,18 @@ async fn compose_serving_mcp(
     );
     let _ = runner;
     Ok((Some(serving), Some(stopped)))
+}
+
+/// The one caller the endpoint admits: whoever holds the access key.
+fn access_admission()
+-> Result<jarvis_mcp_transport::CallerAdmission, crate::mcp_serve::RemoteMcpError> {
+    use jarvis_mcp_transport::{AdmittedCaller, CallerAdmission, CallerLabel, Fingerprint};
+    let fingerprint = Fingerprint::parse(crate::mcp_access::ACCESS_FINGERPRINT)?;
+    let caller = AdmittedCaller::new(fingerprint, CallerLabel::new("api key", "1"))?;
+    Ok(CallerAdmission::new(
+        [caller],
+        crate::mcp_access::REQUESTS_PER_MINUTE,
+    )?)
 }
 
 /// A bound and served loopback HTTP transport.
@@ -1440,6 +1592,8 @@ impl HttpTransport {
             tools,
             speech,
             interrupted,
+            mcp_snapshot,
+            mcp_access,
         } = services;
         // Loopback only. Reaching any other interface is remote mode, which `P10-004` owns as an
         // explicit TLS-terminated configuration rather than something that happens by default.
@@ -1463,7 +1617,10 @@ impl HttpTransport {
             Ok(google) => state = state.with_google(google),
             Err(error) => tracing::warn!(%error, "Google sign-in is not available"),
         }
-        state = state.with_settings(settings);
+        state = state
+            .with_settings(settings)
+            .with_mcp(mcp_snapshot)
+            .with_mcp_access(mcp_access);
         // Scheduled tasks fire through the same state the routes use, so a scheduled run is an ordinary run. Only
         // when runs are driven at all: a scheduler over a daemon with no executor would start runs nothing runs.
         let scheduler = state
@@ -1702,6 +1859,8 @@ where
         speech,
         interrupted,
         mcp,
+        mcp_snapshot,
+        mcp_access,
         serving_mcp,
         mcp_stop,
         daemon_id,
@@ -1722,6 +1881,8 @@ where
                     tools,
                     speech,
                     interrupted,
+                    mcp_snapshot,
+                    mcp_access,
                 },
                 settings_service::SettingsContext::new(paths.clone(), root.clone()),
             )

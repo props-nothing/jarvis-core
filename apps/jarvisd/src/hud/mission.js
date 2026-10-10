@@ -35,6 +35,7 @@
     "jarvis.web.fetch": ["web", "Reading a page", "in", "scan"],
     "jarvis.memory.search": ["memory", "Recalling", "in", "pull"],
     "jarvis.memory.propose": ["memory", "Noting a memory", "out", "pull"],
+    "jarvis.skill.propose": ["memory", "Writing down a procedure", "out", "pull"],
     "jarvis.memory.correct": ["memory", "Correcting a memory", "out", "pull"],
     "jarvis.memory.forget": ["memory", "Forgetting a memory", "out", "pull"],
     "jarvis.files.read": ["file", "Reading", "in", "scan"],

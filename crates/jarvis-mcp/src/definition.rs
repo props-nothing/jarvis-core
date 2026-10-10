@@ -162,6 +162,9 @@ pub struct ToolEffectPolicy {
     scopes: ScopeSet,
     execution: ToolExecutionLimits,
     sensitivity: ToolSensitivity,
+    /// Tools of this server the **operator** has said only read, by the server's own name. Everything else keeps
+    /// this policy. Never filled from anything the server says (`annotations` are not read).
+    read_only_tools: std::collections::BTreeSet<String>,
 }
 
 /// The declared inputs to a [`ToolEffectPolicy`].
@@ -217,6 +220,7 @@ impl ToolEffectPolicy {
             scopes,
             execution,
             sensitivity,
+            read_only_tools: std::collections::BTreeSet::new(),
         })
     }
 
@@ -259,6 +263,7 @@ impl ToolEffectPolicy {
             // Both halves `Internal`: an MCP server's inputs and outputs are not public by default,
             // and the *destination* ceiling is decided when the content is placed, not here.
             sensitivity: ToolSensitivity::new(Sensitivity::Internal, Sensitivity::Internal),
+            read_only_tools: std::collections::BTreeSet::new(),
         }
     }
 
@@ -294,7 +299,29 @@ impl ToolEffectPolicy {
                 idempotency: Idempotency::Unsupported,
             },
             sensitivity: ToolSensitivity::new(Sensitivity::Internal, Sensitivity::Internal),
+            read_only_tools: std::collections::BTreeSet::new(),
         })
+    }
+
+    /// Says that these tools of the server (by the server's own names) only read, so they are classified read-only
+    /// while the rest of the server keeps this policy.
+    ///
+    /// For a server that mixes reading and acting, a browser being the case that matters: opening a page may run
+    /// without asking while a click, a typed value or a script still asks. The names are the operator's statement.
+    #[must_use]
+    pub fn with_read_only_tools<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.read_only_tools = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Whether the operator classified this server tool as read-only.
+    #[must_use]
+    pub fn is_read_only_tool(&self, name: &str) -> bool {
+        self.read_only_tools.contains(name)
     }
 
     /// Returns what the tools may do, at what risk, under what approval policy.
@@ -393,7 +420,8 @@ impl std::fmt::Display for TranslationError {
             Self::UnsupportedDialect { tool, declared } => write!(
                 formatter,
                 "the MCP tool {tool} declares the JSON Schema dialect {declared}, and JARVIS \
-                 implements only {TOOL_SCHEMA_DIALECT}"
+                 implements only {TOOL_SCHEMA_DIALECT} (it also reads draft-07 where the two \
+                 mean the same)"
             ),
             Self::InvalidInputSchema { tool, reason } => write!(
                 formatter,
@@ -444,6 +472,21 @@ pub fn translate_tool(
 ) -> Result<TranslatedTool, TranslationError> {
     let CanonicalToolName { id, remote } =
         canonical_tool_name(server, listing.name, strategy).map_err(TranslationError::Name)?;
+
+    // A tool the operator named as read-only gets the read-only policy; the rest keep the server's. If the
+    // read-only policy cannot be built the stricter one stays, so a failure here never loosens anything.
+    let read_only_policy;
+    let policy = if policy.is_read_only_tool(listing.name) {
+        match ToolEffectPolicy::read_only() {
+            Ok(read_only) => {
+                read_only_policy = read_only;
+                &read_only_policy
+            }
+            Err(_) => policy,
+        }
+    } else {
+        policy
+    };
 
     let report = check_tool_schema(listing.name, listing.input_schema);
     if !report.is_conformant() {
@@ -595,6 +638,20 @@ fn schema_for(
             object.insert(SCHEMA_KEYWORD.to_owned(), json!(TOOL_SCHEMA_DIALECT));
         }
         Some(Value::String(declared)) if declared == TOOL_SCHEMA_DIALECT => {}
+        // Draft-07 is what the official TypeScript SDK emits, so refusing it excluded nearly every
+        // real server (found 2026-10-10 against `server-everything`, `ADR-0168`). It is read as
+        // 2020-12 only where the two mean the same: a keyword 2020-12 would silently ignore is
+        // refused by name, and a construct whose shape changed (tuple `items`, a boolean
+        // `exclusiveMinimum`) fails the 2020-12 metaschema check in `to_tool_schema` below.
+        Some(Value::String(declared)) if DRAFT_07_DIALECTS.contains(&declared.as_str()) => {
+            if let Some(keyword) = removed_keyword(schema, false) {
+                return Err(refuse(format!(
+                    "it is a draft-07 schema that uses `{keyword}`, which 2020-12 no longer has, so \
+                     it cannot be read faithfully"
+                )));
+            }
+            object.insert(SCHEMA_KEYWORD.to_owned(), json!(TOOL_SCHEMA_DIALECT));
+        }
         Some(Value::String(declared)) => {
             return Err(TranslationError::UnsupportedDialect {
                 tool: remote.to_owned(),
@@ -611,6 +668,44 @@ fn schema_for(
     }
 
     to_tool_schema(&document).map_err(|error| refuse(error.to_string()))
+}
+
+/// The draft-07 identifiers a server may declare, with and without the trailing `#`.
+const DRAFT_07_DIALECTS: [&str; 4] = [
+    "http://json-schema.org/draft-07/schema#",
+    "http://json-schema.org/draft-07/schema",
+    "https://json-schema.org/draft-07/schema#",
+    "https://json-schema.org/draft-07/schema",
+];
+
+/// Draft-07 keywords that 2020-12 split or dropped, so reading them as 2020-12 would ignore them.
+const REMOVED_KEYWORDS: [&str; 2] = ["dependencies", "additionalItems"];
+
+/// Finds a [`REMOVED_KEYWORDS`] entry used **as a keyword** anywhere in a schema.
+///
+/// `names` is true when `value` is a map whose keys are *names* (the children of `properties`,
+/// `patternProperties`, `definitions` and `$defs`), where `dependencies` is a property called
+/// that and not a keyword.
+fn removed_keyword(value: &Value, names: bool) -> Option<&'static str> {
+    match value {
+        Value::Object(map) => {
+            if !names
+                && let Some(found) = REMOVED_KEYWORDS.iter().find(|key| map.contains_key(**key))
+            {
+                return Some(found);
+            }
+            map.iter().find_map(|(key, child)| {
+                let child_names = !names
+                    && matches!(
+                        key.as_str(),
+                        "properties" | "patternProperties" | "definitions" | "$defs"
+                    );
+                removed_keyword(child, child_names)
+            })
+        }
+        Value::Array(items) => items.iter().find_map(|item| removed_keyword(item, false)),
+        _ => None,
+    }
 }
 
 /// Builds the permissive schema used when a server declares no output schema.
@@ -886,11 +981,25 @@ mod tests {
         assert_eq!(tool.definition.approval(), ApprovalPolicy::Auto);
     }
 
-    /// The dialect rule, and both halves of it: an omitted `$schema` is supplied because MCP says
-    /// that is what omission means, and a *declared different* dialect is refused rather than
-    /// reinterpreted.
+    fn valid(schema: &jarvis_tools::ToolSchema, instance: &Value) -> bool {
+        schema
+            .validate(instance)
+            .is_ok_and(|report| report.is_valid())
+    }
+
+    fn translate_with(schema: &Value) -> Result<TranslatedTool, TranslationError> {
+        translate_tool(
+            &server("remote"),
+            &listing("search", schema),
+            NamingStrategy::Prefixed,
+            &ToolEffectPolicy::read_only().unwrap_or_else(|e| panic!("{e}")),
+        )
+    }
+
+    /// The dialect rule: an omitted `$schema` is supplied because MCP says that is what omission
+    /// means, and a *declared different* dialect is refused rather than reinterpreted.
     #[test]
-    fn an_omitted_dialect_is_supplied_and_a_different_one_is_refused() {
+    fn an_omitted_dialect_is_supplied_and_an_unknown_one_is_refused() {
         let omitted = translated(
             "search",
             &ToolEffectPolicy::read_only().unwrap_or_else(|e| panic!("{e}")),
@@ -903,29 +1012,143 @@ mod tests {
                 .is_ok()
         );
 
-        let declared_old = json!({
-            "$schema": "http://json-schema.org/draft-07/schema#",
+        let draft_04 = json!({
+            "$schema": "http://json-schema.org/draft-04/schema#",
             "type": "object",
             "properties": { "q": { "type": "string" } }
         });
-        let error = translate_tool(
-            &server("remote"),
-            &listing("search", &declared_old),
-            NamingStrategy::Prefixed,
-            &ToolEffectPolicy::read_only().unwrap_or_else(|e| panic!("{e}")),
-        )
-        .err()
-        .unwrap_or_else(|| panic!("a draft-07 schema must not be reinterpreted as 2020-12"));
+        let error = translate_with(&draft_04)
+            .err()
+            .unwrap_or_else(|| panic!("a draft-04 schema must not be reinterpreted as 2020-12"));
         assert!(
             matches!(error, TranslationError::UnsupportedDialect { .. }),
             "{error}"
         );
         // The refusal names the dialect it cannot serve and the one it can, or an operator cannot act.
         let text = error.to_string();
-        assert!(text.contains("draft-07"), "{text}");
+        assert!(text.contains("draft-04"), "{text}");
         assert!(text.contains(TOOL_SCHEMA_DIALECT), "{text}");
     }
 
+    /// **The case the first version refused, and that excluded every tool of the first real server
+    /// tried.** A draft-07 schema as the official TypeScript SDK emits it is read, and calls are
+    /// validated against it.
+    #[test]
+    fn a_draft_07_schema_is_read_and_enforced() {
+        let schema = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "a": { "type": "number", "description": "First" },
+                "mode": { "type": "string", "enum": ["fast", "slow"] }
+            },
+            "required": ["a"],
+            "additionalProperties": false
+        });
+        let tool = translate_with(&schema).unwrap_or_else(|e| panic!("draft-07 must be read: {e}"));
+        let input = tool.definition.input_schema();
+        assert!(valid(input, &json!({"a": 1, "mode": "fast"})));
+        assert!(
+            !valid(input, &json!({"mode": "fast"})),
+            "required is enforced"
+        );
+        assert!(!valid(input, &json!({"a": "x"})), "types are enforced");
+        assert!(
+            !valid(input, &json!({"a": 1, "extra": 1})),
+            "additionalProperties is enforced"
+        );
+    }
+
+    /// Fail closed on what changed meaning: a draft-07 schema that 2020-12 would read differently is
+    /// refused with the reason, never accepted with a constraint silently dropped.
+    #[test]
+    fn a_draft_07_schema_that_2020_12_would_misread_is_refused() {
+        let dependencies = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": { "a": { "type": "string" }, "b": { "type": "string" } },
+            "dependencies": { "a": ["b"] }
+        });
+        let error = translate_with(&dependencies)
+            .err()
+            .unwrap_or_else(|| panic!("`dependencies` would be silently ignored"));
+        assert!(error.to_string().contains("dependencies"), "{error}");
+
+        // `items` as a list is the tuple form; 2020-12's metaschema rejects it.
+        let tuple = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": { "p": { "type": "array", "items": [{ "type": "string" }] } }
+        });
+        assert!(
+            translate_with(&tuple).is_err(),
+            "tuple items must not be accepted"
+        );
+
+        // A boolean `exclusiveMinimum` is draft-04/06 shape.
+        let boolean = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": { "n": { "type": "number", "minimum": 1, "exclusiveMinimum": true } }
+        });
+        assert!(
+            translate_with(&boolean).is_err(),
+            "boolean exclusiveMinimum must not be accepted"
+        );
+    }
+
+    /// A *property named* `dependencies` is a name, not the removed keyword.
+    #[test]
+    fn a_property_called_dependencies_is_not_the_removed_keyword() {
+        let schema = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": { "dependencies": { "type": "array", "items": { "type": "string" } } }
+        });
+        assert!(translate_with(&schema).is_ok());
+    }
+
+    /// A server that mixes reading and acting: the tools the operator named read freely, the rest still ask.
+    #[test]
+    fn named_tools_read_without_asking_and_the_rest_of_the_server_still_asks() {
+        let policy =
+            ToolEffectPolicy::unclassified().with_read_only_tools(["navigate", "snapshot"]);
+        let schema = json!({ "type": "object", "properties": {} });
+        let translate = |name: &str| {
+            translate_tool(
+                &server("browser"),
+                &listing(name, &schema),
+                NamingStrategy::Prefixed,
+                &policy,
+            )
+            .unwrap_or_else(|e| panic!("{e}"))
+        };
+        let navigate = translate("navigate");
+        assert_eq!(navigate.definition.risk(), Risk::Minimal);
+        assert_eq!(navigate.definition.approval(), ApprovalPolicy::Auto);
+        for acting in ["click", "type", "evaluate"] {
+            let tool = translate(acting);
+            assert_eq!(
+                tool.definition.approval(),
+                ApprovalPolicy::Ask,
+                "{acting} must ask"
+            );
+            assert!(
+                tool.definition.risk() >= Risk::High,
+                "{acting} keeps the server's risk"
+            );
+        }
+    }
+
+    /// The names are matched exactly, never by prefix or case, so a look-alike tool is not swept in.
+    #[test]
+    fn a_lookalike_name_is_not_read_only() {
+        let policy = ToolEffectPolicy::unclassified().with_read_only_tools(["navigate"]);
+        assert!(policy.is_read_only_tool("navigate"));
+        assert!(!policy.is_read_only_tool("navigate_and_submit"));
+        assert!(!policy.is_read_only_tool("Navigate"));
+        assert!(!policy.is_read_only_tool(""));
+    }
     #[test]
     fn a_normally_declared_dialect_is_accepted() {
         let schema = json!({

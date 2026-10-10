@@ -48,9 +48,10 @@ use jarvis_tools::{ToolDefinition, ToolId, ToolSource};
 ///
 /// The exposed list reaches a remote client's context, so it is bounded for the same reason
 /// [`crate::MAX_MCP_SERVERS`] bounds a configured server list: a machine with a large registry must not
-/// silently enlarge what every remote caller is shown. Thirty-two is far above a useful
-/// single-user-assistant surface and far below a registry that has grown by accident.
-pub const MAX_EXPOSED_TOOLS: usize = 32;
+/// silently enlarge what every remote caller is shown. Ninety-six leaves room for the
+/// built-in browser (25 tools) on top of JARVIS's own tools, and is still far below a registry that has grown by accident. Tool discovery
+/// (`P11-002`) is what keeps a long list cheap for the model.
+pub const MAX_EXPOSED_TOOLS: usize = 96;
 
 /// Why one tool was not offered to a remote client.
 ///
@@ -180,6 +181,22 @@ impl ServedTool {
 pub fn served_tools<'a>(
     definitions: impl IntoIterator<Item = &'a ToolDefinition>,
 ) -> Result<(Vec<ServedTool>, Vec<ExposureExclusion>), ExposureError> {
+    served_tools_vetting(definitions, |_| false)
+}
+
+/// Like [`served_tools`], but a tool from someone else's code is served when `vetted` says this project has itself classified it.
+///
+/// The transitive rule exists because a third party's tool carries a policy nobody here wrote. A program the project pins to an exact
+/// version and whose read-only tools it lists one by one (the built-in browser and documentation lookup) is the exception the caller
+/// names, and **only the caller can name it**: nothing a server reports about itself can make a tool vetted.
+///
+/// # Errors
+///
+/// As [`served_tools`].
+pub fn served_tools_vetting<'a>(
+    definitions: impl IntoIterator<Item = &'a ToolDefinition>,
+    vetted: impl Fn(&ToolDefinition) -> bool,
+) -> Result<(Vec<ServedTool>, Vec<ExposureExclusion>), ExposureError> {
     let mut served: Vec<ServedTool> = Vec::new();
     let mut exclusions: Vec<ExposureExclusion> = Vec::new();
     let mut names: BTreeSet<String> = BTreeSet::new();
@@ -198,7 +215,7 @@ pub fn served_tools<'a>(
         // Checked in order of severity, so the reason a tool is absent is the most consequential one
         // that applies. A transitive tool that is also unavailable is reported as transitive, because
         // that is the reason no change to its availability would fix.
-        if definition.source().is_third_party() {
+        if definition.source().is_third_party() && !vetted(definition) {
             exclusions.push(ExposureExclusion::Transitive {
                 tool: id,
                 source: definition.source(),
@@ -551,6 +568,23 @@ mod tests {
             served_tools([&native("mcp.github.search")]).err(),
             Some(ExposureError::NoTools)
         );
+    }
+
+    /// A third-party tool is served only when the caller vouches for it, and one that is not vouched for stays withheld.
+    ///
+    /// Falsified by making `vetted` always true: `mcp.github.search` would then be served.
+    #[test]
+    fn a_vetted_third_party_tool_is_served_and_an_unvetted_one_is_not() {
+        let vetted = native("mcp.browser.browser_navigate");
+        let other = native("mcp.github.search");
+        let (served, exclusions) = served_tools_vetting([&vetted, &other], |definition| {
+            definition.id().to_string().starts_with("mcp.browser.")
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+        let names: Vec<&str> = served.iter().map(ServedTool::name).collect();
+        assert_eq!(names, ["mcp.browser.browser_navigate"]);
+        assert_eq!(exclusions.len(), 1, "{exclusions:?}");
+        assert_eq!(exclusions[0].tool(), Some("mcp.github.search"));
     }
 
     /// The bound is enforced and reported as a **list** problem rather than blamed on a tool.

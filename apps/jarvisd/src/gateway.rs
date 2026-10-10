@@ -86,6 +86,10 @@ pub struct GatewayState {
     settings: Option<crate::settings_service::SettingsContext>,
     /// The Google sign-in, when settings are available (ADR-0149).
     google: Option<Arc<crate::google_account::GoogleAccount>>,
+    /// What the MCP servers turned out to be when the daemon started (`P11-001`).
+    mcp: Arc<crate::mcp_admin::McpSnapshot>,
+    /// The key for other apps that connect to JARVIS, when the daemon has one to manage (`ADR-0170`).
+    mcp_access: Option<Arc<crate::mcp_access::McpAccess>>,
 }
 
 impl GatewayState {
@@ -104,7 +108,35 @@ impl GatewayState {
             speech: None,
             settings: None,
             google: None,
+            mcp: Arc::new(crate::mcp_admin::McpSnapshot::default()),
+            mcp_access: None,
         }
+    }
+
+    /// Attaches the access key for other apps, which turns its routes on.
+    #[must_use]
+    pub fn with_mcp_access(mut self, access: Arc<crate::mcp_access::McpAccess>) -> Self {
+        self.mcp_access = Some(access);
+        self
+    }
+
+    /// Returns the access key state, when the daemon manages one.
+    #[must_use]
+    pub(crate) fn mcp_access(&self) -> Option<&Arc<crate::mcp_access::McpAccess>> {
+        self.mcp_access.as_ref()
+    }
+
+    /// Attaches what the MCP servers turned out to be, for the management routes.
+    #[must_use]
+    pub fn with_mcp(mut self, mcp: Arc<crate::mcp_admin::McpSnapshot>) -> Self {
+        self.mcp = mcp;
+        self
+    }
+
+    /// Returns the MCP snapshot taken at start.
+    #[must_use]
+    pub(crate) fn mcp(&self) -> &crate::mcp_admin::McpSnapshot {
+        &self.mcp
     }
 
     /// Attaches the native executor, so a started run is driven to a terminal state.
@@ -345,8 +377,12 @@ pub fn router(state: GatewayState) -> Router {
         .route("/skills/export", get(export_skills))
         .route("/skills/{id}", get(read_skill).delete(forget_skill))
         .route("/skills/{id}/promote", post(promote_skill))
+        .route("/skills/{id}/approve", post(approve_skill))
+        .route("/skills/{id}/dismiss", post(dismiss_skill))
         .route("/skills/{id}/disable", post(disable_skill))
         .route("/skills/{id}/enable", post(enable_skill))
+        .merge(crate::mcp_admin::routes())
+        .merge(crate::mcp_access::routes())
         .merge(crate::google_service::routes())
         .merge(crate::contacts_service::routes())
         .merge(crate::digest_service::routes())
@@ -840,6 +876,29 @@ async fn decide_approval(
     Path(id): Path<String>,
     Json(body): Json<ApprovalDecisionBody>,
 ) -> Response {
+    // A call from another app that is waiting for this answer (`ADR-0180`) has no run and no stored approval: its answer goes straight to
+    // the call that is holding. Anything else is a stored approval and takes the ordinary path below.
+    let approve = body.decision == jarvis_protocol::ApprovalDecisionRequest::Approve;
+    if let Some(waiting) = state
+        .mcp_access()
+        .and_then(|access| access.approvals().decide(&id, approve))
+    {
+        let state_name = if approve { "approved" } else { "denied" };
+        return (
+            StatusCode::OK,
+            Json(jarvis_protocol::ApprovalReply {
+                approval_id: waiting.approval_id,
+                run_id: String::new(),
+                tool: waiting.tool,
+                tool_version: waiting.tool_version,
+                state: state_name.to_owned(),
+                outcome: Some(state_name.to_owned()),
+                created_at: waiting.created_at,
+                expires_at: waiting.expires_at,
+            }),
+        )
+            .into_response();
+    }
     match state.runs.decide(&id, &body).await {
         Ok(reply) => {
             // A client that asks for it has the daemon release the call as part of the decision. It is opt-in
@@ -1037,6 +1096,10 @@ async fn list_approvals(State(state): State<GatewayState>) -> Response {
             created_at: request.created_at(),
             expires_at: request.expires_at(),
         });
+    }
+    // Calls from other apps that are waiting for the owner come first: someone is on the other end of each.
+    if let Some(access) = state.mcp_access() {
+        approvals.splice(0..0, access.approvals().list());
     }
     let reply = jarvis_protocol::ApprovalListReply {
         total: approvals.len(),
@@ -1985,6 +2048,22 @@ async fn promote_skill(
     }
 }
 
+/// `POST /api/v1/skills/{id}/approve`: the owner accepts a proposed skill (no body; `ADR-0183`).
+async fn approve_skill(State(state): State<GatewayState>, Path(id): Path<String>) -> Response {
+    match state.skills().approve(&id).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(error) => skill_error(&error),
+    }
+}
+
+/// `POST /api/v1/skills/{id}/dismiss`: the owner sets a proposed skill aside (no body).
+async fn dismiss_skill(State(state): State<GatewayState>, Path(id): Path<String>) -> Response {
+    match state.skills().dismiss(&id).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(error) => skill_error(&error),
+    }
+}
+
 /// `POST /api/v1/skills/{id}/disable`
 async fn disable_skill(
     State(state): State<GatewayState>,
@@ -2460,18 +2539,6 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("router call: {error}"));
         assert_eq!(off.status(), StatusCode::OK);
-        // A tool that writes standing instructions cannot be set to run without asking, and nothing is saved.
-        let never = app
-            .clone()
-            .oneshot(put_json(
-                "/api/v1/settings/tools/jarvis.project.create",
-                &presented,
-                r#"{"posture":"trusted"}"#,
-            ))
-            .await
-            .unwrap_or_else(|error| panic!("router call: {error}"));
-        assert_eq!(never.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(!read().contains("jarvis.project.create"));
         let listed = body_text(
             app.clone()
                 .oneshot(get_request("/api/v1/settings", Some(&presented)))
@@ -4142,6 +4209,76 @@ mod tests {
             body_text(finished).await
         );
         assert_eq!(adapter.calls(), 1);
+    }
+
+    /// A call that had already started when the daemon stopped cannot be resumed, so its approval must not keep asking.
+    ///
+    /// Falsified by removing the `tool_calls` condition from the unreleased-approvals query: the dead approval is listed again, and
+    /// the console offers an Approve button whose every press is refused with `409`.
+    #[tokio::test]
+    async fn an_approval_whose_call_already_started_is_not_listed_as_waiting() {
+        let adapter =
+            std::sync::Arc::new(crate::approval_fixture::RecordingApprovalAdapter::default());
+        let (app, presented, _profile, approval_id, database) =
+            approval_router_with(adapter.clone()).await;
+        let decided = app
+            .clone()
+            .oneshot(decision_request(
+                &presented,
+                &approval_id,
+                &serde_json::json!({ "decision": "approve" }),
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("router call: {error}"));
+        assert_eq!(decided.status(), StatusCode::OK);
+
+        let count = |app: Router| {
+            let presented = presented.clone();
+            async move {
+                let listed = app
+                    .oneshot(get_request("/api/v1/approvals", Some(&presented)))
+                    .await
+                    .unwrap_or_else(|error| panic!("router call: {error}"));
+                let listed: jarvis_protocol::ApprovalListReply =
+                    serde_json::from_str(&body_text(listed).await)
+                        .unwrap_or_else(|error| panic!("decode the list: {error}"));
+                listed.total
+            }
+        };
+        assert_eq!(
+            count(app.clone()).await,
+            1,
+            "approved and not yet run: listed"
+        );
+
+        // The daemon stopped while the call was running: the call is past `requested`, the approval still holds its arguments.
+        let listed = app
+            .clone()
+            .oneshot(get_request("/api/v1/approvals", Some(&presented)))
+            .await
+            .unwrap_or_else(|error| panic!("router call: {error}"));
+        let listed: jarvis_protocol::ApprovalListReply =
+            serde_json::from_str(&body_text(listed).await)
+                .unwrap_or_else(|error| panic!("decode the list: {error}"));
+        jarvis_storage::advance_tool_call(
+            &database,
+            &listed.approvals[0].call_id,
+            jarvis_core::ToolOutcome::Authorized,
+            jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("move the call on: {error}"));
+        assert_eq!(
+            count(app.clone()).await,
+            0,
+            "a started call cannot be resumed, so it is not offered"
+        );
+
+        let cleared = jarvis_storage::clear_arguments_of_started_calls(&database)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(cleared, 1, "the held payload is dropped too");
+        assert_eq!(adapter.calls(), 0, "nothing ran in this test");
     }
 
     /// A denied approval cannot be released, whatever is asked.

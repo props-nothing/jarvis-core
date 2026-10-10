@@ -27,44 +27,24 @@ pub enum ConnectError {
     #[error("the MCP server refused the connection at the protocol level: {0}")]
     Refused(String),
 
-    /// The peer did not answer the discovery request within the deadline.
+    /// The peer did not complete the handshake within the deadline.
     ///
     /// A distinct variant because the remedy differs from [`Self::Unreachable`]: nothing was
-    /// refused and nothing errored, the peer simply never replied. That is what a **legacy** server
-    /// looks like from here — it is listening for an `initialize` request that a modern client never
-    /// sends — so an operator seeing this should suspect the server's protocol era before its
-    /// network.
+    /// refused and nothing errored, the peer simply never replied to `server/discover` **or** to the
+    /// legacy `initialize` that follows it. The usual causes are a program that started but is not an
+    /// MCP server, or one that is still installing or downloading something on first run.
     ///
-    /// This exists because the SDK's own discovery deadline is applied **only** in
-    /// `ClientLifecycleMode::Auto`, not in `Discover` (verified in the pinned SDK's
-    /// `service/client.rs`: `DEFAULT_AUTO_DISCOVER_TIMEOUT` is passed only in the `Auto` arm). So
-    /// without this deadline a connection to a silent peer would wait forever, and a daemon starting
-    /// against a dead or legacy server would hang rather than report.
+    /// The deadline is JARVIS's own and wraps both attempts, because the SDK bounds only the first
+    /// (its `DEFAULT_AUTO_DISCOVER_TIMEOUT`); without this a silent peer could hold the daemon at
+    /// startup.
     #[error(
-        "the MCP server did not answer server/discover within {seconds}s; a server that speaks only \
-         the legacy initialize handshake looks exactly like this from here"
+        "the MCP server did not complete the handshake (server/discover, then the legacy \
+         initialize) within {seconds}s; check that the command starts an MCP server, and that it \
+         is not still downloading on its first run"
     )]
     DiscoveryTimedOut {
         /// The deadline that elapsed.
         seconds: u64,
-    },
-
-    /// The peer negotiated a **legacy** revision even though a modern one was requested.
-    ///
-    /// This must never be silently accepted. The two eras are not interoperable: the legacy one has
-    /// an `initialize` handshake and a session, the modern one is stateless with per-request
-    /// metadata. A connection that falls back would appear healthy while speaking a protocol whose
-    /// behaviour the rest of this crate does not implement — so it is a hard failure naming both
-    /// revisions.
-    #[error(
-        "the server negotiated MCP {negotiated}, but JARVIS asked for {wanted}; the legacy era has an \
-         initialize handshake and a session and is not interchangeable with the stateless revision"
-    )]
-    LegacyNegotiated {
-        /// The revision the server agreed to.
-        negotiated: String,
-        /// The revision JARVIS asked for.
-        wanted: String,
     },
 }
 
@@ -112,6 +92,14 @@ pub enum ListError {
 /// call did not complete in a way this crate can describe.
 #[derive(Debug, thiserror::Error)]
 pub enum CallError {
+    /// The call was **not sent**: the server had stopped and could not be started again.
+    ///
+    /// Distinct from [`Self::Unavailable`] because nothing reached the server, so nothing can have
+    /// happened and a later retry cannot duplicate an effect. [`Self::Unavailable`] means the request
+    /// may have been received.
+    #[error("the call was not sent: {0}")]
+    NotSent(String),
+
     /// The request did not reach a result — the peer went away, or the transport failed.
     ///
     /// The caller cannot know whether the server began the effect, which is exactly what
@@ -195,6 +183,18 @@ impl ConnectError {
     /// defect class as deciding a safety property from a `Display` string (`P3-008c`).
     pub(crate) fn from_sdk(error: &ClientInitializeError) -> Self {
         match error {
+            // Both handshakes failed. The SDK's own message drops both causes, and the causes are the
+            // diagnosis ("method not found" then "connection closed" is a program that is not an MCP
+            // server), so both are kept. Classified by the fallback, the last thing that was tried.
+            ClientInitializeError::LegacyFallbackFailed { discover, fallback } => {
+                let message = format!(
+                    "server/discover failed ({discover}); then the legacy initialize failed too ({fallback})"
+                );
+                match Self::from_sdk(fallback) {
+                    Self::Unreachable(_) => Self::Unreachable(message),
+                    _ => Self::Refused(message),
+                }
+            }
             // The transport itself failed: the child could not be spawned, the socket was refused,
             // the response could not be read. A caller should check the command or the endpoint.
             ClientInitializeError::TransportError { .. }

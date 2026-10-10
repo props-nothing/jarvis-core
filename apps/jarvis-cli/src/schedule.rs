@@ -6,11 +6,11 @@
 //! unattended task that wants to fetch a page or run code **stops and waits for you**, and `jarvis approvals`
 //! (or the next `jarvis ask`) is where you answer. Nothing here can approve anything.
 //!
-//! # Cadences, and the one that is missing
+//! # Cadences
 //!
-//! `--every 30m|6h|2d` and `--at 2026-10-04T09:00:00Z` mean the same thing on every machine. "Every day at 08:00
-//! local time" needs time zones and daylight-saving rules (`P6-003`), and a half-right version would fire an hour
-//! late for half the year without telling anyone, so it does not exist yet. `--every 24h` is the honest form.
+//! `--every 30m|6h|2d` and `--at 2026-10-04T09:00:00Z` mean the same thing on every machine. "Every weekday at 08:00" is
+//! `--at-time 08:00 --days mon-fri --zone Europe/Amsterdam` (`P6-003`): it stays at 08:00 through daylight-saving changes, which
+//! `--every 24h` does not. `--days` defaults to every day and `--zone` to this machine's zone, stored with the task.
 
 use jarvis_core::UtcTimestamp;
 use jarvis_protocol::{CreateScheduleRequest, RunListReply, ScheduleReply};
@@ -38,7 +38,7 @@ pub async fn run_schedule(client: &ApiClient, arguments: &[String]) -> ExitStatu
 
 /// The usage text for `jarvis schedule`.
 pub(crate) const fn schedule_usage() -> &'static str {
-    "usage: jarvis schedule <add|list|pause|resume|remove|project> [...]\n       jarvis schedule project ID (NAME | --none)     # file an existing task under a project, or take it out\n       jarvis schedule add <objective...> (--every 30m|6h|2d | --at 2026-10-04T09:00:00Z) [--project NAME]\n       jarvis schedule list [--json]\n       jarvis schedule pause|resume|remove ID"
+    "usage: jarvis schedule <add|list|pause|resume|remove|project> [...]\n       jarvis schedule project ID (NAME | --none)     # file an existing task under a project, or take it out\n       jarvis schedule add <objective...> (--every 30m|6h|2d | --at 2026-10-04T09:00:00Z | --at-time 08:00 [--days mon-fri] [--zone Europe/Amsterdam]) [--project NAME]\n       jarvis schedule list [--json]\n       jarvis schedule pause|resume|remove ID"
 }
 
 /// Splits `add` arguments into the objective words and the cadence flags.
@@ -49,6 +49,9 @@ fn parse_add(arguments: &[String]) -> Result<CreateScheduleRequest, String> {
     let mut words: Vec<&str> = Vec::new();
     let mut every: Option<String> = None;
     let mut at: Option<UtcTimestamp> = None;
+    let mut at_time: Option<String> = None;
+    let mut days: Option<String> = None;
+    let mut time_zone: Option<String> = None;
     let mut project: Option<String> = None;
     let mut index = 2;
     while index < arguments.len() {
@@ -69,6 +72,33 @@ fn parse_add(arguments: &[String]) -> Result<CreateScheduleRequest, String> {
                 at = Some(text.parse::<UtcTimestamp>().map_err(|_| {
                     format!("{text:?} is not an RFC 3339 time such as 2026-10-04T09:00:00Z")
                 })?);
+                index += 2;
+            }
+            "--at-time" => {
+                at_time = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("--at-time needs a time of day such as 08:00")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--days" => {
+                days = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("--days needs days such as mon-fri, weekends or daily")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--zone" => {
+                time_zone = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("--zone needs a time zone such as Europe/Amsterdam")?
+                        .clone(),
+                );
                 index += 2;
             }
             "--project" => {
@@ -95,6 +125,9 @@ fn parse_add(arguments: &[String]) -> Result<CreateScheduleRequest, String> {
         objective: words.join(" "),
         every,
         at,
+        at_time,
+        days,
+        time_zone,
         project_id: project,
     })
 }
@@ -156,6 +189,12 @@ async fn list(client: &ApiClient, json: bool) -> ExitStatus {
 fn describe(schedule: &ScheduleReply) -> String {
     let cadence = match (schedule.cadence.as_str(), schedule.interval_seconds) {
         ("every", Some(seconds)) => format!("every {}", humanize(seconds)),
+        ("daily", _) => format!(
+            "{} at {} ({})",
+            schedule.days.as_deref().unwrap_or("every day"),
+            schedule.at_time.as_deref().unwrap_or("?"),
+            schedule.time_zone.as_deref().unwrap_or("?")
+        ),
         _ => "once".to_owned(),
     };
     let cadence = match &schedule.project {
@@ -388,6 +427,20 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(request.objective, "summarise the news");
         assert_eq!(request.every.as_deref(), Some("6h"));
+    }
+
+    #[test]
+    fn a_wall_clock_time_days_and_zone_are_parsed_with_the_objective() {
+        let request = parse_add(&words(
+            "schedule add send the briefing --at-time 08:00 --days mon-fri --zone Europe/Amsterdam",
+        ))
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(request.objective, "send the briefing");
+        assert_eq!(request.at_time.as_deref(), Some("08:00"));
+        assert_eq!(request.days.as_deref(), Some("mon-fri"));
+        assert_eq!(request.time_zone.as_deref(), Some("Europe/Amsterdam"));
+        assert!(request.every.is_none() && request.at.is_none());
+        assert!(parse_add(&words("schedule add x --at-time")).is_err());
     }
 
     #[test]

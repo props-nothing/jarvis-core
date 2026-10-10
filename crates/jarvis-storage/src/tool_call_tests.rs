@@ -639,6 +639,74 @@ async fn the_unrepeatable_set_is_the_ambiguous_and_in_flight_calls() {
     );
 }
 
+/// **A call a stopped daemon left half-way is settled honestly: not sent means failed, handed over means unknown.**
+///
+/// Falsified by settling both as `failed`: the submitted call would then claim it did not happen when it may have, which is how one
+/// message becomes two.
+#[tokio::test]
+async fn calls_left_half_way_are_settled_as_failed_or_unknown_and_nothing_else_is_touched() {
+    let (_directory, database) = seeded_database().await;
+    let _run = live_run(&database).await;
+    let requested = "0198f000-0000-7000-8000-0000000000d1";
+    let authorized = "0198f000-0000-7000-8000-0000000000d2";
+    let submitted = "0198f000-0000-7000-8000-0000000000d3";
+    let confirmed = "0198f000-0000-7000-8000-0000000000d4";
+    for (id, discriminator) in [
+        (requested, 1u8),
+        (authorized, 2),
+        (submitted, 3),
+        (confirmed, 4),
+    ] {
+        must(admit_tool_call(&database, &call(id, &key_for(discriminator))).await);
+    }
+    must(advance_tool_call(&database, authorized, ToolOutcome::Authorized, at(1)).await);
+    reach_submitted(&database, submitted, at(1)).await;
+    reach_submitted(&database, confirmed, at(1)).await;
+    must(
+        record_tool_outcome(
+            &database,
+            confirmed,
+            &must(ToolOutcomeRecord::confirmed("provider-id")),
+            None,
+            at(2),
+        )
+        .await,
+    );
+
+    let mut settled = must(settle_orphaned_calls(&database, at(5)).await);
+    settled.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        settled,
+        vec![
+            (authorized.to_owned(), ToolOutcome::Failed),
+            (submitted.to_owned(), ToolOutcome::Unknown),
+        ]
+    );
+    let after_authorized = must(find_tool_call(&database, authorized).await);
+    assert_eq!(after_authorized.outcome(), ToolOutcome::Failed);
+    assert!(
+        !after_authorized.must_not_repeat(),
+        "it never ran, so repeating is safe"
+    );
+    let after_submitted = must(find_tool_call(&database, submitted).await);
+    assert_eq!(after_submitted.outcome(), ToolOutcome::Unknown);
+    assert!(
+        after_submitted.must_not_repeat(),
+        "it may have run, so it is not repeated blindly"
+    );
+    assert_eq!(
+        must(find_tool_call(&database, requested).await).outcome(),
+        ToolOutcome::Requested
+    );
+    assert_eq!(
+        must(find_tool_call(&database, confirmed).await).outcome(),
+        ToolOutcome::Confirmed
+    );
+
+    // Settling twice finds nothing left to settle.
+    assert!(must(settle_orphaned_calls(&database, at(6)).await).is_empty());
+}
+
 /// **A held call records which approval is holding it, and that link is written once.**
 ///
 /// This is the join `P3-012c` adds. `tool_calls.approval_id` existed since `0007` and **no writer set

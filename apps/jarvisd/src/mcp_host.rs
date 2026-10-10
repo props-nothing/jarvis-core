@@ -82,6 +82,44 @@ impl ComposedHost {
         self.host.unreadable()
     }
 
+    /// Logs each server that could not be read and each tool that was left out, with the reason.
+    ///
+    /// A count alone ("reachable 0, tools 0") cannot tell a server that is down from one whose tools were all
+    /// refused, and the second is what hid the draft-07 incompatibility for the first real server.
+    pub(crate) fn log_problems(&self) {
+        for unreadable in self.unreadable() {
+            tracing::warn!(
+                server = unreadable.server.as_str(),
+                reason = %unreadable.reason,
+                "an MCP server could not be read"
+            );
+        }
+        for excluded in self.exclusions() {
+            tracing::warn!(
+                server = %excluded.server,
+                tool = %excluded.tool,
+                reason = %excluded.reason,
+                "an MCP tool was left out"
+            );
+        }
+    }
+
+    /// Returns what became of each server that connected, with its tools and the ones left out.
+    #[must_use]
+    pub(crate) fn statuses(&self) -> Vec<crate::mcp_admin::ServerStatus> {
+        statuses_of(&self.host)
+    }
+
+    /// Returns the tools a server offered that were left out, each with the reason.
+    ///
+    /// A tool is left out when its name cannot be made canonical, its schema does not conform, or the
+    /// catalog is full. Without this an operator sees "reachable, 0 tools" and cannot tell a server with
+    /// nothing to offer from one whose tools were all refused.
+    #[must_use]
+    pub fn exclusions(&self) -> &[jarvis_mcp_transport::CatalogExclusion] {
+        self.host.catalog().exclusions()
+    }
+
     /// Closes every connection.
     ///
     /// # Errors
@@ -93,6 +131,80 @@ impl ComposedHost {
     pub async fn close(self) -> Result<(), Vec<String>> {
         self.host.close().await
     }
+}
+
+/// Builds the per-server status of every connected server in a host.
+pub(crate) fn statuses_of(host: &McpHost) -> Vec<crate::mcp_admin::ServerStatus> {
+    use crate::mcp_admin::{Excluded, ServerStatus, ToolStatus, short_description};
+    let entries = host.catalog().entries();
+    let exclusions = host.catalog().exclusions();
+    host.connected()
+        .into_iter()
+        .map(|connected| ServerStatus {
+            tools: entries
+                .iter()
+                .filter(|entry| entry.server.as_str() == connected.server)
+                .map(|entry| ToolStatus {
+                    id: entry.definition.id().to_string(),
+                    description: short_description(entry.definition.description()),
+                })
+                .collect(),
+            excluded: exclusions
+                .iter()
+                .filter(|excluded| excluded.server == connected.server)
+                .map(|excluded| Excluded {
+                    tool: excluded.tool.clone(),
+                    reason: excluded.reason.clone(),
+                })
+                .collect(),
+            state: "connected",
+            reason: None,
+            era: Some(match connected.era {
+                jarvis_mcp_transport::McpEra::Modern => "modern",
+                jarvis_mcp_transport::McpEra::Legacy => "legacy",
+            }),
+            revision: Some(connected.revision),
+            reported_name: Some(connected.reported_name).filter(|name| !name.is_empty()),
+            name: connected.server,
+        })
+        .collect()
+}
+
+/// Connects to the one server a document configures, reports what it offers, and disconnects.
+///
+/// For the **test** button and `jarvis mcp test`: the same parser, the same connection code and the same tool
+/// translation the daemon uses at start, so a server that passes here is one the daemon will serve the same way.
+pub(crate) async fn try_connect(document: &str) -> serde_json::Value {
+    let config = match McpHostConfig::parse(document) {
+        Ok(config) => config,
+        Err(error) => return serde_json::json!({ "ok": false, "message": error.to_string() }),
+    };
+    let host = match config.connect(&[]).await {
+        Ok(host) => host,
+        Err(error) => return serde_json::json!({ "ok": false, "message": error.to_string() }),
+    };
+    let statuses = statuses_of(&host);
+    let unreadable: Vec<String> = host
+        .unreadable()
+        .iter()
+        .map(|server| server.reason.clone())
+        .collect();
+    let report = match statuses.first() {
+        Some(status) => serde_json::json!({
+            "ok": true,
+            "era": status.era,
+            "revision": status.revision,
+            "reported_name": status.reported_name,
+            "tools": status.tools,
+            "excluded": status.excluded,
+        }),
+        None => serde_json::json!({
+            "ok": false,
+            "message": unreadable.first().cloned().unwrap_or_else(|| "the server could not be reached".to_owned()),
+        }),
+    };
+    let _ = host.close().await;
+    report
 }
 
 /// Why an MCP host could not be composed.

@@ -1,0 +1,26 @@
+# Tool discovery (`P11-002`, `ADR-0176`): can the model find a tool it was not offered at the start?
+#
+#   jarvis eval run evals/discovery.toml
+#
+# The built-in browser has 25 tools, so its group is held back until the model asks for it. These cases need Node.js (the browser is
+# started with npx) and internet access, and each one is an ordinary run that opens a public page. Nothing is written, sent or changed.
+# A model that never searches, or searches and then does not use what it found, fails here.
+
+name = "discovery"
+description = "A held-back group of tools is found by search and then used."
+
+[[case]]
+id = "finds-the-browser"
+prompt = "Use the browser to open https://example.com and tell me the title of the page and the first sentence on it. Read the page as it is; do not run scripts."
+[case.expect]
+tools_used = ["tools.search", "browser.browser_navigate"]
+contains = ["Example Domain"]
+max_seconds = 180
+
+[[case]]
+id = "does-not-search-for-nothing"
+prompt = "What is 17 times 23? Answer with only the number."
+[case.expect]
+contains = ["391"]
+max_tool_calls = 0
+max_answer_chars = 60

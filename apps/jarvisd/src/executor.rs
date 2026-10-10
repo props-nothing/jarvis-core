@@ -1186,7 +1186,21 @@ async fn load_skills(
 /// The schema is read through the registry (`definition.input_schema()`) rather than reconstructed, so
 /// the schema the model is offered is the one the pipeline validates arguments against — one statement
 /// of the contract, not two that could disagree.
-fn tool_specs(tools: &Arc<ToolPipeline>, sub_agent: bool) -> Vec<ToolSpec> {
+fn tool_specs(
+    tools: &Arc<ToolPipeline>,
+    sub_agent: bool,
+    messages: &[ChatMessage],
+) -> Vec<ToolSpec> {
+    // Tool discovery (`ADR-0176`): the tools of a big MCP server are held back until the run searches for them. What is held back
+    // changes only what is offered; every call is still checked, approved and recorded the same way.
+    let entries = crate::tool_search::entries_of(tools);
+    let deferred = crate::tool_search::deferred_groups(&entries);
+    let found = crate::tool_search::found_groups(messages);
+    let waiting: std::collections::BTreeMap<_, _> = deferred
+        .iter()
+        .filter(|(group, _)| !found.contains(group.as_str()))
+        .map(|(group, tools)| (group.clone(), tools.clone()))
+        .collect();
     tools
         .registry()
         .discover()
@@ -1196,6 +1210,11 @@ fn tool_specs(tools: &Arc<ToolPipeline>, sub_agent: bool) -> Vec<ToolSpec> {
         .filter(|summary| {
             !(sub_agent && summary.id.starts_with(crate::delegate::AGENT_TOOL_PREFIX))
         })
+        .filter(|summary| {
+            crate::tool_search::group_of(&summary.id).is_none_or(|group| !waiting.contains_key(group))
+        })
+        // With nothing held back there is nothing to search for, so the search tool is not offered at all.
+        .filter(|summary| summary.id != crate::tool_search::SEARCH_TOOL || !waiting.is_empty())
         .map(|summary| {
             let parameters = jarvis_tools::ToolId::new(&summary.id)
                 .ok()
@@ -1204,7 +1223,16 @@ fn tool_specs(tools: &Arc<ToolPipeline>, sub_agent: bool) -> Vec<ToolSpec> {
                     || serde_json::json!({ "type": "object" }),
                     |definition| definition.input_schema().document().clone(),
                 );
-            ToolSpec::new(summary.id.clone(), summary.description.clone(), parameters)
+            let description = if summary.id == crate::tool_search::SEARCH_TOOL {
+                format!(
+                    "{} Not offered yet: {}. Call this before telling the user you cannot do something these could do.",
+                    summary.description,
+                    crate::tool_search::catalog_line(&waiting)
+                )
+            } else {
+                summary.description.clone()
+            };
+            ToolSpec::new(summary.id.clone(), description, parameters)
         })
         .collect()
 }
@@ -1212,7 +1240,7 @@ fn tool_specs(tools: &Arc<ToolPipeline>, sub_agent: bool) -> Vec<ToolSpec> {
 /// The names a run would be offered, for tests of what a sub-agent is not offered.
 #[cfg(test)]
 pub(crate) fn tool_specs_for_test(tools: &Arc<ToolPipeline>, sub_agent: bool) -> Vec<String> {
-    tool_specs(tools, sub_agent)
+    tool_specs(tools, sub_agent, &[])
         .iter()
         .map(|spec| spec.name().to_owned())
         .collect()
@@ -1909,9 +1937,9 @@ async fn generate(
     // The tool surface is re-derived from the registry on every call rather than carried in the
     // transcript, so the offered set is always the current one and there is one statement of it.
     let sub_agent = crate::delegate::is_delegated_objective(run.objective());
-    let specs = deps
-        .tools
-        .map_or_else(Vec::new, |tools| tool_specs(tools, sub_agent));
+    let specs = deps.tools.map_or_else(Vec::new, |tools| {
+        tool_specs(tools, sub_agent, &state.messages)
+    });
     // The stream is validated rather than accumulated blindly, so a gap or a late event is a reported failure (see
     // `consume_stream`). A model that reasons past its budget without answering is asked once more to act, with its
     // reasoning turned down; any other failure settles the run.
@@ -5336,21 +5364,16 @@ mod tests {
         (Arc::new(pipeline), adapter)
     }
 
-    /// **⚠ An objective carrying a word the procedure lacks offers NO skill — the conjunctive rule's cost.**
+    /// **⚠ An objective that is a different task offers NO skill.**
     ///
-    /// The sibling of the test above, and the reason it is a separate test rather than an extra assertion:
-    /// `matches_text` requires **every** query word, so relevance is brittle by construction. A user asking
-    /// about "my notes" is not offered a procedure that says "the user's notes", which is a real and
-    /// deliberately accepted cost — the alternative is offering a procedure on a partial overlap, and a
-    /// procedure that matches loosely is one whose *steps* a model may follow when they do not apply.
+    /// The sibling of the test above, and the reason it is a separate test: relevance is literal, so the silence
+    /// has to be named. Before `ADR-0183` one unmatched word suppressed a procedure, which meant a real request
+    /// almost never matched ("my notes" against "the user's notes"). Now a request is offered a procedure when it
+    /// covers three quarters of the first line's distinctive words, so that sentence matches; what must still be
+    /// refused is a request that shares a word or two and is about something else.
     ///
-    /// Asserted because the consequence is otherwise invisible: the run **succeeds** either way, the answer is
-    /// plausible either way, and the difference is only that a procedure the user wrote was not used. A
-    /// retrieval rule whose failure mode is silence needs a test that names the silence.
-    ///
-    /// This is the behaviour `P4-012`'s own limits record, and it is where a future ranked retrieval would
-    /// change the outcome — a claim is matched against **floors** rather than a conjunction, which is why a
-    /// memory is ranked and a skill is filtered.
+    /// Asserted because the consequence is otherwise invisible: the run **succeeds** either way, and a procedure
+    /// offered for the wrong task is one whose *steps* a model may follow when they do not apply.
     #[tokio::test]
     async fn an_objective_with_an_unmatched_word_offers_no_skill() {
         let (_profile, database) = database().await;
@@ -5358,8 +5381,8 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("the fixture must have a seeded identity: {error}"));
 
-        // "my" appears in neither the procedure's prose nor its step instruction.
-        let run = start(&database, "summarize the open items in my notes").await;
+        // Shares "summarize" with the procedure and nothing else of its trigger.
+        let run = start(&database, "summarize my inbox").await;
         record_skill(
             &database,
             identity.workspace_id(),
@@ -5381,8 +5404,7 @@ mod tests {
             !request
                 .iter()
                 .any(|message| message.text().contains(jarvis_core::FENCE_OPEN)),
-            "one unmatched word must suppress the procedure, which is the conjunctive rule's deliberate \
-             cost: {request:?}"
+            "a request about another task must not be offered the procedure: {request:?}"
         );
     }
 

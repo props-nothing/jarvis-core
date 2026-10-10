@@ -23,6 +23,7 @@ mod hud;
 mod init;
 mod install;
 mod lifecycle;
+mod mcp;
 mod memory;
 mod output;
 mod project;
@@ -132,6 +133,7 @@ async fn client_main(arguments: Vec<String>) -> ExitCode {
         // Run a suite of prompts against the daemon and score the answers, so a change can be measured (`ADR-0166`).
         Some("eval") => eval_command(&arguments).await,
         Some("contacts") => contacts_command(&arguments).await,
+        Some("mcp") => mcp_command(&arguments).await,
         Some("push") => push_command(&arguments).await,
         // `skills` is the `P4-013` inspection and control surface: the `FR-MEM-005` lifecycle applied to a
         // stored procedure, which before this verb group was reachable only from a test.
@@ -203,7 +205,7 @@ async fn launch_command(arguments: &[String]) -> ExitStatus {
 }
 
 const fn usage() -> &'static str {
-    "usage: jarvis [launch] | jarvis <init|start|stop|restart|config|keys|service|status|health|ask|chat|logs|memory|tools|approvals|cancel|watch|hud|schedule|runs|project|digest|eval|contacts|push|skills|connector|doctor|path|version> [--json] [--lines N] [--repair] [--root DIR]\n       jarvis ask <objective...> [--root DIR]\n       jarvis chat [--root DIR]\n       jarvis start [--no-open] [--root DIR]\n       jarvis memory <list|show|search|remember|correct|confirm|forget|export> [...]\n       jarvis tools <list|preview> [...]\n       jarvis approvals <list|approve|deny|resume> [...]
+    "usage: jarvis [launch] | jarvis <init|start|stop|restart|config|keys|service|status|health|ask|chat|logs|memory|tools|mcp|approvals|cancel|watch|hud|schedule|runs|project|digest|eval|contacts|push|skills|connector|doctor|path|version> [--json] [--lines N] [--repair] [--root DIR]\n       jarvis ask <objective...> [--root DIR]\n       jarvis chat [--root DIR]\n       jarvis start [--no-open] [--root DIR]\n       jarvis memory <list|show|search|remember|correct|confirm|forget|export> [...]\n       jarvis mcp <list|add|test|remove> [...]   # other programs' tools JARVIS can use: `jarvis mcp add files -- npx -y @modelcontextprotocol/server-filesystem DIR`\n       jarvis tools <list|preview> [...]\n       jarvis approvals <list|approve|deny|resume> [...]
        jarvis schedule <add|list|pause|resume|remove> [...]
        jarvis project <add|list|show|set|pause|resume|done|note|remove> [...]   # long-running work with its own goal, guidance and journal; `jarvis ask --project NAME ...`
        jarvis digest [HOURS] [--json]   # what JARVIS did while you were away: runs, outcomes, project decisions, failures, tokens
@@ -327,6 +329,20 @@ async fn contacts_command(arguments: &[String]) -> ExitStatus {
         Err(status) => return status,
     };
     contacts::run_contacts(&client, arguments).await
+}
+
+/// Runs one `jarvis mcp` verb over the daemon API.
+async fn mcp_command(arguments: &[String]) -> ExitStatus {
+    let root = match requested_root(arguments) {
+        Ok(Some(root)) => vec!["--root".to_owned(), root.display().to_string()],
+        Ok(None) => Vec::new(),
+        Err(status) => return status,
+    };
+    let client = match run_client(&root) {
+        Ok(client) => client,
+        Err(status) => return status,
+    };
+    mcp::run_mcp(&client, arguments).await
 }
 
 /// Runs `jarvis push test` over the daemon API.

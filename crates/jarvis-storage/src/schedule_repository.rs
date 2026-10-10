@@ -14,7 +14,9 @@
 //! The next fire is computed from **now** (`Cadence::next_after`), never from the time that was due, so a machine
 //! that slept through ten fires owes one, not ten.
 
-use jarvis_core::{Cadence, MAX_SCHEDULES_PER_WORKSPACE, ScheduleId, UtcTimestamp};
+use jarvis_core::{
+    Cadence, MAX_SCHEDULES_PER_WORKSPACE, ScheduleId, UtcTimestamp, WallClock, Weekdays,
+};
 use sqlx::Row;
 
 use crate::database::{DatabaseError, SqliteDatabase};
@@ -57,8 +59,8 @@ impl StoredSchedule {
 
     /// When and how often it fires.
     #[must_use]
-    pub const fn cadence(&self) -> Cadence {
-        self.cadence
+    pub fn cadence(&self) -> &Cadence {
+        &self.cadence
     }
 
     /// Whether it is active; a paused or finished task never fires.
@@ -114,8 +116,8 @@ impl StoredSchedule {
 /// as a possible injection, and a constant list is exactly what it is safe to splice.
 macro_rules! columns {
     () => {
-        "id, workspace_id, objective, cadence, interval_seconds, enabled, next_run_nanos, \
-         session_id, last_run_id, last_fired_at, fire_count, skipped_count, created_at"
+        "id, workspace_id, objective, cadence, interval_seconds, minute_of_day, weekdays, time_zone, enabled, \
+         next_run_nanos, session_id, last_run_id, last_fired_at, fire_count, skipped_count, created_at"
     };
 }
 
@@ -145,21 +147,37 @@ pub async fn create_schedule(
     }
 
     let id = ScheduleId::new().to_string();
-    let (kind, interval) = match cadence {
-        Cadence::Every(seconds) => ("every", Some(i64::try_from(seconds).unwrap_or(i64::MAX))),
-        Cadence::Once(_) => ("once", None),
+    let (kind, interval, minute, weekdays, zone) = match &cadence {
+        Cadence::Every(seconds) => (
+            "every",
+            Some(i64::try_from(*seconds).unwrap_or(i64::MAX)),
+            None,
+            None,
+            None,
+        ),
+        Cadence::Once(_) => ("once", None, None, None, None),
+        Cadence::Daily(clock) => (
+            "daily",
+            None,
+            Some(i64::from(clock.minute_of_day())),
+            Some(i64::from(clock.days().bits())),
+            Some(clock.zone().to_owned()),
+        ),
     };
     let first = cadence.first_fire(now);
     sqlx::query(
-        "INSERT INTO schedules (id, workspace_id, objective, cadence, interval_seconds, enabled, \
-            next_run_nanos, fire_count, skipped_count, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, 0, 0, ?7)",
+        "INSERT INTO schedules (id, workspace_id, objective, cadence, interval_seconds, minute_of_day, \
+            weekdays, time_zone, enabled, next_run_nanos, fire_count, skipped_count, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, 0, 0, ?10)",
     )
     .bind(&id)
     .bind(workspace_id)
     .bind(objective)
     .bind(kind)
     .bind(interval)
+    .bind(minute)
+    .bind(weekdays)
+    .bind(zone)
     .bind(nanos_to_i64(first))
     .bind(now.to_string())
     .execute(database.pool())
@@ -266,13 +284,13 @@ pub async fn set_schedule_enabled(
 ) -> Result<StoredSchedule, DatabaseError> {
     let current = find_schedule(database, workspace_id, id).await?;
     if enabled && !current.enabled {
-        let next = match current.cadence {
-            Cadence::Every(_) => current.cadence.first_fire(now),
+        let next = match &current.cadence {
+            Cadence::Every(_) | Cadence::Daily(_) => current.cadence.first_fire(now),
             Cadence::Once(at) => {
-                if current.fire_count > 0 || at <= now {
+                if current.fire_count > 0 || *at <= now {
                     return Err(DatabaseError::ScheduleFinished);
                 }
-                at
+                *at
             }
         };
         sqlx::query("UPDATE schedules SET enabled = 1, next_run_nanos = ?3 WHERE id = ?1 AND workspace_id = ?2")
@@ -411,6 +429,29 @@ fn nanos_to_i64(value: UtcTimestamp) -> i64 {
     i64::try_from(value.unix_nanos()).unwrap_or(i64::MAX)
 }
 
+fn decode_wall_clock(row: &sqlx::sqlite::SqliteRow) -> Result<WallClock, DatabaseError> {
+    let invalid = |field: &'static str| DatabaseError::StoredScheduleInvalid { field };
+    let minute = row
+        .try_get::<Option<i64>, _>("minute_of_day")
+        .ok()
+        .flatten()
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or_else(|| invalid("minute_of_day"))?;
+    let days = row
+        .try_get::<Option<i64>, _>("weekdays")
+        .ok()
+        .flatten()
+        .and_then(|value| u8::try_from(value).ok())
+        .and_then(|bits| Weekdays::from_bits(bits).ok())
+        .ok_or_else(|| invalid("weekdays"))?;
+    let zone = row
+        .try_get::<Option<String>, _>("time_zone")
+        .ok()
+        .flatten()
+        .ok_or_else(|| invalid("time_zone"))?;
+    WallClock::from_parts(minute, days, &zone).map_err(|_| invalid("time_zone"))
+}
+
 fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<StoredSchedule, DatabaseError> {
     let text = |field: &'static str| -> Result<String, DatabaseError> {
         row.try_get::<String, _>(field)
@@ -443,6 +484,7 @@ fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<StoredSchedule, DatabaseError
             })?,
         // A one-off's instant is its next fire; once fired it is disabled, and the instant stays as history.
         ("once", None) => Cadence::Once(next_run),
+        ("daily", None) => Cadence::Daily(decode_wall_clock(row)?),
         _ => return Err(DatabaseError::StoredScheduleInvalid { field: "cadence" }),
     };
     let timestamp = |value: &str, field: &'static str| {

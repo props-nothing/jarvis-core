@@ -725,14 +725,9 @@ impl Config {
         if self.daemon.mcp_serve_port == Some(0) {
             return Err(ConfigError::InvalidMcpServePort);
         }
-        // An MCP endpoint with nothing to serve is refused at startup rather than left to answer every
-        // request with an empty catalogue. `served_tools` already refuses an empty surface, so this is the
-        // **configuration-time** form of the same decision: an operator who enabled the endpoint without
-        // granting roots or configuring a server would otherwise get a daemon that reports itself ready
-        // with a port that cannot answer anything.
-        if self.daemon.mcp_serve_port.is_some() && self.daemon.tool_workspace_roots.is_empty() {
-            return Err(ConfigError::McpServeWithoutTools);
-        }
+        // (This used to refuse an MCP endpoint with no granted folders, on the assumption that folders were the only tools. JARVIS
+        // always has tools of its own (memory, projects, schedules, delegation), so a port with no folders serves them, and
+        // `served_tools` still refuses a truly empty surface at start. `ADR-0170`.)
         // The live-provider settings are grouped: they are meaningful together and each is meaningless
         // alone. Three cases are refused rather than tolerated, because each would otherwise be a daemon
         // that started and then failed — or worse, quietly drove nothing:
@@ -1152,15 +1147,6 @@ pub enum ConfigError {
     InvalidMcpServePort,
     /// The MCP endpoint was enabled with no tool that could be served.
     ///
-    /// Refused at startup rather than left to answer every request with an empty catalogue. `served_tools`
-    /// refuses an empty surface already, so this is the configuration-time form of the same decision: an
-    /// operator who enabled the endpoint without granting roots would otherwise get a daemon that reports
-    /// itself ready with a port that can answer nothing.
-    #[error(
-        "daemon.mcp_serve_port requires a tool to serve: set daemon.tool_workspace_roots or configure \
-         an MCP server"
-    )]
-    McpServeWithoutTools,
     /// A live provider implementation was selected without its coordinates.
     ///
     /// Refused at startup rather than left to fail on the first run: an operator who selected the live

@@ -39,7 +39,7 @@
 use std::path::PathBuf;
 
 use jarvis_mcp::ServerName;
-use jarvis_mcp_transport::{StdioCommand, ToolBuffer, connect_stdio};
+use jarvis_mcp_transport::{CallError, StdioCommand, ToolBuffer, connect_stdio};
 
 /// Environment variable that turns a missing-fixture skip into a failure.
 ///
@@ -261,4 +261,79 @@ async fn each_call_carries_the_name_it_was_given() {
     );
 
     let _ = connection.close().await;
+}
+
+/// **A server that crashed mid-call is started again for the next call.** The crashing call itself is
+/// ambiguous (the request may have been received), and the one after it must work without the daemon
+/// being restarted.
+#[tokio::test]
+async fn a_crashed_server_is_started_again_for_the_next_call() {
+    let Some(_) = fixture_binary_or_skip() else {
+        return;
+    };
+    let command = fixture_command(&["--crash-on", "crash"]);
+    let connection = connect_stdio(&server("fixture"), &command)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let arguments = serde_json::Map::new();
+
+    let before = connection
+        .call_tool("search", &arguments)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(before.text, "search ran");
+
+    let crashed = connection.call_tool("crash", &arguments).await;
+    assert!(
+        matches!(crashed, Err(CallError::Unavailable(_))),
+        "a call that died in flight is ambiguous, not not-sent: {crashed:?}"
+    );
+
+    let after = connection
+        .call_tool("search", &arguments)
+        .await
+        .unwrap_or_else(|error| panic!("the next call must restart the server: {error}"));
+    assert_eq!(after.text, "search ran");
+
+    let _ = connection.close().await;
+}
+
+/// **A server that will not start again is reported as not sent, and is not hammered.** Nothing was
+/// transmitted, so the call is safe to retry; and a second call right after must not spawn it again.
+#[tokio::test]
+async fn a_server_that_will_not_restart_reports_not_sent_and_backs_off() {
+    let Some(_) = fixture_binary_or_skip() else {
+        return;
+    };
+    let marker = std::env::temp_dir().join(format!("jarvis-once-{}", jarvis_core::scratch_tag()));
+    let marker_text = marker.to_string_lossy().into_owned();
+    let command = fixture_command(&["--crash-on", "crash", "--once", &marker_text]);
+    let connection = connect_stdio(&server("fixture"), &command)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let arguments = serde_json::Map::new();
+
+    let crashed = connection.call_tool("crash", &arguments).await;
+    assert!(crashed.is_err());
+
+    let first = connection.call_tool("search", &arguments).await;
+    let second_started = std::time::Instant::now();
+    let second = connection.call_tool("search", &arguments).await;
+    let _ = std::fs::remove_file(&marker);
+
+    assert!(
+        matches!(first, Err(CallError::NotSent(_))),
+        "a server that cannot start means nothing was sent: {first:?}"
+    );
+    match second {
+        Err(CallError::NotSent(reason)) => assert!(
+            reason.contains("did not restart a moment ago"),
+            "the second attempt is the backoff, not another spawn: {reason}"
+        ),
+        other => panic!("expected the backoff to refuse: {other:?}"),
+    }
+    assert!(
+        second_started.elapsed() < std::time::Duration::from_secs(5),
+        "the backoff answers at once"
+    );
 }

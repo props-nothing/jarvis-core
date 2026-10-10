@@ -17,9 +17,10 @@ window.JarvisSettings = function (context) {
       ["search", "Web search", "Lets JARVIS search the web for you. Uses an Ollama key (a free ollama.com account makes one)."],
       ["voice", "Voice", "How JARVIS sounds. Without a voice key it speaks with your browser's own voice."],
       ["files", "Folders & code", "What JARVIS may touch. Both are off until you turn them on, so nothing is reachable by accident."],
+      ["connect", "Connect apps", "Let your other AI apps (Claude Code, Cursor, VS Code, your own scripts) hand JARVIS a task. They connect with a key only you have."],
       ["permissions", "Permissions", "For each tool: let the rules decide, always ask, run without asking, or switch it off."],
       ["google", "Google", "Sign in with your Google account so JARVIS can read your mail and calendar. Reading is on by default. Sending mail and adding events need the option below and ask you every time; drafts are saved without asking."],
-      ["advanced", "Advanced", "Ports. The defaults are right for almost everyone."]
+      ["advanced", "Advanced", "Ports and other technical settings. The defaults are right for almost everyone. Letting other apps use JARVIS is under Connect apps."]
     ];
     var sview = { reply: null, tools: [], tab: "brain" };
     function settingsNote(text, bad) {
@@ -61,7 +62,7 @@ window.JarvisSettings = function (context) {
       "daemon.executor_model_name": "Model", "daemon.executor_base_url": "Model server", "daemon.executor_reasoning_effort": "Thinking effort",
       "daemon.tool_workspace_roots": "Folders", "daemon.code_sandbox_image": "Sandbox image", "daemon.code_sandbox_interpreter": "Interpreter",
       "daemon.speech_voice_id": "Voice", "daemon.speech_model": "Voice model", "daemon.http_port": "Console port",
-      "daemon.mcp_serve_port": "MCP port", "daemon.notifications": "Notifications", "daemon.google_client_id": "Client ID",
+      "daemon.mcp_serve_port": "Let other apps use JARVIS (port)", "daemon.notifications": "Notifications", "daemon.google_client_id": "Client ID",
       "daemon.google_actions": "Send mail & events", "policy.trust": "Runs without asking"
     };
     function settingRow(setting, label) {
@@ -404,7 +405,7 @@ window.JarvisSettings = function (context) {
         into.appendChild(familyLabel(group));
         group.tools.forEach(function (tool) { into.appendChild(permissionRow(tool, postures)); });
       });
-      into.appendChild(el("p", "lead", "Anything that talks to other people always asks, and nothing runs above the workspace ceiling, whatever is chosen here."));
+      into.appendChild(el("p", "lead", "Every tool is yours to set. Tools that send things to other people ask by default, and choosing \u201CRun without asking\u201D for one of them asks you to confirm once. Nothing runs above the workspace ceiling, whatever is chosen here."));
     }
     function permissionRow(tool, postures) {
       var row = el("div", "perm");
@@ -418,7 +419,16 @@ window.JarvisSettings = function (context) {
         select.appendChild(node);
       });
       select.value = postures[tool.id] || "default";
+      // A saved "run without asking" that the rules still hold must say so, rather than look ignored.
+      if (select.value === "trusted" && tool.asks_first) label.appendChild(el("div", "tid bad", "still asks: a stricter rule applies to it"));
+      var outward = (tool.effects || []).indexOf("external_communication") >= 0;
       select.addEventListener("change", function () {
+        // Letting a tool that reaches other people run unasked is allowed, but it is the one choice worth a second look: a hostile
+        // page or email can try to steer it.
+        if (select.value === "trusted" && outward && !window.confirm("Let \"" + (tool.title || tool.id) + "\" run without asking you?\n\nIt sends things to other people or the web. A hostile page or email could try to make JARVIS use it. You can set it back to \"Always ask first\" at any time.")) {
+          select.value = postures[tool.id] || "default";
+          return;
+        }
         putJson("/settings/tools/" + encodeURIComponent(tool.id), "PUT", { posture: select.value }).then(function (reply) { if (reply && reply.applied) { settingsNote(tool.title + ": saved and applied now."); loadSettings(); } else saved(tool.title + ":"); },
           function (error) { settingsNote(explain(error, "That was refused."), true); loadSettings(); });
       });
@@ -510,6 +520,280 @@ window.JarvisSettings = function (context) {
       }
       loadGoogle();
     }
+    // ---- MCP servers: list what each one became, test one before adding it, add, remove (P11-001) -------------------------
+    // A command is typed on one line and split here into a program and its arguments (quotes keep a path with spaces together).
+    // The daemon resolves the program and checks the whole entry before it writes anything; a change applies on restart.
+    function splitCommand(text) {
+      var parts = [], current = "", quote = "", started = false;
+      for (var i = 0; i < text.length; i++) {
+        var c = text.charAt(i);
+        if (quote) { if (c === quote) quote = ""; else current += c; }
+        else if (c === '"' || c === "'") { quote = c; started = true; }
+        else if (/\s/.test(c)) { if (started || current) { parts.push(current); current = ""; started = false; } }
+        else { current += c; started = true; }
+      }
+      if (started || current) parts.push(current);
+      return parts;
+    }
+    function mcpServerCard(server, reload) {
+      var card = el("div", "card");
+      var head = el("h4", "", server.name + " ");
+      var stateText = server.state === "connected" ? "connected" : server.state === "unreachable" ? "not reachable" : "starts after a restart";
+      head.appendChild(el("span", "badge " + (server.state === "connected" ? "on" : "off"), stateText));
+      card.appendChild(head);
+      var how = server.kind === "http" ? server.endpoint : (server.command || []).join(" ");
+      card.appendChild(el("p", "help", how));
+      if (server.state === "unreachable") card.appendChild(el("p", "help bad", server.reason || "It did not answer."));
+      if (server.state === "connected") {
+        var tools = server.tools || [];
+        card.appendChild(el("p", "lead", tools.length + " tool" + (tools.length === 1 ? "" : "s") + ", "
+          + (server.posture === "read-only" ? "run without asking (you marked it read-only)." : "each call asks you first.")
+          + (server.era ? " Speaks the " + server.era + " protocol." : "")));
+        var list = el("ul", "help");
+        tools.slice(0, 8).forEach(function (tool) { list.appendChild(el("li", "", tool.id + (tool.description ? ": " + tool.description : ""))); });
+        if (tools.length > 8) list.appendChild(el("li", "", "and " + (tools.length - 8) + " more (see Permissions)."));
+        card.appendChild(list);
+        (server.excluded || []).slice(0, 5).forEach(function (left) { card.appendChild(el("p", "help bad", "Left out: " + left.tool + ": " + left.reason)); });
+      }
+      var acts = el("div", "acts");
+      var testButton = el("button", "", "Test");
+      var out = el("span", "help", "");
+      testButton.addEventListener("click", function () {
+        testButton.disabled = true; out.className = "help"; out.textContent = "Connecting (a first start with npx may download the program)...";
+        putJson("/mcp/test", "POST", { name: server.name, command: server.command || [], endpoint: server.endpoint || null, read_only: server.posture === "read-only" }).then(function (reply) {
+          testButton.disabled = false;
+          out.className = reply.ok ? "help" : "help bad";
+          out.textContent = reply.ok ? "Reached it: " + (reply.tools || []).length + " tools." : (reply.message || "No answer.");
+        }, function (error) { testButton.disabled = false; out.className = "help bad"; out.textContent = explain(error, "The test failed."); });
+      });
+      var remove = el("button", "danger", "Remove");
+      remove.addEventListener("click", function () {
+        remove.disabled = true;
+        putJson("/mcp/servers/" + encodeURIComponent(server.name), "DELETE").then(function () {
+          settingsNote(server.name + " removed. Restart to apply."); $("settings-restart").className = "hot"; reload();
+        }, function (error) { settingsNote(explain(error, "Could not remove it."), true); remove.disabled = false; });
+      });
+      acts.appendChild(testButton); acts.appendChild(remove); acts.appendChild(out);
+      card.appendChild(acts);
+      return card;
+    }
+    function mcpAddForm(reload) {
+      var card = el("div", "card");
+      card.appendChild(el("h4", "", "Add a tool program"));
+      card.appendChild(el("p", "help", "Type the command that starts it, for example: npx -y @modelcontextprotocol/server-filesystem C:\\Users\\you\\Documents. For a remote server, type its https address instead."));
+      var name = el("input"); name.placeholder = "A short name, for example files"; name.autocomplete = "off";
+      var command = el("input"); command.placeholder = "Command or https address"; command.autocomplete = "off";
+      var only = el("input"); only.type = "checkbox";
+      var label = el("label", "help", " It only reads: let its tools run without asking.");
+      label.insertBefore(only, label.firstChild);
+      var out = el("p", "help", "");
+      var acts = el("div", "acts");
+      var test = el("button", "", "Test");
+      var add = el("button", "yes", "Add");
+      function body() {
+        var text = command.value.trim();
+        var remote = /^https?:\/\//i.test(text);
+        return { name: name.value.trim(), command: remote ? [] : splitCommand(text), endpoint: remote ? text : null, read_only: only.checked };
+      }
+      test.addEventListener("click", function () {
+        test.disabled = true; out.className = "help"; out.textContent = "Connecting (a first start with npx may download the program)...";
+        putJson("/mcp/test", "POST", body()).then(function (reply) {
+          test.disabled = false;
+          if (!reply.ok) { out.className = "help bad"; out.textContent = reply.message || "No answer."; return; }
+          out.className = "help";
+          out.textContent = "Reached it: " + (reply.tools || []).length + " tools ("
+            + (reply.tools || []).slice(0, 4).map(function (tool) { return tool.id; }).join(", ") + ((reply.tools || []).length > 4 ? ", ..." : "") + ")."
+            + ((reply.excluded || []).length ? " " + reply.excluded.length + " left out." : "");
+        }, function (error) { test.disabled = false; out.className = "help bad"; out.textContent = explain(error, "The test failed."); });
+      });
+      add.addEventListener("click", function () {
+        add.disabled = true;
+        putJson("/mcp/servers", "POST", body()).then(function () {
+          settingsNote("Server added. Restart to apply."); $("settings-restart").className = "hot"; name.value = ""; command.value = ""; only.checked = false; add.disabled = false; reload();
+        }, function (error) { add.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That was refused."); });
+      });
+      acts.appendChild(test); acts.appendChild(add);
+      [name, command, label, acts, out].forEach(function (node) { card.appendChild(node); });
+      return card;
+    }
+    // Programs a developer adds by hand. The browser and documentation lookup are ordinary tools that come with JARVIS (they are
+    // listed and controlled under Permissions like every other tool), so this is the only MCP-specific screen, and it lives in Advanced.
+    function programsPanel(body) {
+      var holder = el("div");
+      body.appendChild(holder);
+      function reload() {
+        api("/mcp").then(function (reply) {
+          holder.replaceChildren();
+          var builtIn = (reply.abilities || []).map(function (a) { return a.id; });
+          var custom = (reply.servers || []).filter(function (server) { return builtIn.indexOf(server.name) < 0; });
+          var more = el("details");
+          more.appendChild(el("summary", "", "Add your own tool program (for developers)"));
+          more.appendChild(el("p", "help", "JARVIS can use any program that speaks MCP. Adding one runs that program as you, so only add programs you trust. Its tools ask before every call. A change applies after a restart."));
+          custom.forEach(function (server) { more.appendChild(mcpServerCard(server, reload)); });
+          more.appendChild(mcpAddForm(reload));
+          if (custom.length || reply.restart_needed) more.open = true;
+          holder.appendChild(more);
+          if (reply.restart_needed) {
+            var banner = el("div", "card");
+            banner.appendChild(el("p", "lead", "A restart switches your changes on."));
+            var go = el("button", "yes", "Restart now");
+            go.addEventListener("click", function () { go.disabled = true; $("settings-restart").click(); });
+            banner.appendChild(go);
+            holder.appendChild(banner);
+          }
+        }, function () { holder.replaceChildren(); });
+      }
+      reload();
+    }    // Connect apps: let other AI apps (Claude Code, Cursor, VS Code, a script) hand JARVIS a task. One switch, one key, copy-paste lines.
+    // The key is the owner's own to copy, so it is shown here (and only here); a new key stops the old one at once.
+    function copyButton(getText, label) {
+      var button = el("button", "", label || "Copy");
+      button.addEventListener("click", function () {
+        var text = getText();
+        var done = function () { button.textContent = "Copied"; setTimeout(function () { button.textContent = label || "Copy"; }, 1500); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { button.textContent = "Select and copy by hand"; });
+        else button.textContent = "Select and copy by hand";
+      });
+      return button;
+    }
+    function snippetBox(title, getText) {
+      var wrap = el("div");
+      wrap.appendChild(el("p", "help", title));
+      var box = el("textarea"); box.readOnly = true; box.rows = 4; box.value = getText(); box.spellcheck = false;
+      box.addEventListener("focus", function () { box.select(); });
+      wrap.appendChild(box);
+      var acts = el("div", "acts"); acts.appendChild(copyButton(function () { return box.value; })); wrap.appendChild(acts);
+      return { node: wrap, refresh: function () { box.value = getText(); } };
+    }
+    // The internet address: a free Cloudflare quick tunnel that JARVIS starts and stops. Cloud agents (a phone agent, a hosted assistant) connect
+    // from the provider's servers, so they cannot reach an address that only works on this computer. The key is still required on every request.
+    function publicCard(info, current, reload) {
+      var pub = info.public || {};
+      var status = pub.status || { state: "off" };
+      var card = el("div", "card");
+      var head = el("h4", "", "From the internet ");
+      var badge = status.state === "on" ? "on" : status.state === "problem" ? "problem" : status.state === "getting" ? "downloading" : status.state === "starting" ? "starting" : "off";
+      head.appendChild(el("span", "badge " + (status.state === "on" ? "on" : "off"), badge));
+      card.appendChild(head);
+      card.appendChild(el("p", "lead", "For apps that run in the cloud, such as a phone agent (ElevenLabs) or a hosted assistant. JARVIS opens a free, private-looking web address that leads to this endpoint. Every request still needs your key."));
+      var out = el("p", "help", "");
+      var acts = el("div", "acts");
+      function busy(button) { button.disabled = true; }
+      if (status.state === "off" || status.state === "problem") {
+        if (status.state === "problem") card.appendChild(el("p", "help bad", status.reason || "It could not start."));
+        var on = el("button", "yes", status.state === "problem" ? "Try again" : "Make it reachable");
+        if (!pub.available) { on.disabled = true; out.className = "help bad"; out.textContent = "This computer needs Cloudflare's free cloudflared program: install it (macOS: brew install cloudflared), then come back."; }
+        on.addEventListener("click", function () {
+          busy(on);
+          putJson("/mcp/access/public", "POST", { enabled: true }).then(function () { reload(); },
+            function (error) { on.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That could not be started."); });
+        });
+        acts.appendChild(on);
+        if (status.state === "problem" && pub.wanted) {
+          var off = el("button", "", "Stop");
+          off.addEventListener("click", function () { putJson("/mcp/access/public", "POST", { enabled: false }).then(function () { reload(); }); });
+          acts.appendChild(off);
+        }
+        if (pub.download_megabytes) card.appendChild(el("p", "help", "JARVIS will download Cloudflare's cloudflared once (about " + pub.download_megabytes + " MB), checked against a fixed checksum."));
+      } else {
+        var stop = el("button", "", "Stop");
+        stop.addEventListener("click", function () {
+          busy(stop);
+          putJson("/mcp/access/public", "POST", { enabled: false }).then(function () { reload(); },
+            function (error) { stop.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That could not be stopped."); });
+        });
+        acts.appendChild(stop);
+      }
+      card.appendChild(acts);
+      card.appendChild(out);
+      if (status.state === "getting") card.appendChild(el("p", "help", "Downloading the program. This happens once."));
+      if (status.state === "starting") card.appendChild(el("p", "help", "Starting. The address appears in a few seconds."));
+      if (status.state === "on" && pub.url) {
+        card.appendChild(el("p", "help", "Server URL"));
+        var row = el("div", "acts"); row.appendChild(el("code", "", pub.url)); row.appendChild(copyButton(function () { return pub.url; })); card.appendChild(row);
+        card.appendChild(el("p", "help", "In ElevenLabs: Agents, Integrations, Add custom MCP server. Server URL: the address above. Secret token: your key (shown above). Then attach it to your agent. Other cloud apps take the same two values."));
+        card.appendChild(el("p", "help", "The address changes every time JARVIS starts, so paste the new one into the app after a restart. Anyone with the address and the key can ask JARVIS to work for them, so keep both private."));
+      }
+      if (status.state === "getting" || status.state === "starting") {
+        setTimeout(function () { if (!$("settings").hidden && sview.tab === "connect") reload(); }, 2000);
+      }
+      return card;
+    }
+    function connectPanel(body) {
+      var holder = el("div");
+      body.appendChild(holder);
+      function reload() {
+        api("/mcp/access").then(function (info) {
+          holder.replaceChildren();
+          var card = el("div", "card");
+          var head = el("h4", "", "Let other apps use JARVIS ");
+          head.appendChild(el("span", "badge " + (info.running ? "on" : "off"), info.running ? "on" : info.enabled ? "on after restart" : "off"));
+          card.appendChild(head);
+          card.appendChild(el("p", "lead", info.enabled
+            ? "Other AI apps on this computer can hand JARVIS a task and use its tools, if they have the key below."
+            : "Off. Nothing outside JARVIS can reach it. Switch it on to let your other AI apps hand JARVIS tasks."));
+          var acts = el("div", "acts");
+          var toggle = el("button", info.enabled ? "" : "yes", info.enabled ? "Switch off" : "Switch on");
+          toggle.addEventListener("click", function () {
+            toggle.disabled = true;
+            putJson("/mcp/access", "POST", { enabled: !info.enabled }).then(function () { $("settings-restart").className = "hot"; reload(); },
+              function (error) { toggle.disabled = false; settingsNote(explain(error, "That could not be changed."), true); });
+          });
+          acts.appendChild(toggle);
+          card.appendChild(acts);
+          holder.appendChild(card);
+          if (info.restart_needed) {
+            var banner = el("div", "card");
+            banner.appendChild(el("p", "lead", "One restart switches this on or off."));
+            var go = el("button", "yes", "Restart now");
+            go.addEventListener("click", function () { go.disabled = true; $("settings-restart").click(); });
+            banner.appendChild(go);
+            holder.appendChild(banner);
+          }
+          if (!info.enabled || !info.key) return;
+          var current = { key: info.key, shown: false };
+          var url = info.address;
+          var access = el("div", "card");
+          access.appendChild(el("h4", "", "How to connect"));
+          access.appendChild(el("p", "help", "Address"));
+          var addressRow = el("div", "acts"); var addressText = el("code", "", url); addressRow.appendChild(addressText); addressRow.appendChild(copyButton(function () { return url; })); access.appendChild(addressRow);
+          access.appendChild(el("p", "help", "Key (keep it secret: anyone with it can ask JARVIS to work for them)"));
+          var keyRow = el("div", "acts"); var keyText = el("code", "", "") ;
+          function paintKey() { keyText.textContent = current.shown ? current.key : "\u2022".repeat(24); }
+          paintKey();
+          var show = el("button", "", "Show"); show.addEventListener("click", function () { current.shown = !current.shown; show.textContent = current.shown ? "Hide" : "Show"; paintKey(); });
+          keyRow.appendChild(keyText); keyRow.appendChild(show); keyRow.appendChild(copyButton(function () { return current.key; }));
+          access.appendChild(keyRow);
+          var boxes = [
+            snippetBox("Claude Code: paste this in a terminal", function () { return "claude mcp add --transport http jarvis " + url + " --header \"Authorization: Bearer " + current.key + "\""; }),
+            snippetBox("Cursor: add this to your MCP settings (mcp.json)", function () { return JSON.stringify({ mcpServers: { jarvis: { url: url, headers: { Authorization: "Bearer " + current.key } } } }, null, 2); }),
+            snippetBox("VS Code: add this to mcp.json", function () { return JSON.stringify({ servers: { jarvis: { type: "http", url: url, headers: { Authorization: "Bearer " + current.key } } } }, null, 2); })
+          ];
+          boxes.forEach(function (box) { access.appendChild(box.node); });
+          var renew = el("button", "danger", "Make a new key");
+          var renewNote = el("span", "help", "");
+          renew.addEventListener("click", function () {
+            if (!window.confirm("Make a new key? Apps using the old key stop working until you give them the new one.")) return;
+            renew.disabled = true;
+            putJson("/mcp/access/key", "POST").then(function (reply) {
+              current.key = reply.key; paintKey(); boxes.forEach(function (box) { box.refresh(); }); renew.disabled = false;
+              renewNote.textContent = "New key made. The old one no longer works.";
+            }, function (error) { renew.disabled = false; renewNote.className = "help bad"; renewNote.textContent = explain(error, "That could not be done."); });
+          });
+          var renewRow = el("div", "acts"); renewRow.appendChild(renew); renewRow.appendChild(renewNote); access.appendChild(renewRow);
+          holder.appendChild(access);
+          holder.appendChild(publicCard(info, current, reload));
+          var safe = el("div", "card");
+          safe.appendChild(el("h4", "", "What connected apps can and cannot do"));
+          ["They can hand JARVIS a task and read the answer, and see and use JARVIS's tools that run without asking (memory, projects, files you allowed, reading web pages, documentation lookup).",
+           "Anything that would ask you (clicking or typing in the browser, sending mail, changing your schedule, running commands) waits for your answer, which appears with your other approvals like any other question. They wait up to two minutes, then the call is refused. They cannot approve things themselves.",
+           "Only this computer can connect, unless you switch on the internet address above.",
+           "Tasks they hand JARVIS appear in your runs. A single tool they call directly follows the same rules as your own requests but is not yet recorded in your history."].forEach(function (text) { safe.appendChild(el("p", "help", text)); });
+          holder.appendChild(safe);
+        }, function () { holder.replaceChildren(); holder.appendChild(el("p", "help bad", "This is not available on this daemon.")); });
+      }
+      reload();
+    }
     function renderSettings() {
       var tabs = $("settings-tabs"), body = $("settings-body");
       tabs.replaceChildren();
@@ -539,12 +823,15 @@ window.JarvisSettings = function (context) {
       } else if (sview.tab === "files") {
         inGroup("files").filter(function (s) { return !/code_sandbox/.test(s.key); }).forEach(function (s) { body.appendChild(settingRow(s, "folders")); });
         if (byKey("daemon.code_sandbox_image")) body.appendChild(codeCard());
+      } else if (sview.tab === "connect") {
+        connectPanel(body);
       } else if (sview.tab === "permissions") {
         permissionsPanel(body);
       } else if (sview.tab === "google") {
         googlePanel(body);
       } else {
-        inGroup("advanced").forEach(function (s) { body.appendChild(settingRow(s)); });
+        inGroup("advanced").filter(function (s) { return s.key !== "daemon.mcp_serve_port"; }).forEach(function (s) { body.appendChild(settingRow(s)); });
+        programsPanel(body);
       }
     }
     function loadSettings() {

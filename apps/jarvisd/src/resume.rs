@@ -26,10 +26,38 @@ look at what this conversation and your tools show was already done (files writt
 it, least of all anything that sends or changes something outside this computer. Then finish the request:\n\n";
 
 /// The objective for a continuation of `original`, kept within the objective limit.
-fn continuation_objective(original: &str) -> String {
-    let room = jarvis_storage::MAX_OBJECTIVE_CHARS.saturating_sub(RESUME_NOTICE.chars().count());
+///
+/// `uncertain` names the tools whose calls were running when the daemon stopped and **may or may not have happened**: the model is told so
+/// by name, so it checks (a sent message, a written file) before doing any of them again instead of guessing.
+fn continuation_objective(original: &str, uncertain: &[String]) -> String {
+    use std::fmt::Write as _;
+    let mut notice = RESUME_NOTICE.to_owned();
+    if !uncertain.is_empty() {
+        let _ = write!(
+            notice,
+            "These calls were running when the daemon stopped, and it is NOT known whether they happened: {}. Check before repeating any of them.\n\n",
+            uncertain.join(", ")
+        );
+    }
+    let room = jarvis_storage::MAX_OBJECTIVE_CHARS.saturating_sub(notice.chars().count());
     let kept: String = original.chars().take(room).collect();
-    format!("{RESUME_NOTICE}{kept}")
+    format!("{notice}{kept}")
+}
+
+/// The tools of an interrupted run whose calls ended as unknown, each named once, in the order they were called.
+async fn uncertain_calls(state: &GatewayState, run_id: &str) -> Vec<String> {
+    let Ok(calls) = jarvis_storage::read_run_tool_calls(state.database(), run_id).await else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for call in calls {
+        if call.outcome() == jarvis_core::ToolOutcome::Unknown
+            && !names.iter().any(|name| name == call.tool())
+        {
+            names.push(call.tool().to_owned());
+        }
+    }
+    names
 }
 
 /// Whether the owner allows continuations (on unless `daemon.resume_interrupted` is off).
@@ -67,8 +95,9 @@ pub(crate) async fn continue_interrupted(state: &GatewayState, settled: &[String
     };
     let mut started = 0;
     for run in candidates {
+        let uncertain = uncertain_calls(state, &run.run_id).await;
         let request = StartRunRequest {
-            objective: continuation_objective(&run.objective),
+            objective: continuation_objective(&run.objective, &uncertain),
             session_id: Some(run.session_id),
             idempotency_key: None,
             project_id: None,
@@ -96,9 +125,30 @@ mod tests {
 
     #[test]
     fn a_continuation_names_the_original_and_stays_within_the_limit() {
-        let short = continuation_objective("write the report");
+        let short = continuation_objective("write the report", &[]);
         assert!(short.starts_with(RESUME_NOTICE) && short.ends_with("write the report"));
-        let long = continuation_objective(&"x".repeat(10_000));
+        let long = continuation_objective(&"x".repeat(10_000), &["jarvis.gmail.send".to_owned()]);
         assert!(long.chars().count() <= jarvis_storage::MAX_OBJECTIVE_CHARS);
+    }
+
+    /// The model is told by name which calls may or may not have happened, and only when there are any.
+    #[test]
+    fn a_continuation_names_the_calls_whose_effect_is_not_known() {
+        let plain = continuation_objective("send the report", &[]);
+        assert!(!plain.contains("NOT known"));
+        let told = continuation_objective(
+            "send the report",
+            &[
+                "jarvis.gmail.send".to_owned(),
+                "jarvis.memory.forget".to_owned(),
+            ],
+        );
+        assert!(told.starts_with(RESUME_NOTICE));
+        assert!(
+            told.contains(
+                "NOT known whether they happened: jarvis.gmail.send, jarvis.memory.forget"
+            )
+        );
+        assert!(told.ends_with("send the report"));
     }
 }

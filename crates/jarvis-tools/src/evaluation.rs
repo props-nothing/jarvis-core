@@ -109,8 +109,12 @@ impl ActorAuthority {
     }
 }
 
-/// Tools whose every call needs the owner's own yes, whatever the trust list says (`ADR-0155`).
-pub const NEVER_TRUSTED_TOOLS: &[&str] = &[
+/// Tools that write standing instructions or change the owner's memory (`ADR-0155`, amended by `ADR-0177`).
+///
+/// They ask by default and the console never offers "Always allow" for them on an approval card, so trusting one takes a deliberate choice in
+/// Permissions. The owner **may** make that choice: it is theirs to make, and a setting that is accepted and ignored is worse than a risk
+/// they have been told about.
+pub const STANDING_POLICY_TOOLS: &[&str] = &[
     "jarvis.project.create",
     "jarvis.project.update",
     "jarvis.project.assign_schedule",
@@ -219,19 +223,16 @@ impl WorkspacePolicy {
     ///   owner's advance decision stands in for;
     /// - it does **not** waive the `max_risk` ceiling, a denial, the actor's scopes, or the
     ///   external-communication rule — each is evaluated as before;
-    /// - it is **never** consulted for a tool with an external-communication effect, so trusting a mail-sending
-    ///   tool changes nothing;
+    /// - it **does** release a tool with an external-communication effect when the owner trusts it by name (`ADR-0178`): see
+    ///   [`Self::external_rule_applies`];
     /// - a later denial or approval override for the same tool **wins**: tightening outranks trust, whichever
     ///   order the two were declared in.
     ///
-    /// - it is **never** applied to the tools in [`NEVER_TRUSTED_TOOLS`]: they write text that later runs receive as standing
-    ///   policy (a project's guidance) or change what the owner remembers, so a yes to each one is the control, and a blanket
-    ///   "always" would let a prompt-injected model plant it silently.
+    /// - it **is** applied to the tools in [`STANDING_POLICY_TOOLS`] when the owner chooses it for them by name: they write text later
+    ///   runs receive as standing policy or change what the owner remembers, so they ask by default and the console offers no one-click
+    ///   "Always allow" for them, but the owner's deliberate choice in Permissions stands (`ADR-0177`).
     #[must_use]
     pub fn trusting(mut self, id: ToolId) -> Self {
-        if NEVER_TRUSTED_TOOLS.contains(&id.to_string().as_str()) {
-            return self;
-        }
         if !self.denied_tools.contains(&id) && !self.approval_tools.contains_key(&id) {
             self.trusted_tools.insert(id);
         }
@@ -302,15 +303,28 @@ impl WorkspacePolicy {
         if self.denies(definition.id()) || !effective.is_runnable() {
             return false;
         }
-        let externally_communicates = definition
-            .effects()
-            .contains(ToolEffect::ExternalCommunication);
+        let externally_communicates = self.external_rule_applies(definition);
         let trusted = self.trusts(definition.id()) && !externally_communicates;
         let by_tool = !trusted && effective == ApprovalPolicy::Ask;
         let by_risk = !trusted && definition.risk() >= self.approval_threshold;
         let by_external =
             self.requires_approval_for_external_communication && externally_communicates;
         by_tool || by_risk || by_external
+    }
+
+    /// Whether the external-communication rule applies to this tool for this owner.
+    ///
+    /// It applies to every tool with the effect, **except** one the owner has trusted by name (`ADR-0175`, `ADR-0178`). The rule is the
+    /// default: a tool that reaches other people asks every time, and a tool nobody has classified is assumed to. The owner's explicit,
+    /// per-tool "run without asking" is the one thing that replaces it, because a setting the screen offers, saves and then ignores is
+    /// worse than the risk the owner has been told about. A tighter choice ("always ask", "off") still outranks trust, and the
+    /// workspace-wide rule for tools the owner has not chosen is unchanged.
+    #[must_use]
+    pub fn external_rule_applies(&self, definition: &ToolDefinition) -> bool {
+        definition
+            .effects()
+            .contains(ToolEffect::ExternalCommunication)
+            && !self.trusts(definition.id())
     }
 
     /// Returns whether an external-communication effect always needs approval.
@@ -769,9 +783,7 @@ pub fn evaluate(request: &PolicyRequest<'_>) -> PolicyDecision {
     //
     //    The owner's standing trust waives the tool declaration and threshold obligations for a tool that does
     //    not communicate externally, and nothing else (`WorkspacePolicy::trusting`).
-    let externally_communicates = definition
-        .effects()
-        .contains(ToolEffect::ExternalCommunication);
+    let externally_communicates = request.workspace.external_rule_applies(definition);
     let trusted = request.workspace.trusts(definition.id()) && !externally_communicates;
     let tool_requires_approval = !trusted && effective_approval == ApprovalPolicy::Ask;
     let risk_requires_approval = !trusted && risk >= request.workspace.approval_threshold();
@@ -1059,28 +1071,86 @@ mod tests {
             );
         }
 
-        // An external-communication effect is never waived: trusting a sender changes nothing.
+        // An external-communication effect is waived only by trusting that tool **by name** (`ADR-0178`): untrusted, a sender is
+        // held; trusted, it runs; trusted and then tightened, it is held again.
         let sending = sender();
-        let trusted_sender = WorkspacePolicy::default().trusting(id("jarvis.mail.send"));
-        let sender_actor = ActorAuthority::active(ScopeSet::single(scope("mail.send")));
+        let sender_actor = || ActorAuthority::active(ScopeSet::single(scope("mail.send")));
         assert!(
-            evaluate(&request(&sending, &trusted_sender, sender_actor)).is_held(),
-            "trust must not release a tool that communicates externally"
+            evaluate(&request(
+                &sending,
+                &WorkspacePolicy::default(),
+                sender_actor()
+            ))
+            .is_held()
         );
+        let trusted_sender = WorkspacePolicy::default().trusting(id("jarvis.mail.send"));
+        assert!(evaluate(&request(&sending, &trusted_sender, sender_actor())).is_allowed());
+        let tightened = trusted_sender.requiring(id("jarvis.mail.send"), ApprovalPolicy::Ask);
+        assert!(evaluate(&request(&sending, &tightened, sender_actor())).is_held());
     }
 
-    /// **The tools that write standing policy or change the owner's memory are never trusted**, whatever the trust list says.
+    /// **Trusting a tool that reaches other people by name releases that tool and no other, third-party or native.**
+    ///
+    /// Falsified by dropping the `trusts` clause: an untrusted tool would run without asking.
     #[test]
-    fn a_trust_list_cannot_waive_the_approval_of_policy_writing_tools() {
-        for tool in NEVER_TRUSTED_TOOLS {
-            let workspace = WorkspacePolicy::default().trusting(id(tool));
-            assert!(!workspace.trusts(&id(tool)), "{tool} must stay asked");
-        }
-        let workspace = WorkspacePolicy::default().trusting(id("jarvis.code.run"));
-        assert!(
-            workspace.trusts(&id("jarvis.code.run")),
-            "other tools can still be trusted"
+    fn trusting_an_outward_tool_by_name_releases_only_that_tool() {
+        let click = tool(
+            "mcp.browser.browser_click",
+            EffectSet::single(ToolEffect::ExternalCommunication),
+            3,
+            ApprovalPolicy::Ask,
+            ScopeSet::single(scope("mcp.call")),
         );
+        let actor = || ActorAuthority::active(ScopeSet::single(scope("mcp.call")));
+        let untrusted = WorkspacePolicy::default();
+        assert!(evaluate(&request(&click, &untrusted, actor())).is_held());
+        assert!(untrusted.asks_first(&click));
+
+        let trusted = WorkspacePolicy::default().trusting(id("mcp.browser.browser_click"));
+        let decision = evaluate(&request(&click, &trusted, actor()));
+        assert!(decision.is_allowed(), "{decision:?}");
+        assert!(
+            !trusted.asks_first(&click),
+            "the screen agrees with the decision"
+        );
+
+        // Trusting a different tool of the same server changes nothing for this one.
+        let other = WorkspacePolicy::default().trusting(id("mcp.browser.browser_type"));
+        assert!(evaluate(&request(&click, &other, actor())).is_held());
+
+        // Trusting the browser's click does not release a native sender.
+        let sending = sender();
+        let sender_actor = ActorAuthority::active(ScopeSet::single(scope("mail.send")));
+        assert!(evaluate(&request(&sending, &trusted, sender_actor)).is_held());
+    }
+
+    /// **The tools that write standing policy or change memory ask by default, and the owner's deliberate choice releases them.**
+    ///
+    /// Falsified by re-adding the refusal in `trusting`: the owner's saved choice would be accepted and ignored.
+    #[test]
+    fn the_owner_can_deliberately_trust_the_policy_writing_tools_and_they_ask_until_then() {
+        for tool in STANDING_POLICY_TOOLS {
+            let definition = tool_named(tool);
+            let untouched = WorkspacePolicy::default();
+            assert!(untouched.asks_first(&definition), "{tool} asks by default");
+            let workspace = WorkspacePolicy::default().trusting(id(tool));
+            assert!(workspace.trusts(&id(tool)), "{tool} can be trusted by name");
+            assert!(!workspace.asks_first(&definition), "{tool} then runs");
+            // A later "always ask" or a denial still outranks the trust.
+            let tightened = workspace.clone().requiring(id(tool), ApprovalPolicy::Ask);
+            assert!(tightened.asks_first(&definition), "{tool}");
+        }
+    }
+
+    /// A native tool of the standing-policy kind, declared the way the daemon declares it: it writes, at risk 2, and asks.
+    fn tool_named(name: &str) -> ToolDefinition {
+        tool(
+            name,
+            EffectSet::single(ToolEffect::Write),
+            2,
+            ApprovalPolicy::Ask,
+            ScopeSet::single(scope("fixture.use")),
+        )
     }
 
     /// **A suspended actor is refused even holding every scope.**

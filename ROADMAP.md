@@ -26,15 +26,22 @@ Measured against the four hallmarks of a real J.A.R.V.I.S.:
 | Voice | Browser-native push-to-talk, wake word, spoken answers, interruption; a neural voice with an ElevenLabs key. | Local (non-cloud) recognition and synthesis, then telephony (`P8`). |
 | Hands-free | A spoken "Jarvis, stop" and a spoken "yes"/"no" for approvals (`ADR-0136`). | Always-on local wake word so it works without the browser tab in front. |
 
-**Order of work from here** (the same list, with detail, is at the top of `TODO.md`):
+**Order of work from here** (the same list, with detail, is at the top of `TODO.md`; the reasoning is `ADR-0167`: open protocols before bespoke code):
 
-1. **Check what is only tested against stand-ins**, with the owner's own accounts: a real OCR run, the fallback at a second provider, the push, a reply sent from another sender (Gmail drafts and the send gate were checked live on 2026-10-10). Nothing new is built; several shipped features have no live evidence yet.
-2. ~~An answer-quality harness (`P9-011`)~~ **built** (`jarvis eval`, `ADR-0166`). Next: the owner's own suites for their real work (prospecting, mail, research), then use it to compare models.
-3. **A browser tool for pages that need JavaScript**, the largest gap in research quality (`P9-069`).
-4. **Model routing**: a cheaper model for sub-agents and background work, now that usage is recorded and a second provider can be configured.
-5. **Coding-agent runtimes** (`P7`, ACP), and delegation as durable workflow steps (`P6-010`, `P7-010`).
-6. **Decide the Google push and watch framework** (`P5-005b`): compose it if event-driven mail is wanted, otherwise retire it. Polling from a schedule is what works.
-7. Local voice and telephony (`P8`); then distribution (`P9-003` to `P9-007`, blocked on a licence choice) and the server profile (`P10`).
+0. **Check what is only tested against stand-ins** with the owner's own accounts (OCR, the second provider, the push, a reply from another sender).
+1. ~~**MCP made real and manageable** (`P11-001`)~~ **built and run live on two real servers** (`ADR-0168`): the door to every tool that already exists as an MCP server. A server that needs a key, and a remote one, are open (`P11-001b`).
+2. **Tool discovery** (`P11-002`): hundreds of tools without a token tax; nothing is removed.
+2b. ~~**Connect apps**~~ **built** (`ADR-0170`): one switch and one key let Claude Code, Cursor, VS Code or a script use JARVIS, including starting a run with `jarvis.agent.delegate`; approvals stay with the owner.
+3. ~~**A browser**~~ **built as a one-click ability** (`P11-001c`, `ADR-0169`): JavaScript pages and acting on the web; a measured hostile-page eval is still owed (`P11-003`).
+4. ~~**Skills the model proposes and the owner approves**~~ delivered (`P11-004`, `ADR-0183`): it learns the owner's procedures.
+5. **Telegram** (`P11-005`): reachable from a phone with no tunnel.
+6. ~~**Time-zone schedules**~~ delivered (`P6-003`, `ADR-0182`): "every weekday at 08:00 Europe/Amsterdam". **Triggers** (`P6-012`) remain: initiative on events.
+7. **Model routing** (`P11-006`), compared with `jarvis eval`.
+8. **Coding agents over ACP** (`P7`): delegate to Claude, Codex, Gemini, Copilot and others in a worktree, reviewed before anything merges.
+9. Setup polish (`P11-007`), a spend guard in the run (`P11-008`), then local voice and calls (`P8`), distribution (`P9-004` to `P9-007`, blocked on a licence choice), and the server profile (`P10`).
+
+Parked until there is a named use: the durable workflow engine, a connector per provider, a runtime adapter per agent framework, ElevenLabs-shaped voice transports, Tauri.
+
 ## Phase 0: Architecture Baseline
 
 **Outcome:** future contributors share one product definition, trust model, repository map, research method, and testable backlog.
@@ -110,11 +117,9 @@ Deliver:
 
 Implement in this order:
 
-1. Google OAuth, Gmail read, Google Calendar read
-2. Microsoft identity, Outlook read, Microsoft Calendar read
-3. GitHub read operations
-4. Draft and write operations behind approval
-5. Generic webhook ingress
+1. Google OAuth, Gmail, Google Calendar, drafts and sends behind approval (built directly in the daemon)
+2. Every other service through MCP servers (Microsoft 365, GitHub, and the rest), managed from Settings (`P11-001`); a native connector only where a named requirement cannot be met that way ([ADR-0167](docs/adr/0167-capability-and-reach-come-from-open-protocols-before-bespoke-code.md))
+3. Generic webhook ingress as a trigger (`P6-012`)
 
 **Exit gate:** setup tests connectivity before saving, refresh is resilient, scopes are visible, revocation works, diagnostics are redacted, and contract/live tests prove the supported operations.
 
@@ -124,14 +129,15 @@ Implement in this order:
 
 Deliver:
 
-- durable event inbox/outbox and deduplication
-- scheduler with timezone and daylight-saving behavior
-- native workflow state machine with leases, retries, waits, parallel steps, cancellation, and compensation metadata
-- skill-candidate and memory-nudge events, and delegation as a step whose effect is starting a child run
-- event-triggered skills and notification routing
-- approval and timer restart recovery
+- scheduler with timezone and daylight-saving behavior (`P6-003`)
+- triggers that start ordinary runs: a time of day, a mail matching a query, a file, a webhook, each deduplicated (`P6-012`)
+- notification routing with quiet hours and a budget (`P6-007`)
+- delegation recorded as a parent and child run (`P6-010`, `P7-009`)
+- approval and timer restart recovery (exists for approvals and schedules)
 
-**Exit gate:** a scheduled workflow pauses for approval, the daemon is killed, and the workflow resumes exactly once after restart.
+The durable workflow engine (event outbox and inbox, step records, compensation) is parked until a process needs to wait days across steps and a run plus a schedule cannot express it.
+
+**Exit gate:** a trigger starts a run exactly once, survives a daemon restart, and a replayed event starts nothing.
 
 ## Phase 7: Runtime Ecosystem
 
@@ -139,15 +145,14 @@ Deliver:
 
 Deliver:
 
-- versioned JARVIS runtime protocol and supervisor
-- capability negotiation, event normalization, cancellation, health, and crash isolation
-- delegate/subagent semantics in the runtime protocol, with a parent run recorded and a delegation tool whose effect is starting a run
-- OpenClaw adapter
-- OpenAI Agents adapter
-- ACP adapter
-- LangGraph adapter only where a concrete workflow needs it
+- an ACP client (the open Agent Client Protocol over stdio) with a supervisor: one adapter reaches Claude, Codex, Gemini, Copilot, Cursor, OpenClaw and others (`P7-001`, `P7-002`)
+- a scripted fake ACP agent for tests (`P7-006`)
+- the agent's permission requests become JARVIS approvals; its work happens in a git worktree and nothing is merged without approval (`P7-003`, `P7-004`)
+- a parent run recorded, a delegation effect class, cancellation that propagates (`P7-009` to `P7-011`)
 
-**Exit gate:** the same client request can be routed to native and external runtimes while JARVIS retains policy, tool, memory, and audit ownership.
+No JARVIS-specific runtime protocol and no per-framework adapter (OpenAI Agents, LangGraph): they are reachable through ACP or MCP when wanted.
+
+**Exit gate:** a coding task is delegated to an installed agent, runs in a worktree, asks JARVIS for permission, and returns a diff while JARVIS retains policy, tool, memory, and audit ownership.
 
 ## Phase 8: Voice And Telephony
 
@@ -155,16 +160,12 @@ Deliver:
 
 Deliver:
 
-- provider-neutral voice session and call contracts
-- model-based turn detection and interruption, with turn-detection latency measured separately ([ADR-0010](docs/adr/0010-model-based-turn-detection.md))
-- recorded realtime session scope (participants, non-audio media, data channels, E2EE policy) before any realtime transport implementation
-- local push-to-talk and wake-word client path
-- ElevenLabs Custom LLM support through `/v1/responses` and `/v1/chat/completions`
-- scoped JARVIS MCP endpoint for ElevenLabs-owned agents
-- inbound identity mapping, Twilio/SIP outbound calls, signed webhooks, transcripts, and retention controls
-- interruption, latency, voicemail, and failure-state tests
+- local speech recognition and synthesis that need no key, voice activity detection and echo handling, and a client that is not a browser tab (`P8-010`); voice notes through Telegram are the cheapest first one
+- provider-neutral outbound calls (Twilio, SIP) to numbers the owner approves, signed webhooks, call records, consent flags and retention (`P8-007` to `P8-009`, `P8-011`)
 
-**Exit gate:** an authenticated inbound call can ask for calendar data through JARVIS, and a policy-approved workflow can place an outbound call with correlated audit and call records. A pause-heavy request completes without being cut off at a silence threshold, and perceived latency is reported separately from turn-detection latency.
+Parked until the owner uses them: ElevenLabs Custom LLM and Speech Engine transports, model-based turn detection ([ADR-0010](docs/adr/0010-model-based-turn-detection.md) stays the policy if built), and a realtime room.
+
+**Exit gate:** the owner can talk to JARVIS hands-free without a browser tab, and a policy-approved task can place an outbound call with correlated audit and call records.
 
 ## Phase 9: Desktop And Product Installation
 
@@ -172,8 +173,8 @@ Deliver:
 
 Deliver:
 
-- Tauri desktop client with chat, activity, approvals, connections, memory, tasks, models, runtimes, voice, and settings
-- messaging surfaces as authenticated gateway clients, one per platform
+- the browser console as the main client; a Tauri shell only if an always-on wake word or a tray needs it (`P9-019`)
+- messaging surfaces as authenticated gateway clients, one per platform, Telegram first (`P11-005`)
 - onboarding and recovery UX
 - signed installers, checksums, update channels, rollback, and uninstall
 - Linux systemd user unit, macOS LaunchAgent, Windows per-user scheduled task; optional elevated system service modes
@@ -202,3 +203,9 @@ Deliver only when demanded by evidence:
 - unrestricted host shell execution
 - silent autonomous financial, destructive, or mass-communication actions
 - canonical memory owned by an external runtime or provider
+
+## Phase 11: Capability And Reach
+
+**Outcome:** the assistant can do more each month without a rewrite and without a longer setup.
+
+Deliver, in order ([ADR-0167](docs/adr/0167-capability-and-reach-come-from-open-protocols-before-bespoke-code.md), `TODO.md` `P11`): MCP made real and manageable, tool discovery so a large catalog costs no tokens until needed, a browser (Playwright MCP), skills the model proposes and the owner approves, Telegram, model routing, the first five minutes of setup, a spend guard inside the run. Each is only done after a live run on the owner's own setup.

@@ -71,6 +71,13 @@ pub type ToolMembership = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// received.
 pub const MAX_SKILL_PAGE: u32 = 200;
 
+/// How many model proposals may wait for the owner at once.
+pub const MAX_PENDING_SKILL_PROPOSALS: usize = 10;
+
+/// The actor a model's proposal is attributed to. It is never the owner's, which is what makes the owner's
+/// approval an approval by someone other than the author.
+const MODEL_ACTOR: &str = "agent:model";
+
 /// Why a skill operation could not be performed.
 ///
 /// Not `Eq` or `Clone`, because [`DatabaseError`] is neither — it wraps a `sqlx::Error`, which carries an
@@ -194,6 +201,8 @@ pub struct SkillService {
     /// there is nothing to check against, and refusing every step would conflate "this deployment has no tools"
     /// with "this step names a bad tool".
     known_tool: Option<ToolMembership>,
+    /// The composed tools, for the version a step is recorded against. `None` when no tool surface is composed.
+    registry: Option<Arc<crate::tool_pipeline::ToolPipeline>>,
 }
 
 impl SkillService {
@@ -215,6 +224,7 @@ impl SkillService {
         Self {
             database,
             known_tool,
+            registry: tools.cloned(),
         }
     }
 
@@ -477,6 +487,171 @@ impl SkillService {
             "promoted".to_owned(),
             Some(format!("approved by {}", request.approver_actor_id)),
         ))
+    }
+
+    /// Records a procedure **a model proposed**, which stays unused until the owner approves it (`P11-004`, `ADR-0183`).
+    ///
+    /// The source is `ModelInference` and the state `Proposed`, both fixed here, and the author is the model's
+    /// own actor, so the owner's approval is never a self-approval. Each step's tool must exist in this
+    /// deployment, at the version it has now. A proposal naming the same description as one already waiting is
+    /// answered with that one, and no more than [`MAX_PENDING_SKILL_PROPOSALS`] wait at once, so a model cannot
+    /// fill the owner's review list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillServiceError::Refused`] for an unknown tool, a bad step, a full review list, or a
+    /// revision the domain refuses.
+    pub async fn propose(
+        &self,
+        description: &str,
+        steps: &[(String, String)],
+        correlation: CorrelationId,
+    ) -> Result<SkillReply, SkillServiceError> {
+        let workspace = self.workspace().await?;
+        let waiting: Vec<StoredSkillRevision> = {
+            let validator = self.validator();
+            read_workspace_skill_revision_states(
+                &self.database,
+                workspace.to_string().as_str(),
+                MAX_SKILL_PAGE,
+                validator.as_ref(),
+            )
+            .await?
+            .into_iter()
+            .filter(|stored| stored.revision().state() == SkillState::Proposed)
+            .collect()
+        };
+        if let Some(same) = waiting
+            .iter()
+            .find(|stored| stored.revision().description().trim() == description.trim())
+        {
+            return Ok(reply_of(
+                same,
+                "already_proposed".to_owned(),
+                Some("the same procedure is already waiting for the owner".to_owned()),
+            ));
+        }
+        if waiting.len() >= MAX_PENDING_SKILL_PROPOSALS {
+            return Err(SkillServiceError::Refused {
+                reason: "too_many_proposals",
+                detail: format!(
+                    "{MAX_PENDING_SKILL_PROPOSALS} proposed skills are already waiting for the owner; \
+                     wait for those to be answered"
+                ),
+            });
+        }
+
+        let mut built = Vec::with_capacity(steps.len());
+        for (index, (tool, instruction)) in steps.iter().enumerate() {
+            let version = self.tool_version(tool)?;
+            built.push(
+                SkillStep::new(
+                    u16::try_from(index + 1).unwrap_or(u16::MAX),
+                    tool.clone(),
+                    version,
+                    instruction.clone(),
+                    structural_tool_identifier,
+                )
+                .map_err(|error| SkillServiceError::Refused {
+                    reason: "invalid_step",
+                    detail: format!("{error}"),
+                })?,
+            );
+        }
+        let revision = SkillRevision::new(SkillRevisionParts {
+            skill_id: SkillId::new(),
+            workspace_id: workspace,
+            revision_id: SkillId::new(),
+            version: "1".to_owned(),
+            description: description.to_owned(),
+            steps: built,
+            source: MemorySource::of_kind(
+                MemorySourceKind::ModelInference,
+                "tool:jarvis.skill.propose",
+            )
+            .map_err(|error| SkillServiceError::Refused {
+                reason: "invalid_source",
+                detail: format!("{error}"),
+            })?,
+            sensitivity: Sensitivity::Internal,
+            state: SkillState::Proposed,
+            supersedes: None,
+            dropped_fields: Vec::new(),
+            run_id: None,
+            created_by_actor_id: MODEL_ACTOR.to_owned(),
+            correlation_id: correlation,
+            created_at: UtcTimestamp::now(&SystemClock),
+        })
+        .map_err(|error| SkillServiceError::Refused {
+            reason: "invalid_revision",
+            detail: format!("{error}"),
+        })?;
+        record_skill_revision(&self.database, &revision).await?;
+        let stored = self
+            .load_scoped(&revision.revision_id().to_string(), workspace)
+            .await?;
+        Ok(reply_of(&stored, "proposed".to_owned(), None))
+    }
+
+    /// The version a registered tool has now, so a step records what it was written against.
+    fn tool_version(&self, tool: &str) -> Result<String, SkillServiceError> {
+        let unknown = || SkillServiceError::Refused {
+            reason: "unknown_tool",
+            detail: format!(
+                "{tool} is not a tool this deployment can run, so the step could never execute"
+            ),
+        };
+        match &self.registry {
+            Some(pipeline) => {
+                let id = jarvis_tools::ToolId::new(tool).map_err(|_| unknown())?;
+                pipeline
+                    .registry()
+                    .get(&id)
+                    .map(|definition| definition.version().to_owned())
+                    .map_err(|_| unknown())
+            }
+            None if structural_tool_identifier(tool) => Ok("1.0.0".to_owned()),
+            None => Err(unknown()),
+        }
+    }
+
+    /// The owner approves a proposal: it becomes active and is offered to later runs.
+    ///
+    /// The approver is the local owner, read from the identity, and the counter is read here, so one click
+    /// carries no ids to get wrong. The domain still refuses the author approving their own proposal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillServiceError::NotFound`] or [`SkillServiceError::Refused`] as [`Self::promote`] does.
+    pub async fn approve(&self, revision_id: &str) -> Result<SkillReply, SkillServiceError> {
+        let workspace = self.workspace().await?;
+        let stored = self.load_scoped(revision_id, workspace).await?;
+        let approver = self.actor_id().await?;
+        self.promote(
+            revision_id,
+            &PromoteSkillRequest {
+                expected_version: stored.version_counter(),
+                approver_actor_id: approver,
+            },
+        )
+        .await
+    }
+
+    /// The owner dismisses a proposal: it is set aside, kept for audit, and never offered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillServiceError::NotFound`] or [`SkillServiceError::Refused`] as [`Self::disable`] does.
+    pub async fn dismiss(&self, revision_id: &str) -> Result<SkillReply, SkillServiceError> {
+        let workspace = self.workspace().await?;
+        let stored = self.load_scoped(revision_id, workspace).await?;
+        self.disable(
+            revision_id,
+            &SkillTransitionRequest {
+                expected_version: stored.version_counter(),
+            },
+        )
+        .await
     }
 
     /// Disables a revision by archiving it: retained for audit, not offered for use.
