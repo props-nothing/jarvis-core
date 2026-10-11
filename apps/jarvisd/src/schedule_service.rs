@@ -112,13 +112,55 @@ fn unix_seconds() -> i64 {
 #[derive(Default)]
 struct ResultWatcher {
     seen: Option<std::collections::HashMap<String, String>>,
-    pending: Vec<(String, String)>,
+    /// Runs waiting to finish, each with the task as the owner would name it and what kind of task started it.
+    pending: Vec<(String, String, &'static str)>,
+    /// Trigger-started runs already noticed. `None` until the first pass, which records what exists and announces nothing.
+    triggered: Option<std::collections::HashSet<String>>,
     /// Approvals already announced, so each is announced once; the ones present at startup are included.
     approvals: std::collections::HashSet<String>,
 }
 
+/// What a run started by a schedule or a trigger is called when its result is announced.
+const SCHEDULED_KIND: &str = "scheduled task";
+
 impl ResultWatcher {
+    /// Notices runs a trigger started. A trigger can start several runs in one look, so its single `last_run_id` would miss some;
+    /// the recent runs are read instead, and each one whose objective carries the trigger framing is noticed once.
+    fn note_triggered(&mut self, recent: &[jarvis_storage::StoredRun]) {
+        let first_pass = self.triggered.is_none();
+        let seen = self.triggered.get_or_insert_with(Default::default);
+        for run in recent {
+            let Some((kind, task)) = crate::trigger_service::parse_triggered(run.objective())
+            else {
+                continue;
+            };
+            if seen.insert(run.id().to_owned()) && !first_pass {
+                self.pending.push((
+                    run.id().to_owned(),
+                    task.to_owned(),
+                    match kind {
+                        jarvis_storage::TriggerKind::Mail => "mail-triggered task",
+                        jarvis_storage::TriggerKind::File => "file-triggered task",
+                        jarvis_storage::TriggerKind::Webhook => "webhook-triggered task",
+                    },
+                ));
+            }
+        }
+        // Only what is still in the recent list is remembered, so the set does not grow for ever.
+        let present: std::collections::HashSet<&str> =
+            recent.iter().map(jarvis_storage::StoredRun::id).collect();
+        seen.retain(|id| present.contains(id.as_str()));
+    }
+
     async fn pass(&mut self, state: &GatewayState) {
+        let quiet = quiet_now(state);
+        self.pass_with(state, quiet).await;
+    }
+
+    /// One look at what finished or is waiting. While `quiet`, a finished run stays pending and an approval stays unannounced, so both are
+    /// announced by the first pass after the window; what existed at the first pass is recorded either way, so a restart inside the
+    /// window does not announce old things when it ends.
+    async fn pass_with(&mut self, state: &GatewayState, quiet: bool) {
         let Ok(identity) = jarvis_storage::load_local_identity(state.database()).await else {
             return;
         };
@@ -136,25 +178,35 @@ impl ResultWatcher {
             if seen.get(schedule.id()).map(String::as_str) != Some(run) {
                 seen.insert(schedule.id().to_owned(), run.to_owned());
                 if !first_pass {
-                    self.pending
-                        .push((run.to_owned(), schedule.objective().to_owned()));
+                    self.pending.push((
+                        run.to_owned(),
+                        schedule.objective().to_owned(),
+                        SCHEDULED_KIND,
+                    ));
                 }
             }
         }
+        if let Ok(recent) =
+            jarvis_storage::read_recent_runs(state.database(), identity.workspace_id(), 50).await
+        {
+            self.note_triggered(&recent);
+        }
         let mut still_running = Vec::new();
-        for (run_id, task) in std::mem::take(&mut self.pending) {
+        for (run_id, task, kind) in std::mem::take(&mut self.pending) {
             match jarvis_storage::find_run(state.database(), &run_id).await {
-                Ok(run) if run.state().is_terminal() => announce(state, &run, &task).await,
-                Ok(_) => still_running.push((run_id, task)),
+                Ok(run) if run.state().is_terminal() && !quiet => {
+                    announce(state, &run, &task, kind).await;
+                }
+                Ok(_) => still_running.push((run_id, task, kind)),
                 Err(_) => {}
             }
         }
         self.pending = still_running;
-        self.announce_approvals(state, first_pass).await;
+        self.announce_approvals(state, first_pass, quiet).await;
     }
 
     /// An approval that appears while no console is open is announced once: a parked run waits for the owner and nobody else.
-    async fn announce_approvals(&mut self, state: &GatewayState, first_pass: bool) {
+    async fn announce_approvals(&mut self, state: &GatewayState, first_pass: bool, quiet: bool) {
         let Ok(identity) = jarvis_storage::load_local_identity(state.database()).await else {
             return;
         };
@@ -172,6 +224,10 @@ impl ResultWatcher {
             .map(|approval| approval.id().to_string())
             .collect();
         self.approvals.retain(|id| ids.contains(id));
+        // Held: nothing is recorded as announced, so each is announced once the window ends (if it is still waiting).
+        if quiet && !first_pass {
+            return;
+        }
         for approval in &pending {
             if self.approvals.insert(approval.id().to_string()) && !first_pass {
                 let body = format!(
@@ -182,6 +238,21 @@ impl ResultWatcher {
             }
         }
     }
+}
+
+/// Whether the owner's quiet hours are on right now (`ADR-0195`). Read from the saved configuration each time, so a change applies at once,
+/// and `false` when there is no configuration or no window. Quiet hours hold announcements only: runs go on, and what was held is
+/// announced when the window ends.
+pub(crate) fn quiet_now(state: &GatewayState) -> bool {
+    state
+        .settings()
+        .and_then(|context| {
+            jarvis_storage::ConfigStore::from_paths(context.paths())
+                .load()
+                .ok()
+        })
+        .and_then(|loaded| loaded.config().daemon().quiet_hours())
+        .is_some_and(|window| window.is_quiet_at(UtcTimestamp::now(&SystemClock), None))
 }
 
 /// Whether a console polled recently enough to be open, and so to show things itself.
@@ -210,7 +281,7 @@ async fn tell_owner(state: &GatewayState, shown: &str, pushed: &str, priority: u
     crate::push::alert(state, "JARVIS", pushed, priority).await;
 }
 
-async fn announce(state: &GatewayState, run: &jarvis_storage::StoredRun, task: &str) {
+async fn announce(state: &GatewayState, run: &jarvis_storage::StoredRun, task: &str, kind: &str) {
     let answer = if run.terminal_outcome() == Some(jarvis_core::RunOutcome::Succeeded) {
         crate::executor::last_answer(&state.database_handle(), run)
             .await
@@ -219,17 +290,18 @@ async fn announce(state: &GatewayState, run: &jarvis_storage::StoredRun, task: &
     } else {
         None
     };
+    // The push never carries content, so it says only what kind of task and whether it finished.
     let pushed = if answer.is_some() {
-        "A scheduled task finished."
+        format!("A {kind} finished.")
     } else {
-        "A scheduled task did not finish."
+        format!("A {kind} did not finish.")
     };
-    let shown = answer.unwrap_or_else(|| format!("This scheduled task did not finish: {task}"));
+    let shown = answer.unwrap_or_else(|| format!("This {kind} did not finish: {task}"));
     // The phone gets it whether or not a console is open: the owner is probably not at the computer.
     if let Some(telegram) = state.telegram() {
         telegram.tell(&shown).await;
     }
-    tell_owner(state, &shown, pushed, 3).await;
+    tell_owner(state, &shown, &pushed, 3).await;
 }
 /// Runs one scheduler pass at `now`.
 ///
@@ -332,12 +404,8 @@ pub(crate) fn shown_objective(objective: &str) -> String {
     if let Some(task) = objective.strip_prefix(UNATTENDED_NOTICE) {
         return format!("[scheduled] {task}");
     }
-    if let Some(task) = objective.strip_prefix(crate::trigger_service::TRIGGER_NOTICE) {
-        let task = task
-            .split(crate::trigger_service::MESSAGE_MARKER)
-            .next()
-            .unwrap_or(task);
-        return format!("[mail trigger] {task}");
+    if let Some((kind, task)) = crate::trigger_service::parse_triggered(objective) {
+        return format!("[{} trigger] {task}", kind.as_str());
     }
     if let Some(task) = objective.strip_prefix(crate::delegate::DELEGATED_NOTICE) {
         return format!("[sub-agent] {task}");

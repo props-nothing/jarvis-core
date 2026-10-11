@@ -35,7 +35,7 @@ Measured against the four hallmarks of a real J.A.R.V.I.S.:
 3. ~~**A browser**~~ **built as a one-click ability** (`P11-001c`, `ADR-0169`): JavaScript pages and acting on the web; a measured hostile-page eval is still owed (`P11-003`).
 4. ~~**Skills the model proposes and the owner approves**~~ delivered (`P11-004`, `ADR-0183`): it learns the owner's procedures.
 5. **Telegram** (`P11-005`): built (`ADR-0184`), configured in Settings, reachable from a phone with no tunnel; run on the owner's phone; answers are formatted (`ADR-0186`).
-6. ~~**Time-zone schedules**~~ delivered (`P6-003`, `ADR-0182`): "every weekday at 08:00 Europe/Amsterdam". **Triggers** (`P6-012`): the `mail` kind is built (`ADR-0193`, polling; not yet run live), `file` and `webhook` remain: initiative on events.
+6. ~~**Time-zone schedules**~~ delivered (`P6-003`, `ADR-0182`): "every weekday at 08:00 Europe/Amsterdam". **Triggers** (`P6-012`) are delivered (`ADR-0193`, `ADR-0195`): a new mail, file or request starts an ordinary run, and quiet hours hold notices (`P6-007` in part).
 7. **Model routing** (`P11-006`), compared with `jarvis eval`.
 8. **Coding agents over ACP** (`P7`): delegate to Claude, Codex, Gemini, Copilot and others in a worktree, reviewed before anything merges.
 9. Setup polish (`P11-007`); ~~a spend guard in the run~~ is delivered (`P11-008`, `ADR-0191`). Then local voice and calls (`P8`), distribution (`P9-004` to `P9-007`, blocked on a licence choice), and the server profile (`P10`).

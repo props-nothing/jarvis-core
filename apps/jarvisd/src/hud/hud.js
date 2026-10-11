@@ -1345,7 +1345,7 @@
     });
   }
   // ---- the cards on the Ops page ------------------------------------------------------------------------------------
-  function plainObjective(text) { return String(text || "").replace(/^(\[(scheduled|sub-agent|resumed)\]\s*)+/, ""); }
+  function plainObjective(text) { return String(text || "").replace(/^(\[(scheduled|sub-agent|resumed|mail trigger|file trigger|webhook trigger)\]\s*)+/, ""); }
   function span(from, to) {
     var seconds = Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 1000));
     return duration(seconds);
@@ -1426,6 +1426,48 @@
     item.appendChild(acts);
     return item;
   }
+  function triggerLabel(trigger) {
+    if (trigger.kind === "file") return "new file in " + trigger.query;
+    if (trigger.kind === "webhook") return "webhook";
+    return "new mail: " + trigger.query;
+  }
+  // A trigger starts an ordinary run when something happens (ADR-0193, ADR-0195). Made with `jarvis trigger add`; the console shows and stops them.
+  function triggerCard(trigger) {
+    var item = el("div", "item");
+    var row = el("div", "row");
+    row.appendChild(el("span", "tag" + (trigger.enabled ? " work" : ""), clip(triggerLabel(trigger), 60)));
+    if (!trigger.enabled) row.appendChild(el("span", "tag", "paused"));
+    if (trigger.project) row.appendChild(el("span", "tag ok", trigger.project));
+    if (trigger.kind !== "webhook") row.appendChild(el("span", "dim", every(trigger.interval_seconds)));
+    if (trigger.next_poll_at) {
+      var next = el("span", "dim", "next look " + until(trigger.next_poll_at));
+      next.dataset.until = trigger.next_poll_at;
+      row.appendChild(next);
+    }
+    item.appendChild(row);
+    item.appendChild(el("div", "obj", clip(trigger.objective, 220)));
+    var meta = el("div", "meta");
+    meta.appendChild(el("span", "dim", "started " + trigger.fire_count + (trigger.fire_count === 1 ? " task" : " tasks")));
+    if (trigger.last_polled_at) meta.appendChild(ageSpan(trigger.last_polled_at, trigger.kind === "webhook" ? " since the last request" : " since the last look"));
+    item.appendChild(meta);
+    if (trigger.last_error) item.appendChild(el("div", "dim", "last look: " + clip(trigger.last_error, 200)));
+    var acts = el("div", "sched-act");
+    var toggle = el("button", "", trigger.enabled ? "Pause" : "Resume");
+    toggle.addEventListener("click", function () {
+      toggle.disabled = true;
+      api("/triggers/" + encodeURIComponent(trigger.trigger_id) + "/" + (trigger.enabled ? "pause" : "resume"), "POST").then(refresh, refresh);
+    });
+    acts.appendChild(toggle);
+    var drop = el("button", "danger", "Remove");
+    drop.addEventListener("click", function () {
+      if (drop.textContent === "Remove") { drop.textContent = "Really remove?"; setTimeout(function () { drop.textContent = "Remove"; }, 4000); return; }
+      drop.disabled = true;
+      api("/triggers/" + encodeURIComponent(trigger.trigger_id), "DELETE").then(refresh, refresh);
+    });
+    acts.appendChild(drop);
+    item.appendChild(acts);
+    return item;
+  }
   var openRuns = {}, showFinished = false;
   function recentCard(run) {
     var item = el("div", "item");
@@ -1462,7 +1504,7 @@
     if (openRuns[run.run_id]) toggle(true);
     return item;
   }
-  function renderPanels(runs, approvals, schedules) {
+  function renderPanels(runs, approvals, schedules, triggers) {
     var working = runs.filter(function (run) { return !run.outcome && run.state !== "awaiting_approval"; });
     var parked = runs.filter(function (run) { return run.state === "awaiting_approval"; });
     var finished = runs.filter(function (run) { return run.outcome; }).slice(0, 8);
@@ -1530,6 +1572,8 @@
       more.addEventListener("click", function () { showFinished = !showFinished; lastSignature = ""; refresh(); });
       $("scheduled").appendChild(more);
     }
+
+    fill("triggers", (triggers || []).map(triggerCard), "no triggers: make one in a terminal with `jarvis trigger add --mail \"is:unread\" note each subject`");
 
     fill("recent", finished.map(recentCard), "nothing yet");
   }
@@ -2103,6 +2147,8 @@
     var text = String(objective || "");
     if (text.indexOf("[scheduled]") === 0) return "scheduled";
     if (text.indexOf("[sub-agent]") === 0) return "sub-agent";
+    var trigger = /^\[(mail|file|webhook) trigger\]/.exec(text);
+    if (trigger) return trigger[1] + " trigger";
     return "";
   }
   async function observe(run) {
@@ -2156,13 +2202,13 @@
       $("message").textContent = "No credential. Open this page with `jarvis hud`.";
       return Promise.resolve();
     }
-    return Promise.all([api("/runs?limit=30"), api("/approvals"), api("/schedules")]).then(function (results) {
+    return Promise.all([api("/runs?limit=30"), api("/approvals"), api("/schedules"), api("/triggers")]).then(function (results) {
       S.offline = false;
       $("message").textContent = "";
-      var signature = JSON.stringify([results[0].runs, results[1].approvals, results[2].schedules]);
+      var signature = JSON.stringify([results[0].runs, results[1].approvals, results[2].schedules, results[3].triggers]);
       if (signature !== lastSignature) {
         lastSignature = signature;
-        renderPanels(results[0].runs, results[1].approvals, results[2].schedules);
+        renderPanels(results[0].runs, results[1].approvals, results[2].schedules, results[3].triggers);
       }
       announce(results[1].approvals);
       observeRuns(results[0].runs);

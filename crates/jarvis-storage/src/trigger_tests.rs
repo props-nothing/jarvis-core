@@ -48,11 +48,121 @@ async fn database() -> (TestDirectory, SqliteDatabase) {
 
 fn new(query: &str) -> NewTrigger {
     NewTrigger {
+        kind: TriggerKind::Mail,
         query: query.to_owned(),
         objective: "Note the subject in the project journal.".to_owned(),
         interval_seconds: 300,
         project_id: None,
+        secret_hash: None,
     }
+}
+
+const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn webhook(hash: &str) -> NewTrigger {
+    NewTrigger {
+        kind: TriggerKind::Webhook,
+        query: "ignored".to_owned(),
+        interval_seconds: 5,
+        secret_hash: Some(hash.to_owned()),
+        ..new("")
+    }
+}
+
+fn file(folder: &str) -> NewTrigger {
+    NewTrigger {
+        kind: TriggerKind::File,
+        ..new(folder)
+    }
+}
+
+/// **A webhook is made from a secret's hash and is never polled**; a file trigger needs a plain relative folder; nothing else carries a hash.
+#[tokio::test]
+async fn the_kinds_are_validated_and_a_webhook_is_never_polled() {
+    let (_directory, database) = database().await;
+    let hook = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(0)).await);
+    assert_eq!(hook.kind, TriggerKind::Webhook);
+    assert_eq!(hook.query, "webhook", "what the caller sent is not stored");
+    assert_eq!(hook.interval_seconds, MAX_TRIGGER_INTERVAL_SECONDS);
+    assert!(hook.baselined, "there is nothing to baseline");
+    // Never due, however late.
+    assert!(must(claim_due_triggers(&database, at(10_000_000), 10).await).is_empty());
+    // Found by the hash of its secret, and by nothing else.
+    assert_eq!(
+        must(find_webhook_by_secret_hash(&database, HASH).await).id,
+        hook.id
+    );
+    assert!(matches!(
+        find_webhook_by_secret_hash(&database, &"f".repeat(64)).await,
+        Err(DatabaseError::TriggerNotFound)
+    ));
+    // The hash is unique, so two webhooks cannot share an address.
+    assert!(
+        create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(1))
+            .await
+            .is_err()
+    );
+    // A webhook without a good hash, and a mail or file trigger with one, are refused.
+    for bad in ["", "abc", &"G".repeat(64), &"A".repeat(64)] {
+        assert!(matches!(
+            create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(bad), at(0)).await,
+            Err(DatabaseError::InvalidTrigger { field: "secret" })
+        ));
+    }
+    let with_hash = NewTrigger {
+        secret_hash: Some(HASH.to_owned()),
+        ..new("is:unread")
+    };
+    assert!(matches!(
+        create_trigger(&database, LOCAL_WORKSPACE_ID, &with_hash, at(0)).await,
+        Err(DatabaseError::InvalidTrigger { field: "secret" })
+    ));
+
+    let folder =
+        must(create_trigger(&database, LOCAL_WORKSPACE_ID, &file("inbox/new"), at(0)).await);
+    assert_eq!(folder.kind, TriggerKind::File);
+    assert!(!folder.baselined && folder.enabled);
+    for bad in [
+        "", "/etc", "../up", "a/../b", "a//b", "C:\\x", "a\\b", "x\ny", "name;rm",
+    ] {
+        assert!(
+            matches!(
+                create_trigger(&database, LOCAL_WORKSPACE_ID, &file(bad), at(0)).await,
+                Err(DatabaseError::InvalidTrigger { field: "query" })
+            ),
+            "{bad:?} must be refused"
+        );
+    }
+    assert!(valid_trigger_folder("Scans (2026)/to do"));
+}
+
+/// Resuming a paused webhook leaves it baselined (it has no baseline), and the dedupe table still enforces its foreign key after the
+/// migration rebuilt it.
+#[tokio::test]
+async fn a_resumed_webhook_stays_ready_and_events_still_need_a_trigger() {
+    let (_directory, database) = database().await;
+    let hook = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(0)).await);
+    must(set_trigger_enabled(&database, LOCAL_WORKSPACE_ID, &hook.id, false, at(5)).await);
+    let resumed =
+        must(set_trigger_enabled(&database, LOCAL_WORKSPACE_ID, &hook.id, true, at(10)).await);
+    assert!(resumed.enabled && resumed.baselined);
+    assert!(must(
+        claim_trigger_event(&database, &hook.id, "delivery-1", at(11)).await
+    ));
+    assert!(!must(
+        claim_trigger_event(&database, &hook.id, "delivery-1", at(12)).await
+    ));
+    assert!(
+        claim_trigger_event(
+            &database,
+            "00000000-0000-0000-0000-000000000000",
+            "x",
+            at(12)
+        )
+        .await
+        .is_err(),
+        "an event needs a trigger"
+    );
 }
 
 #[tokio::test]
@@ -67,7 +177,7 @@ async fn a_trigger_is_created_polls_one_interval_later_and_is_found_in_its_works
         )
         .await,
     );
-    assert_eq!(made.kind, "mail");
+    assert_eq!(made.kind, TriggerKind::Mail);
     assert_eq!(made.query, "from:boss is:unread");
     assert!(made.enabled && !made.baselined);
     assert_eq!(made.next_poll, at(300));

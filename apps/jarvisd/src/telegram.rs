@@ -920,6 +920,8 @@ impl TelegramBridge {
             let Ok(pending) = crate::gateway::pending_approvals(state).await else {
                 continue;
             };
+            // Quiet hours hold the card, not the approval: it is not marked sent, so it is sent when the window ends (`ADR-0195`).
+            let quiet = crate::schedule_service::quiet_now(state);
             let live: std::collections::HashSet<&str> = pending
                 .iter()
                 .map(|approval| approval.approval_id.as_str())
@@ -934,6 +936,9 @@ impl TelegramBridge {
                 // What was already waiting when the daemon started is the console's to show, not a flood on the phone.
                 if first {
                     sent.insert(approval.approval_id.clone(), (0, String::new()));
+                    continue;
+                }
+                if quiet {
                     continue;
                 }
                 let card = approval_card(approval);

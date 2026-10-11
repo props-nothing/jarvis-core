@@ -30,17 +30,55 @@ pub const MIN_TRIGGER_INTERVAL_SECONDS: u64 = 60;
 /// The longest interval between two polls, in seconds (one day).
 pub const MAX_TRIGGER_INTERVAL_SECONDS: u64 = 86_400;
 
+/// What a trigger waits for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TriggerKind {
+    /// A new message matching a Gmail search.
+    Mail,
+    /// A new or changed file in a folder inside a granted folder.
+    File,
+    /// A request to a secret local address.
+    Webhook,
+}
+
+impl TriggerKind {
+    /// The stored and displayed word.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mail => "mail",
+            Self::File => "file",
+            Self::Webhook => "webhook",
+        }
+    }
+
+    /// Reads the stored or typed word.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "mail" => Some(Self::Mail),
+            "file" => Some(Self::File),
+            "webhook" => Some(Self::Webhook),
+            _ => None,
+        }
+    }
+}
+
 /// What a new trigger is made from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewTrigger {
-    /// The Gmail search, as typed in Gmail's search box.
+    /// What it waits for.
+    pub kind: TriggerKind,
+    /// What is watched: a Gmail search as typed in Gmail's search box, or a folder inside a granted folder. Ignored for a webhook.
     pub query: String,
-    /// What each run is asked to do about one matching message.
+    /// What each run is asked to do about one event.
     pub objective: String,
-    /// Seconds between polls.
+    /// Seconds between polls. Ignored for a webhook, which is never polled.
     pub interval_seconds: u64,
     /// The project every run belongs to, by identifier.
     pub project_id: Option<String>,
+    /// For a webhook, the SHA-256 of its secret in hex; the secret itself is never stored. Required for a webhook and refused otherwise.
+    pub secret_hash: Option<String>,
 }
 
 /// One stored trigger.
@@ -50,9 +88,9 @@ pub struct StoredTrigger {
     pub id: String,
     /// The workspace that owns it.
     pub workspace_id: String,
-    /// The kind of event it waits for (`mail`).
-    pub kind: String,
-    /// The Gmail search it polls.
+    /// What it waits for.
+    pub kind: TriggerKind,
+    /// What it watches: a Gmail search, a folder, or the word `webhook`.
     pub query: String,
     /// What each run is asked to do.
     pub objective: String,
@@ -105,13 +143,36 @@ pub async fn create_trigger(
     new: &NewTrigger,
     now: UtcTimestamp,
 ) -> Result<StoredTrigger, DatabaseError> {
-    let query = new.query.trim();
-    if query.is_empty()
-        || query.chars().count() > MAX_TRIGGER_QUERY_CHARS
-        || query.chars().any(char::is_control)
-    {
+    let kind = new.kind;
+    let query = match kind {
+        TriggerKind::Webhook => "webhook",
+        TriggerKind::Mail | TriggerKind::File => new.query.trim(),
+    };
+    let query_ok = match kind {
+        TriggerKind::Mail => {
+            !query.is_empty()
+                && query.chars().count() <= MAX_TRIGGER_QUERY_CHARS
+                && !query.chars().any(char::is_control)
+        }
+        TriggerKind::File => valid_trigger_folder(query),
+        TriggerKind::Webhook => true,
+    };
+    if !query_ok {
         return Err(invalid("query"));
     }
+    // A webhook carries the hash of its secret and nothing else does; the hash is exactly 64 lowercase hex digits.
+    let secret_hash = match (kind, new.secret_hash.as_deref()) {
+        (TriggerKind::Webhook, Some(hash))
+            if hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+        {
+            Some(hash)
+        }
+        (TriggerKind::Webhook, _) | (_, Some(_)) => return Err(invalid("secret")),
+        (_, None) => None,
+    };
     let objective = new.objective.trim();
     if objective.is_empty()
         || objective.chars().count() > MAX_TRIGGER_OBJECTIVE_CHARS
@@ -119,9 +180,13 @@ pub async fn create_trigger(
     {
         return Err(invalid("objective"));
     }
-    if !(MIN_TRIGGER_INTERVAL_SECONDS..=MAX_TRIGGER_INTERVAL_SECONDS)
-        .contains(&new.interval_seconds)
-    {
+    // A webhook is never polled, so its interval is a fixed day and what the caller sent is not looked at.
+    let interval_seconds = if kind == TriggerKind::Webhook {
+        MAX_TRIGGER_INTERVAL_SECONDS
+    } else {
+        new.interval_seconds
+    };
+    if !(MIN_TRIGGER_INTERVAL_SECONDS..=MAX_TRIGGER_INTERVAL_SECONDS).contains(&interval_seconds) {
         return Err(invalid("interval"));
     }
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM triggers WHERE workspace_id = ?1")
@@ -136,21 +201,26 @@ pub async fn create_trigger(
         return Err(DatabaseError::TriggerLimit);
     }
     let id = TriggerId::new().to_string();
-    let interval = i64::try_from(new.interval_seconds).unwrap_or(i64::MAX);
+    let interval = i64::try_from(interval_seconds).unwrap_or(i64::MAX);
     let first_poll = nanos(now).saturating_add(interval.saturating_mul(1_000_000_000));
+    // A webhook has nothing to record a baseline of, so it starts baselined.
+    let baselined = i64::from(kind == TriggerKind::Webhook);
     sqlx::query(
         "INSERT INTO triggers (id, workspace_id, kind, query, objective, interval_seconds, project_id, enabled, \
-            next_poll_nanos, baselined, fire_count, created_at) \
-         VALUES (?1, ?2, 'mail', ?3, ?4, ?5, ?6, 1, ?7, 0, 0, ?8)",
+            next_poll_nanos, baselined, fire_count, created_at, secret_hash) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, 0, ?10, ?11)",
     )
     .bind(&id)
     .bind(workspace_id)
+    .bind(kind.as_str())
     .bind(query)
     .bind(objective)
     .bind(interval)
     .bind(new.project_id.as_deref())
     .bind(first_poll)
+    .bind(baselined)
     .bind(now.to_string())
+    .bind(secret_hash)
     .execute(database.pool())
     .await
     .map_err(|source| DatabaseError::Sqlite {
@@ -158,6 +228,49 @@ pub async fn create_trigger(
         source,
     })?;
     find_trigger(database, workspace_id, &id).await
+}
+
+/// Whether text is a folder a file trigger may watch: relative, inside a granted folder, made of plain names.
+///
+/// A rule on the text only; whether the folder exists inside a granted folder is checked where the folder is read.
+#[must_use]
+pub fn valid_trigger_folder(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 200
+        && !text.starts_with('/')
+        && text.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != ".."
+                && segment.chars().all(|character| {
+                    character.is_alphanumeric()
+                        || matches!(character, ' ' | '_' | '-' | '.' | '(' | ')')
+                })
+        })
+}
+
+/// Finds the webhook whose secret has this SHA-256 (in hex), across workspaces: the secret is the address, so it is all a request has.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError::TriggerNotFound`] when no webhook has that hash.
+pub async fn find_webhook_by_secret_hash(
+    database: &SqliteDatabase,
+    secret_hash: &str,
+) -> Result<StoredTrigger, DatabaseError> {
+    let row = sqlx::query(concat!(
+        "SELECT ",
+        columns!(),
+        " FROM triggers WHERE kind = 'webhook' AND secret_hash = ?1"
+    ))
+    .bind(secret_hash)
+    .fetch_optional(database.pool())
+    .await
+    .map_err(|source| DatabaseError::Sqlite {
+        operation: "find a webhook",
+        source,
+    })?
+    .ok_or(DatabaseError::TriggerNotFound)?;
+    decode(&row)
 }
 
 /// Reads one trigger, scoped to its workspace.
@@ -257,7 +370,7 @@ pub async fn set_trigger_enabled(
         let interval = i64::try_from(found.interval_seconds).unwrap_or(i64::MAX);
         let next = nanos(now).saturating_add(interval.saturating_mul(1_000_000_000));
         sqlx::query(
-            "UPDATE triggers SET enabled = 1, baselined = 0, next_poll_nanos = ?3 WHERE id = ?1 AND workspace_id = ?2",
+            "UPDATE triggers SET enabled = 1, baselined = (kind = 'webhook'), next_poll_nanos = ?3 WHERE id = ?1 AND workspace_id = ?2",
         )
         .bind(id)
         .bind(workspace_id)
@@ -291,7 +404,7 @@ pub async fn claim_due_triggers(
     let rows = sqlx::query(concat!(
         "SELECT ",
         columns!(),
-        " FROM triggers WHERE enabled = 1 AND next_poll_nanos <= ?1 ORDER BY next_poll_nanos ASC, id ASC LIMIT ?2"
+        " FROM triggers WHERE enabled = 1 AND kind != 'webhook' AND next_poll_nanos <= ?1 ORDER BY next_poll_nanos ASC, id ASC LIMIT ?2"
     ))
     .bind(nanos(now))
     .bind(i64::from(limit))
@@ -469,7 +582,7 @@ fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<StoredTrigger, DatabaseError>
     Ok(StoredTrigger {
         id: text("id")?,
         workspace_id: text("workspace_id")?,
-        kind: text("kind")?,
+        kind: TriggerKind::parse(&text("kind")?).ok_or_else(|| bad("kind"))?,
         query: text("query")?,
         objective: text("objective")?,
         interval_seconds: u64::try_from(integer("interval_seconds")?)

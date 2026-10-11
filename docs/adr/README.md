@@ -211,3 +211,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0192](0192-the-built-in-browser-keeps-automatic-output-in-profile-runtime-state.md) | The built-in browser keeps automatic output in profile runtime state | Accepted |
 | [0193](0193-a-new-mail-can-start-an-ordinary-run-and-mail-is-treated-as-written-by-a-stranger.md) | A new mail can start an ordinary run, and mail is treated as written by a stranger | Accepted |
 | [0194](0194-a-long-run-leaves-out-its-oldest-tool-results-instead-of-overflowing-the-models-context.md) | A long run leaves out its oldest tool results instead of overflowing the model's context | Accepted |
+| [0195](0195-triggers-can-watch-a-folder-or-listen-for-a-request-and-quiet-hours-hold-announcements.md) | Triggers can watch a folder or listen for a request, and quiet hours hold announcements | Accepted |

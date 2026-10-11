@@ -427,6 +427,9 @@ pub fn router(state: GatewayState) -> Router {
         .merge(crate::trigger_service::routes());
 
     Router::new()
+        // A webhook delivery carries its secret in the address instead of the credential (`trigger_service::is_webhook_request`).
+        .merge(crate::trigger_service::public_routes())
+        .merge(health_routes())
         // The heads-up display's two static assets: no data, no secret, served without the credential
         // (`crate::hud::is_public_asset` is the one place that says so).
         .route(crate::hud::PAGE_PATH, get(crate::hud::page))
@@ -440,12 +443,17 @@ pub fn router(state: GatewayState) -> Router {
             crate::google_account::CALLBACK_PATH,
             get(crate::google_service::callback),
         )
-        .route("/health/live", get(health_live))
-        .route("/health/ready", get(health_ready))
         .nest("/api/v1", api)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .with_state(state)
+}
+
+/// The two health routes, which carry nothing to protect.
+fn health_routes() -> Router<GatewayState> {
+    Router::new()
+        .route("/health/live", get(health_live))
+        .route("/health/ready", get(health_ready))
 }
 
 /// Rejects any request that does not present the profile credential.
@@ -456,6 +464,10 @@ async fn authenticate(State(state): State<GatewayState>, request: Request, next:
     }
     // The browser's return from Google carries no credential; it is inert unless it answers a sign-in started with one.
     if crate::google_service::is_oauth_callback(request.method(), request.uri().path()) {
+        return next.run(request).await;
+    }
+    // A webhook delivery has no credential; its secret in the address is looked up (by hash) and answered `404` when it is not one.
+    if crate::trigger_service::is_webhook_request(request.method(), request.uri().path()) {
         return next.run(request).await;
     }
     let Some(presented) = bearer_token(request.headers()) else {

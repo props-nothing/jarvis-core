@@ -99,8 +99,8 @@ pub use run_event::{
 };
 pub use schedule::{
     Cadence, InvalidSchedule, MAX_INTERVAL_SECONDS, MAX_SCHEDULE_OBJECTIVE_CHARS,
-    MAX_SCHEDULES_PER_WORKSPACE, MIN_INTERVAL_SECONDS, WallClock, Weekdays, parse_interval,
-    system_zone, validate_objective,
+    MAX_SCHEDULES_PER_WORKSPACE, MIN_INTERVAL_SECONDS, QuietHours, WallClock, Weekdays,
+    parse_interval, system_zone, validate_objective,
 };
 pub use secret::{SecretRef, SecretRefValidationError};
 pub use sensitivity::{InvalidSensitivity, Sensitivity};

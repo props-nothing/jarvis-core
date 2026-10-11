@@ -126,8 +126,9 @@ pub use tool_call_repository::{
 pub use trigger_repository::{
     MAX_TRIGGER_INTERVAL_SECONDS, MAX_TRIGGER_OBJECTIVE_CHARS, MAX_TRIGGER_QUERY_CHARS,
     MAX_TRIGGERS_PER_WORKSPACE, MIN_TRIGGER_INTERVAL_SECONDS, NewTrigger, StoredTrigger,
-    claim_due_triggers, claim_trigger_event, count_trigger_runs_since, create_trigger,
-    delete_trigger, find_trigger, list_triggers, mark_trigger_baselined, record_trigger_poll,
-    record_trigger_run, set_trigger_enabled,
+    TriggerKind, claim_due_triggers, claim_trigger_event, count_trigger_runs_since, create_trigger,
+    delete_trigger, find_trigger, find_webhook_by_secret_hash, list_triggers,
+    mark_trigger_baselined, record_trigger_poll, record_trigger_run, set_trigger_enabled,
+    valid_trigger_folder,
 };
 pub use workspace_repository::{DataPolicy, NewWorkspace, WorkspaceMode, record_workspace};

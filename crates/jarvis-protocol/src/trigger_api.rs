@@ -13,11 +13,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateTriggerRequest {
-    /// The Gmail search to watch, as typed in Gmail's search box, such as `from:acme.example is:unread`.
-    pub query: String,
-    /// What each run is asked to do about one new matching message.
+    /// What to wait for: `mail` (the default), `file` or `webhook`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// What to watch. For `mail`, the Gmail search as typed in Gmail's search box, such as `from:acme.example is:unread`. For `file`, a
+    /// folder inside a folder you granted, such as `scans/new`. Not used by `webhook`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// What each run is asked to do about one event.
     pub objective: String,
-    /// How often to look, such as `5m` or `1h`. Between one minute and one day; the default is five minutes.
+    /// How often to look, such as `5m` or `1h`. Between one minute and one day; the default is five minutes. Not used by `webhook`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every: Option<String>,
     /// The project every run belongs to, by identifier or name.
@@ -61,6 +66,10 @@ pub struct TriggerReply {
     pub fire_count: u32,
     /// When it was created.
     pub created_at: UtcTimestamp,
+    /// For a webhook, its address (`/hooks/<secret>`), **shown only in the answer that creates it**: only a hash of the secret is kept,
+    /// so it cannot be shown again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
 }
 
 /// Response body for `GET /api/v1/triggers`.

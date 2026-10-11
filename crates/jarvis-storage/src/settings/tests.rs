@@ -69,6 +69,32 @@ fn setting_one_value_keeps_everything_else() {
 }
 
 #[test]
+fn quiet_hours_are_saved_as_a_window_and_a_bad_one_is_refused_leaving_the_file_untouched() {
+    let (_scratch, paths) = Scratch::new();
+    set(&paths, "quiet_hours", &words("22:00-07:00")).unwrap_or_else(|error| panic!("{error}"));
+    let loaded = ConfigStore::from_paths(&paths)
+        .load()
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        loaded
+            .config()
+            .daemon()
+            .quiet_hours()
+            .map(jarvis_core::QuietHours::describe),
+        Some("22:00-07:00".to_owned())
+    );
+    let before = text(&paths);
+    for bad in ["22:00", "07:00-07:00", "25:00-07:00", "night"] {
+        assert!(set(&paths, "quiet_hours", &words(bad)).is_err(), "{bad:?}");
+    }
+    assert_eq!(
+        text(&paths),
+        before,
+        "a refused change leaves the file as it was"
+    );
+}
+
+#[test]
 fn workspace_daily_token_limit_is_saved_as_a_nonnegative_integer() {
     let (_scratch, paths) = Scratch::new();
 

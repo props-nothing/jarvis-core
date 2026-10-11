@@ -309,6 +309,68 @@ pub fn system_zone() -> Option<String> {
     jiff::tz::TimeZone::system().iana_name().map(str::to_owned)
 }
 
+/// A daily window in which JARVIS does not interrupt the owner: `22:00-07:00`, or `13:00-14:00`.
+///
+/// It decides **when to announce**, never whether work happens: a run goes on, and what finished or is waiting is announced when the
+/// window ends. The window is read in a time zone (this machine's unless one is given), so it follows daylight saving.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuietHours {
+    start: u16,
+    end: u16,
+}
+
+impl QuietHours {
+    /// Reads `HH:MM-HH:MM`. A window that ends before it starts crosses midnight. Equal ends would be all day or none, so are refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidSchedule::TimeSyntax`] for anything else.
+    pub fn parse(text: &str) -> Result<Self, InvalidSchedule> {
+        let (start, end) = text.split_once('-').ok_or(InvalidSchedule::TimeSyntax)?;
+        let (start, end) = (parse_time_of_day(start)?, parse_time_of_day(end)?);
+        if start == end {
+            return Err(InvalidSchedule::TimeSyntax);
+        }
+        Ok(Self { start, end })
+    }
+
+    /// Whether a minute of the local day (0 to 1439) is inside the window; the start is in, the end is out.
+    #[must_use]
+    pub const fn contains_minute(self, minute: u16) -> bool {
+        if self.start < self.end {
+            minute >= self.start && minute < self.end
+        } else {
+            minute >= self.start || minute < self.end
+        }
+    }
+
+    /// Whether `at` is inside the window, read in `zone` (an IANA name) or, when none is given or it is unknown, this machine's zone.
+    #[must_use]
+    pub fn is_quiet_at(self, at: UtcTimestamp, zone: Option<&str>) -> bool {
+        let Ok(instant) = jiff::Timestamp::from_nanosecond(at.unix_nanos()) else {
+            return false;
+        };
+        let zone = zone
+            .and_then(|name| jiff::tz::db().get(name).ok())
+            .unwrap_or_else(jiff::tz::TimeZone::system);
+        let local = instant.to_zoned(zone);
+        let minute = i32::from(local.hour()) * 60 + i32::from(local.minute());
+        u16::try_from(minute).is_ok_and(|minute| self.contains_minute(minute))
+    }
+
+    /// In the text form it was read from.
+    #[must_use]
+    pub fn describe(self) -> String {
+        format!(
+            "{:02}:{:02}-{:02}:{:02}",
+            self.start / 60,
+            self.start % 60,
+            self.end / 60,
+            self.end % 60
+        )
+    }
+}
+
 fn parse_time_of_day(text: &str) -> Result<u16, InvalidSchedule> {
     let (hours, minutes) = text
         .trim()
@@ -497,6 +559,82 @@ mod tests {
     fn at(seconds: i128) -> UtcTimestamp {
         UtcTimestamp::from_unix_nanos(1_774_000_000_000_000_000 + seconds * 1_000_000_000)
             .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// **A window that crosses midnight is in at both ends of the night, and the start is in while the end is out.**
+    #[test]
+    fn quiet_hours_cross_midnight_and_the_end_is_out() {
+        let night = QuietHours::parse("22:00-07:00").unwrap_or_else(|error| panic!("{error}"));
+        for minute in [22 * 60, 23 * 60 + 59, 0, 3 * 60, 6 * 60 + 59] {
+            assert!(night.contains_minute(minute), "{minute}");
+        }
+        for minute in [7 * 60, 12 * 60, 21 * 60 + 59] {
+            assert!(!night.contains_minute(minute), "{minute}");
+        }
+        let lunch = QuietHours::parse("13:00-14:00").unwrap_or_else(|error| panic!("{error}"));
+        assert!(lunch.contains_minute(13 * 60) && lunch.contains_minute(13 * 60 + 59));
+        assert!(!lunch.contains_minute(12 * 60 + 59) && !lunch.contains_minute(14 * 60));
+        assert_eq!(night.describe(), "22:00-07:00");
+    }
+
+    #[test]
+    fn quiet_hours_refuse_what_is_not_a_window() {
+        for bad in [
+            "",
+            "22:00",
+            "22:00-",
+            "-07:00",
+            "07:00-07:00",
+            "25:00-07:00",
+            "22:00-07:60",
+            "22:0-07:00",
+            "22:00 to 07:00",
+            "22:00-07:00-08:00",
+        ] {
+            assert_eq!(
+                QuietHours::parse(bad),
+                Err(InvalidSchedule::TimeSyntax),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// **The window is read in a time zone, so it follows daylight saving**: 21:30 UTC is 23:30 in Amsterdam in October (UTC+2) but 22:30
+    /// in January (UTC+1), and 20:30 UTC is 22:30 in October and 21:30 in January.
+    #[test]
+    fn quiet_hours_are_read_in_the_zone_and_follow_daylight_saving() {
+        let night = QuietHours::parse("22:30-07:00").unwrap_or_else(|error| panic!("{error}"));
+        let zone = Some("Europe/Amsterdam");
+        let utc = |text: &str| {
+            text.parse::<UtcTimestamp>()
+                .unwrap_or_else(|e| panic!("{e}"))
+        };
+        // 2026-10-11 is in summer time (UTC+2).
+        assert!(
+            night.is_quiet_at(utc("2026-10-11T20:30:00Z"), zone),
+            "22:30 local"
+        );
+        assert!(
+            !night.is_quiet_at(utc("2026-10-11T20:29:00Z"), zone),
+            "22:29 local"
+        );
+        assert!(
+            night.is_quiet_at(utc("2026-10-11T04:59:00Z"), zone),
+            "06:59 local"
+        );
+        assert!(
+            !night.is_quiet_at(utc("2026-10-11T05:00:00Z"), zone),
+            "07:00 local"
+        );
+        // 2026-01-15 is in winter time (UTC+1): the same local window is an hour later in UTC.
+        assert!(
+            !night.is_quiet_at(utc("2026-01-15T20:30:00Z"), zone),
+            "21:30 local"
+        );
+        assert!(
+            night.is_quiet_at(utc("2026-01-15T21:30:00Z"), zone),
+            "22:30 local"
+        );
     }
 
     #[test]

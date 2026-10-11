@@ -168,6 +168,11 @@ pub struct DaemonConfig {
     /// exhausted workspace makes no new call and the call that reaches the limit remains recorded.
     #[serde(default)]
     workspace_daily_token_limit: u64,
+    /// A daily window, `22:00-07:00`, in which JARVIS holds its announcements (desktop notices, push, Telegram) until it ends (`ADR-0195`).
+    ///
+    /// Read in this machine's time zone. Work is never held, only the telling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quiet_hours: Option<String>,
     /// The absolute directories the read-only filesystem tool is confined to.
     ///
     /// # Why this is configuration and not derived
@@ -317,6 +322,15 @@ impl DaemonConfig {
     #[must_use]
     pub const fn workspace_daily_token_limit(&self) -> u64 {
         self.workspace_daily_token_limit
+    }
+
+    /// Returns the quiet-hours window, when one is set. A stored value that is not a window is refused when the configuration loads, so
+    /// this never meets one.
+    #[must_use]
+    pub fn quiet_hours(&self) -> Option<jarvis_core::QuietHours> {
+        self.quiet_hours
+            .as_deref()
+            .and_then(|text| jarvis_core::QuietHours::parse(text).ok())
     }
 
     /// Returns whether every live-provider setting is present.
@@ -469,6 +483,7 @@ impl Default for DaemonConfig {
             executor_base_url: None,
             executor_api_key_ref: None,
             workspace_daily_token_limit: 0,
+            quiet_hours: None,
             // Empty: no filesystem tool is registered until an operator grants roots.
             tool_workspace_roots: Vec::new(),
             // Not served: an inbound MCP endpoint is opt-in, deliberately.
@@ -782,6 +797,11 @@ impl Config {
             && (!live || !REASONING_EFFORTS.contains(&effort.as_str()))
         {
             return Err(ConfigError::InvalidReasoningEffort);
+        }
+        if let Some(text) = &self.daemon.quiet_hours
+            && jarvis_core::QuietHours::parse(text).is_err()
+        {
+            return Err(ConfigError::InvalidQuietHours);
         }
         // A model identifier as providers write them: no spaces or control characters, and the fallback is meaningless without a
         // live provider to ask it of.
@@ -1206,6 +1226,11 @@ pub enum ConfigError {
         "daemon.executor_reasoning_effort must be none, low, medium or high, and needs daemon.executor_model = openai-compatible"
     )]
     InvalidReasoningEffort,
+    /// The quiet hours were not a window such as `22:00-07:00`.
+    #[error(
+        "daemon.quiet_hours must be a daily window such as 22:00-07:00 (24-hour times; the start and end differ)"
+    )]
+    InvalidQuietHours,
     /// The fallback model name was blank, over-long, had a space or control character, or no live provider is selected.
     #[error(
         "daemon.executor_fallback_model_name must be a model identifier with no spaces, and needs daemon.executor_model = openai-compatible"
@@ -1412,6 +1437,7 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "executor_base_url",
                 "executor_api_key_ref",
                 "workspace_daily_token_limit",
+                "quiet_hours",
                 "tool_workspace_roots",
                 "mcp_serve_port",
                 "code_sandbox_image",

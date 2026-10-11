@@ -394,3 +394,103 @@ async fn the_run_list_shows_what_a_run_answered() {
     let (status, _) = send(&fixture, "GET", "/api/v1/runs?limit=51", None).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+/// **A run a trigger started is noticed once, and only after the first pass.**
+///
+/// The first pass records what already exists, so a restart does not announce yesterday's results; a plain run is never taken for one.
+/// A trigger can start several runs in one look, so they are found by their framing and not by one `last_run_id`.
+#[tokio::test]
+async fn trigger_started_runs_are_noticed_once_and_only_after_the_first_pass() {
+    let fixture = fixture(false).await;
+    let start = |objective: String| {
+        let state = fixture.state.clone();
+        async move {
+            must(
+                state
+                    .start_and_drive(&jarvis_protocol::StartRunRequest {
+                        objective,
+                        session_id: None,
+                        idempotency_key: None,
+                        project_id: None,
+                    })
+                    .await,
+            )
+        }
+    };
+    let triggered = |task: &str, id: &str| {
+        format!(
+            "{}{task}{}{id}",
+            crate::trigger_service::notice(jarvis_storage::TriggerKind::Mail),
+            crate::trigger_service::MESSAGE_MARKER
+        )
+    };
+    let recent = || async {
+        must(jarvis_storage::read_recent_runs(&fixture.database, LOCAL_WORKSPACE_ID, 50).await)
+    };
+
+    start(triggered("old task", "m0")).await;
+    start("a plain question".to_owned()).await;
+    let mut watcher = ResultWatcher::default();
+    watcher.note_triggered(&recent().await);
+    assert!(
+        watcher.pending.is_empty(),
+        "what existed at the first pass is not announced"
+    );
+
+    let new = start(triggered("note the subject", "m1")).await;
+    start("another plain question".to_owned()).await;
+    watcher.note_triggered(&recent().await);
+    assert_eq!(watcher.pending.len(), 1, "{:?}", watcher.pending);
+    let (run_id, task, kind) = &watcher.pending[0];
+    assert_eq!(run_id, &new.run_id);
+    assert_eq!(task, "note the subject", "named as the owner wrote it");
+    assert_eq!(*kind, "mail-triggered task");
+
+    watcher.note_triggered(&recent().await);
+    assert_eq!(
+        watcher.pending.len(),
+        1,
+        "the same run is not noticed twice"
+    );
+}
+
+/// **Quiet hours hold the telling, not the work.** A triggered run that finishes inside the window stays pending (nothing is announced),
+/// and is still there for the first pass after it.
+#[tokio::test]
+async fn a_finished_triggered_run_is_held_while_quiet_hours_are_on() {
+    let fixture = fixture(true).await;
+    let mut watcher = ResultWatcher::default();
+    // The first pass records what exists.
+    watcher.pass_with(&fixture.state, true).await;
+
+    let objective = format!(
+        "{}note it{}m1",
+        crate::trigger_service::notice(jarvis_storage::TriggerKind::Mail),
+        crate::trigger_service::MESSAGE_MARKER
+    );
+    let started = must(
+        fixture
+            .state
+            .start_and_drive(&jarvis_protocol::StartRunRequest {
+                objective,
+                session_id: None,
+                idempotency_key: None,
+                project_id: None,
+            })
+            .await,
+    );
+    wait_for_settled(&fixture, &started.run_id).await;
+
+    watcher.pass_with(&fixture.state, true).await;
+    assert_eq!(
+        watcher.pending.len(),
+        1,
+        "the finished run is held, not announced"
+    );
+    watcher.pass_with(&fixture.state, true).await;
+    assert_eq!(
+        watcher.pending.len(),
+        1,
+        "and it stays held for as long as the window lasts"
+    );
+}

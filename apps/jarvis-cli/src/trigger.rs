@@ -31,13 +31,13 @@ pub async fn run_trigger(client: &ApiClient, arguments: &[String]) -> ExitStatus
 
 /// The usage text for `jarvis trigger`.
 pub(crate) const fn trigger_usage() -> &'static str {
-    "usage: jarvis trigger <add|list|pause|resume|remove> [...]\n       jarvis trigger add --mail \"is:unread from:client.example\" [--every 5m] [--project NAME] <objective...>\n       jarvis trigger list [--json]\n       jarvis trigger pause|resume|remove ID"
+    "usage: jarvis trigger <add|list|pause|resume|remove> [...]\n       jarvis trigger add --mail \"is:unread from:client.example\" [--every 5m] [--project NAME] <objective...>\n       jarvis trigger add --file scans/new [--every 5m] [--project NAME] <objective...>   # a new or changed file in a folder inside a granted folder\n       jarvis trigger add --webhook [--project NAME] <objective...>   # prints a secret local address once; a request to it starts a task\n       jarvis trigger list [--json]\n       jarvis trigger pause|resume|remove ID"
 }
 
-/// Splits `add` arguments into the mail query, the flags and the objective words.
+/// Splits `add` arguments into what to watch, the flags and the objective words.
 fn parse_add(arguments: &[String]) -> Result<CreateTriggerRequest, String> {
     let mut words: Vec<&str> = Vec::new();
-    let mut query: Option<String> = None;
+    let mut watched: Option<(&'static str, Option<String>)> = None;
     let mut every: Option<String> = None;
     let mut project: Option<String> = None;
     let mut index = 2;
@@ -49,13 +49,37 @@ fn parse_add(arguments: &[String]) -> Result<CreateTriggerRequest, String> {
                 .cloned()
                 .ok_or_else(|| format!("{name} needs {what}"))
         };
+        let mut watch = |kind: &'static str, query: Option<String>| -> Result<(), String> {
+            if watched.is_some() {
+                return Err("name one thing to watch: --mail, --file or --webhook".to_owned());
+            }
+            watched = Some((kind, query));
+            Ok(())
+        };
         match arguments[index].as_str() {
             "--mail" => {
-                query = Some(value(
-                    "--mail",
-                    "a Gmail search in quotes, such as \"is:unread from:acme.example\"",
-                )?);
+                watch(
+                    "mail",
+                    Some(value(
+                        "--mail",
+                        "a Gmail search in quotes, such as \"is:unread from:acme.example\"",
+                    )?),
+                )?;
                 index += 2;
+            }
+            "--file" => {
+                watch(
+                    "file",
+                    Some(value(
+                        "--file",
+                        "a folder inside a granted folder, such as scans/new",
+                    )?),
+                )?;
+                index += 2;
+            }
+            "--webhook" => {
+                watch("webhook", None)?;
+                index += 1;
             }
             "--every" => {
                 every = Some(value("--every", "an interval such as 5m or 1h")?);
@@ -73,11 +97,17 @@ fn parse_add(arguments: &[String]) -> Result<CreateTriggerRequest, String> {
             }
         }
     }
-    let query = query.ok_or("trigger add needs --mail with a Gmail search, for example: jarvis trigger add --mail \"is:unread\" note each subject in the project journal")?;
+    let Some((kind, query)) = watched else {
+        return Err("trigger add needs what to watch: --mail \"is:unread\", --file scans/new or --webhook, for example: jarvis trigger add --mail \"is:unread\" note each subject in the project journal".to_owned());
+    };
     if words.is_empty() {
-        return Err("trigger add needs an objective: what to do about each new message".to_owned());
+        return Err("trigger add needs an objective: what to do about each event".to_owned());
+    }
+    if kind == "webhook" && every.is_some() {
+        return Err("a webhook is not polled, so --every does not apply to it".to_owned());
     }
     Ok(CreateTriggerRequest {
+        kind: Some(kind.to_owned()),
         query,
         objective: words.join(" "),
         every,
@@ -98,9 +128,18 @@ async fn add(client: &ApiClient, arguments: &[String]) -> ExitStatus {
         Ok(created) => {
             println!("trigger {}", created.trigger_id);
             println!("  {}", describe(&created));
-            eprintln!(
-                "jarvis: mail that matches now is only recorded; each new one starts a run while you are away, and anything it needs approval for waits in `jarvis approvals list`"
-            );
+            if let Some(path) = &created.webhook_path {
+                println!(
+                    "  address: {path}   (on this computer's port; shown only now, keep it secret)"
+                );
+                eprintln!(
+                    "jarvis: anyone who has this address can start a task, so give it only to the service you mean. The request body reaches the task as untrusted data. It is not shown again; make a new trigger to change it"
+                );
+            } else {
+                eprintln!(
+                    "jarvis: what already exists is only recorded; each new event starts a run while you are away, and anything it needs approval for waits in `jarvis approvals list`"
+                );
+            }
             ExitStatus::Ok
         }
         Err(error) => report(&error),
@@ -137,11 +176,12 @@ async fn list(client: &ApiClient, json: bool) -> ExitStatus {
 
 /// Describes what a trigger watches and when it looks next, in the words a person would use.
 fn describe(trigger: &TriggerReply) -> String {
-    let watching = format!(
-        "mail matching {:?}, every {}",
-        trigger.query,
-        humanize(trigger.interval_seconds)
-    );
+    let every = humanize(trigger.interval_seconds);
+    let watching = match trigger.kind.as_str() {
+        "file" => format!("new files in {:?}, every {every}", trigger.query),
+        "webhook" => "requests to its secret address".to_owned(),
+        _ => format!("mail matching {:?}, every {every}", trigger.query),
+    };
     let watching = match &trigger.project {
         Some(project) => format!("{watching}, project {project}"),
         None => watching,
@@ -149,8 +189,9 @@ fn describe(trigger: &TriggerReply) -> String {
     match trigger.next_poll_at {
         Some(next) if trigger.baselined => format!("{watching}, next look at {next}"),
         Some(next) => {
-            format!("{watching}, first look at {next} (records what matches, starts nothing)")
+            format!("{watching}, first look at {next} (records what exists, starts nothing)")
         }
+        None if trigger.kind == "webhook" && trigger.enabled => format!("{watching}, listening"),
         None => format!("{watching}, paused"),
     }
 }
@@ -247,10 +288,30 @@ mod tests {
         ]);
         arguments.extend(words("--every 10m note the subject --project Support"));
         let request = parse_add(&arguments).unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(request.query, "is:unread from:acme.example");
+        assert_eq!(request.kind.as_deref(), Some("mail"));
+        assert_eq!(
+            request.query.as_deref(),
+            Some("is:unread from:acme.example")
+        );
         assert_eq!(request.objective, "note the subject");
         assert_eq!(request.every.as_deref(), Some("10m"));
         assert_eq!(request.project_id.as_deref(), Some("Support"));
+    }
+
+    #[test]
+    fn a_file_folder_and_a_webhook_are_parsed_and_exactly_one_thing_is_watched() {
+        let file = parse_add(&words("trigger add --file scans/new read it"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(file.kind.as_deref(), Some("file"));
+        assert_eq!(file.query.as_deref(), Some("scans/new"));
+        let hook = parse_add(&words("trigger add --webhook log the body"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(hook.kind.as_deref(), Some("webhook"));
+        assert_eq!(hook.query, None);
+        assert_eq!(hook.objective, "log the body");
+        // Two things, or an interval for a webhook, are refused.
+        assert!(parse_add(&words("trigger add --webhook --file scans do it")).is_err());
+        assert!(parse_add(&words("trigger add --webhook --every 5m do it")).is_err());
     }
 
     #[test]

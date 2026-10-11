@@ -127,6 +127,16 @@ const SETTINGS: &[Setting] = &[
     },
     Setting {
         table: "daemon",
+        field: "quiet_hours",
+        kind: Kind::Text,
+        help: "a daily window, such as 22:00-07:00, in which JARVIS holds its notices (desktop, push, Telegram) until it ends",
+        group: "advanced",
+        default: None,
+        unset_means: "No quiet hours: a finished task or a waiting approval is announced at once. With a window, work still goes on; only the telling waits, and everything held is announced when the window ends. Read in this machine's time zone.",
+        example: "22:00-07:00",
+    },
+    Setting {
+        table: "daemon",
         field: "workspace_daily_token_limit",
         kind: Kind::Count,
         help: "the most input plus output tokens all runs may use in a rolling 24 hours; 0 means unlimited",
