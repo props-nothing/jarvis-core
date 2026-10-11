@@ -71,9 +71,15 @@ async fn run_with_call(database: &SqliteDatabase) -> (String, String) {
 #[test]
 fn the_contact_tools_need_no_approval_because_they_only_write_local_rows() {
     let definitions = must(ContactsTool::definitions());
-    assert_eq!(definitions.len(), 3);
+    assert_eq!(definitions.len(), 5);
     for definition in &definitions {
-        assert_eq!(definition.approval(), ApprovalPolicy::Auto);
+        // Everything that stays inside one row runs; folding two contacts into one removes a row, so it asks.
+        let expected = if definition.id().to_string() == MERGE_TOOL {
+            ApprovalPolicy::Ask
+        } else {
+            ApprovalPolicy::Auto
+        };
+        assert_eq!(definition.approval(), expected, "{}", definition.id());
     }
     let save = definitions
         .iter()
@@ -190,4 +196,58 @@ async fn a_contact_found_inside_a_project_is_filed_under_it() {
     );
     let filed = filed.first().and_then(|contact| contact.project_id.clone());
     assert_eq!(filed.as_deref(), Some(project.id.as_str()));
+}
+
+/// **Duplicates are shown with what a merge would make of them, and the merge itself folds one into the other and returns what it removed.**
+#[tokio::test]
+async fn duplicates_are_previewed_and_merged() {
+    let (_scratch, database) = database().await;
+    let tool = ContactsTool::new(Arc::clone(&database));
+    let (_session, call) = run_with_call(&database).await;
+    let one = must(
+        tool.save(
+            &call,
+            &json!({ "company": "Acme B.V.", "person": "Eva Bakker", "email": "eva@acme.nl", "role": "Owner" }),
+            now(),
+        )
+        .await,
+    );
+    let two = must(
+        tool.save(
+            &call,
+            &json!({ "company": "Acme", "person": "eva bakker", "phone": "06 1234 5678", "notes": "Called once." }),
+            now(),
+        )
+        .await,
+    );
+    assert_ne!(one["contact"]["id"], two["contact"]["id"]);
+
+    let listed = must(tool.duplicates(&json!({})).await);
+    assert_eq!(listed["count"], 1);
+    let pair = &listed["pairs"][0];
+    assert_eq!(pair["keep"]["email"], "eva@acme.nl");
+    assert_eq!(pair["would_become"]["phone"], "06 1234 5678");
+    // Nothing was changed by looking.
+    assert_eq!(must(tool.stats().await)["total"], 2);
+
+    let done = must(
+        tool.merge(
+            &json!({ "keep_id": pair["keep"]["id"], "remove_id": pair["remove"]["id"] }),
+            now(),
+        )
+        .await,
+    );
+    assert_eq!(done["merged"]["phone"], "06 1234 5678");
+    assert_eq!(done["removed"]["person"], "eva bakker");
+    assert_eq!(must(tool.stats().await)["total"], 1);
+    assert_eq!(must(tool.duplicates(&json!({})).await)["count"], 0);
+
+    for bad in [
+        json!({ "keep_id": "x", "remove_id": "x" }),
+        json!({ "keep_id": "no", "remove_id": "such" }),
+        json!({ "keep_id": "" }),
+    ] {
+        assert!(tool.merge(&bad, now()).await.is_err(), "{bad}");
+    }
+    assert_eq!(must(tool.stats().await)["total"], 1);
 }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jarvis_core::{Sensitivity, SystemClock, UtcTimestamp};
-use jarvis_documents::{WriteError, write_csv, write_docx, write_xlsx};
+use jarvis_documents::{WriteError, write_csv, write_docx, write_pdf, write_xlsx};
 use jarvis_tools::{
     AdapterError, ApprovalPolicy, Availability, BoundedOutput, EffectSet, Idempotency,
     ProviderEvidence, RetryDeclaration, SchemaError, Scope, ScopeError, ScopeSet, ToolCallResult,
@@ -35,10 +35,10 @@ const INPUT: &str = r#"{
   "additionalProperties": false,
   "required": ["path", "content"],
   "properties": {
-    "path": { "type": "string", "minLength": 1, "maxLength": 260, "description": "A NEW path inside a granted folder ending in .xlsx, .csv or .docx. It must not exist yet: this never replaces a file." },
+    "path": { "type": "string", "minLength": 1, "maxLength": 260, "description": "A NEW path inside a granted folder ending in .xlsx, .csv, .docx or .pdf. It must not exist yet: this never replaces a file." },
     "content": {
       "type": "object",
-      "description": "What to write. For .xlsx: {\"sheets\":[{\"name\":\"Prospects\",\"header\":[\"Company\",\"City\"],\"rows\":[[\"Acme\",\"Utrecht\"],[\"Beta\",null]]}]} (or header and rows directly for one sheet). Cells are text, numbers, true/false or null; everything is stored as given, never as a formula. For .csv: the same, one sheet. For .docx: {\"title\":\"Report\",\"blocks\":[{\"type\":\"heading\",\"level\":1,\"text\":\"...\"},{\"type\":\"paragraph\",\"text\":\"...\"},{\"type\":\"bullets\",\"items\":[\"...\"]},{\"type\":\"numbered\",\"items\":[\"...\"]},{\"type\":\"table\",\"header\":[\"A\",\"B\"],\"rows\":[[\"1\",\"2\"]]}]}."
+      "description": "What to write. For .xlsx: {\"sheets\":[{\"name\":\"Prospects\",\"header\":[\"Company\",\"City\"],\"rows\":[[\"Acme\",\"Utrecht\"],[\"Beta\",null]]}]} (or header and rows directly for one sheet). Cells are text, numbers, true/false or null; everything is stored as given, never as a formula. For .csv: the same, one sheet. For .docx and .pdf: {\"title\":\"Report\",\"blocks\":[{\"type\":\"heading\",\"level\":1,\"text\":\"...\"},{\"type\":\"paragraph\",\"text\":\"...\"},{\"type\":\"bullets\",\"items\":[\"...\"]},{\"type\":\"numbered\",\"items\":[\"...\"]},{\"type\":\"table\",\"header\":[\"A\",\"B\"],\"rows\":[[\"1\",\"2\"]]}]}."
     },
     "delimiter": { "type": "string", "enum": [",", ";"], "description": "Only for .csv: the separator. Dutch and German Excel split on a semicolon; the default is a comma." }
   }
@@ -88,7 +88,7 @@ impl WriteDocumentTool {
             id: ToolId::new(WRITE_DOCUMENT_TOOL)?,
             version: "1.0.0".to_owned(),
             title: "Write a document".to_owned(),
-            description: "Creates a NEW Excel workbook (.xlsx), CSV (.csv) or Word document (.docx) inside a granted folder from the content you give: \
+            description: "Creates a NEW Excel workbook (.xlsx), CSV (.csv), Word document (.docx) or PDF (.pdf) inside a granted folder from the content you give: \
                           sheets of rows with a header, or headings, paragraphs, lists and tables. It never replaces a file: if the name exists, \
                           choose another. Text is written as text and never as a formula. Use it for reports, lists and spreadsheets the user asked for; \
                           for plain notes use jarvis.files.write."
@@ -125,9 +125,18 @@ impl WriteDocumentTool {
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
+        let mut replaced = 0_usize;
         let (format, bytes) = match extension.as_str() {
             "xlsx" => ("xlsx", write_xlsx(content)),
             "docx" => ("docx", write_docx(content)),
+            // The standard PDF fonts cover Western European text; what they cannot show is counted and reported below.
+            "pdf" => (
+                "pdf",
+                write_pdf(content).map(|(bytes, count)| {
+                    replaced = count;
+                    bytes
+                }),
+            ),
             "csv" => {
                 let delimiter = match arguments.get("delimiter").and_then(Value::as_str) {
                     None | Some(",") => ',',
@@ -138,7 +147,7 @@ impl WriteDocumentTool {
             }
             _ => {
                 return Err(refused(
-                    "the file must end in .xlsx, .csv or .docx (PDF and slides are not written yet)",
+                    "the file must end in .xlsx, .csv, .docx or .pdf (slides are not written yet)",
                 ));
             }
         };
@@ -161,12 +170,19 @@ impl WriteDocumentTool {
                 std::io::ErrorKind::IsADirectory => refused("that path is a folder"),
                 _ => refused("the file could not be written inside the granted folders"),
             })?;
-        Ok(json!({
+        let mut answer = json!({
             "path": text,
             "format": format,
             "bytes": bytes.len(),
             "created": created,
-        }))
+        });
+        if replaced > 0 {
+            answer["replaced_characters"] = json!(replaced);
+            answer["note"] = json!(
+                "the PDF fonts cover Western European text only: those characters were drawn as ? . Tell the user, or write a .docx instead."
+            );
+        }
+        Ok(answer)
     }
 }
 

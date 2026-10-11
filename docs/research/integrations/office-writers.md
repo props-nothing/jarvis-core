@@ -11,7 +11,7 @@ selected_sdk: "rust_xlsxwriter 0.99.1 and docx-rs 0.4.22 (crates.io, pinned)"
 
 ## Scope
 
-`P11-010` (`ADR-0185`): create a new `.xlsx`, `.docx` or `.csv` from structured content a model wrote. **Out of scope:** PDF and `.pptx` (open), charts, images, formulas, editing an existing file, styles beyond a header row and headings.
+`P11-010` (`ADR-0185`): create a new `.xlsx`, `.docx` or `.csv` from structured content a model wrote. `.pdf` was added the same day (`ADR-0190`, section "PDF" below). **Out of scope:** `.pptx` (open), charts, images, formulas, editing an existing file, styles beyond a header row and headings.
 
 ## Official Sources
 
@@ -48,8 +48,15 @@ Hand-written OOXML with the `zip` already in the tree (one version of zip, but n
 
 - Done: 12 writer tests (read back with the independent reader, looking inside the archives for no `<f>` formula, sheet names, limits, markup escaping, CSV quoting) and 4 tool tests (formats, never replaces, bad paths and content write nothing).
 - Done, live: a real model asked for a workbook and a report with a note starting `=`; both files were **opened in Microsoft Excel and Word 16** by COM automation with no repair: Excel showed the sheet, a bold header, the filter, the `=check later` note as text (`HasFormula` false); Word showed `Title` and `Heading 1` styles, three list paragraphs and one table.
-- Open: LibreOffice and Google Sheets were not tried; PDF and PowerPoint are not written.
+- Open: LibreOffice and Google Sheets were not tried; PowerPoint is not written.
 
 ## Unresolved Questions
 
 - Whether the header formatting survives Google Sheets import (cosmetic). Blocks nothing.
+
+## PDF (added 2026-10-11, `ADR-0190`)
+
+- **Sources:** Adobe's Core 14 font metrics, `Helvetica.afm` and `Helvetica-Bold.afm` (AFM 4.1, copyright Adobe Systems Incorporated, 1997), read from `github.com/apache/pdfbox` (`pdfbox/src/main/resources/org/apache/pdfbox/resources/afm/`, accessed 2026-10-11); the PDF specification's standard Type 1 fonts and `WinAnsiEncoding`; `lopdf` 0.45.0, already a dependency for reading PDFs. No `llms.txt` exists for any of them.
+- **Decision:** write the file directly with `lopdf` and the two standard fonts, which every reader has, so nothing is embedded and nothing new is added to the build. Line widths come from the AFM widths for codes 32 to 255, generated into `crates/jarvis-documents/src/pdf_metrics.rs`. A different crate (`printpdf`, `krilla`, `genpdf`) would add a dependency tree and a font file for a layout this plain.
+- **Coverage:** `WinAnsiEncoding`: Western European letters, the euro sign, typographic quotes and dashes. Anything else (another script, an emoji) is drawn as `?` and **counted**; the tool answer carries `replaced_characters` and a note, so the model tells the user. Not covered: right-to-left text, ligatures, hyphenation, links, images.
+- **Verified:** 8 writer tests (read back with the workspace reader, accents and the euro sign, brackets and backslashes, wrapping within the width with no character lost, pagination with a repeated table header and "Page n of m", wrong shapes, the 300-page bound) and a tool test. Live: a real model wrote a Dutch quotation and the file was **rendered by pdf.js** (a real PDF engine): title, headings, euro amounts, bullets, numbers and a table with a shaded header all drawn correctly. Not opened in Acrobat or Edge's own viewer.

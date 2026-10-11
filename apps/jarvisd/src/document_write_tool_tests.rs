@@ -117,3 +117,35 @@ async fn bad_requests_write_nothing() {
         "a refused request left files behind: {left:?}"
     );
 }
+
+/// **A PDF is written, reads back, and says when characters could not be shown.**
+#[tokio::test]
+async fn a_pdf_is_written_and_reports_what_it_could_not_draw() {
+    let (tool, folder) = tool_over_a_folder();
+    let made = tool
+        .write(&json!({ "path": "rapport.pdf", "content": { "title": "Rapport", "blocks": [{ "type": "paragraph", "text": "Café in Utrecht kost €5" }] } }))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(made["format"], "pdf");
+    assert!(made.get("replaced_characters").is_none());
+    let bytes =
+        std::fs::read(folder.0.join("rapport.pdf")).unwrap_or_else(|error| panic!("{error}"));
+    let read =
+        jarvis_documents::extract("rapport.pdf", &bytes).unwrap_or_else(|error| panic!("{error}"));
+    assert!(read.text.contains("Café in Utrecht kost €5") && read.text.contains("Rapport"));
+
+    let odd = tool
+        .write(&json!({ "path": "odd.pdf", "content": { "blocks": [{ "type": "paragraph", "text": "ok \u{4F60}" }] } }))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(odd["replaced_characters"], 1);
+    assert!(
+        odd["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Western European")
+    );
+    assert!(
+        tool.write(&json!({ "path": "rapport.pdf", "content": { "blocks": [] } }))
+            .is_err(),
+        "never replaces"
+    );
+}

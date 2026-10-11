@@ -55,6 +55,11 @@ pub(crate) async fn fixture() -> Fixture {
                     }
                 }
                 let text = String::from_utf8_lossy(&received).to_string();
+                let method = text
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
                 let path = text
                     .split_whitespace()
                     .nth(1)
@@ -67,12 +72,16 @@ pub(crate) async fn fixture() -> Fixture {
                 seen.lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push((path.clone(), body));
-                let (status, reply) = table
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(&path)
-                    .cloned()
-                    .unwrap_or((404, "{}".to_owned()));
+                let (status, reply) = {
+                    let routes = table
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    routes
+                        .get(&format!("{method} {path}"))
+                        .or_else(|| routes.get(&path))
+                        .cloned()
+                        .unwrap_or((404, "{}".to_owned()))
+                };
                 let response = format!(
                     "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
                     reply.len()

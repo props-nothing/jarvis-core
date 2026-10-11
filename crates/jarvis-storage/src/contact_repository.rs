@@ -479,6 +479,267 @@ pub async fn delete_contact(
     Ok(done.rows_affected() > 0)
 }
 
+/// Two entries that look like one person or company, with the one to keep named first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicatePair {
+    /// The entry to keep: the fuller one, or the older when they are equally full.
+    pub keep: StoredContact,
+    /// The entry that would be folded into it.
+    pub remove: StoredContact,
+    /// Why they look alike, in plain words.
+    pub reason: &'static str,
+}
+
+/// The longest notes a merged contact keeps.
+const MAX_MERGED_NOTES: usize = 2000;
+
+/// A company name reduced to what identifies it: lower case, no punctuation or spaces, and without a legal ending such as "B.V.".
+fn company_key(name: &str) -> String {
+    const ENDINGS: [&str; 12] = [
+        "bv", "nv", "vof", "bvba", "ltd", "llc", "inc", "gmbh", "sa", "ag", "cv", "holding",
+    ];
+    let words: Vec<String> = name
+        .split_whitespace()
+        .map(|word| {
+            word.chars()
+                .filter(|character| character.is_alphanumeric())
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    let kept = match words.split_last() {
+        Some((last, rest)) if !rest.is_empty() && ENDINGS.contains(&last.as_str()) => rest,
+        _ => &words[..],
+    };
+    kept.concat()
+}
+
+fn person_key(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// A phone number as its digits, when there are enough of them to mean something.
+fn phone_key(phone: &str) -> Option<String> {
+    let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() >= 7).then_some(digits)
+}
+
+fn fullness(contact: &StoredContact) -> usize {
+    [
+        &contact.person,
+        &contact.role,
+        &contact.email,
+        &contact.phone,
+        &contact.notes,
+        &contact.source,
+    ]
+    .iter()
+    .filter(|field| !field.is_empty())
+    .count()
+}
+
+/// What two entries become when they are one: the kept entry's words win and the other fills what is empty; a different value the
+/// other held is written into the notes rather than lost; `do_not_contact` on either side wins; and a kept `new` yields to the other's
+/// status.
+#[must_use]
+pub fn combine(keep: &StoredContact, remove: &StoredContact) -> StoredContact {
+    let first = |kept: &str, other: &str| if kept.is_empty() { other } else { kept }.to_owned();
+    let mut also: Vec<String> = Vec::new();
+    for (label, kept, other) in [
+        ("person", &keep.person, &remove.person),
+        ("role", &keep.role, &remove.role),
+        ("email", &keep.email, &remove.email),
+        ("phone", &keep.phone, &remove.phone),
+    ] {
+        if !kept.is_empty() && !other.is_empty() && !kept.eq_ignore_ascii_case(other) {
+            also.push(format!("{label} {other}"));
+        }
+    }
+    let mut notes = keep.notes.clone();
+    for addition in [
+        (!remove.notes.is_empty() && remove.notes != keep.notes).then(|| remove.notes.clone()),
+        (!also.is_empty()).then(|| format!("Also recorded: {}", also.join("; "))),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !notes.is_empty() {
+            notes.push('\n');
+        }
+        notes.push_str(&addition);
+    }
+    let status = if keep.status == ContactStatus::DoNotContact
+        || remove.status == ContactStatus::DoNotContact
+    {
+        ContactStatus::DoNotContact
+    } else if keep.status == ContactStatus::New {
+        remove.status
+    } else {
+        keep.status
+    };
+    StoredContact {
+        id: keep.id.clone(),
+        project_id: keep
+            .project_id
+            .clone()
+            .or_else(|| remove.project_id.clone()),
+        company: keep.company.clone(),
+        person: first(&keep.person, &remove.person),
+        role: first(&keep.role, &remove.role),
+        email: first(&keep.email, &remove.email),
+        phone: first(&keep.phone, &remove.phone),
+        status,
+        notes: notes.chars().take(MAX_MERGED_NOTES).collect(),
+        source: first(&keep.source, &remove.source),
+        created_at: keep.created_at.clone().min(remove.created_at.clone()),
+        updated_at: keep.updated_at.clone(),
+    }
+}
+
+/// Finds entries that look like the same company or person: the same person at a company spelled differently or entered with and without an
+/// address, or the same phone number. At most `limit` pairs, each with the fuller entry first. Pure, so the owner can see exactly what it
+/// would match.
+#[must_use]
+pub fn duplicate_pairs(contacts: &[StoredContact], limit: usize) -> Vec<DuplicatePair> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut groups: BTreeMap<(&'static str, String), Vec<usize>> = BTreeMap::new();
+    for (index, contact) in contacts.iter().enumerate() {
+        let (company, person) = (company_key(&contact.company), person_key(&contact.person));
+        if !company.is_empty() && !person.is_empty() {
+            groups
+                .entry((
+                    "the same person at the same company",
+                    format!("{company}|{person}"),
+                ))
+                .or_default()
+                .push(index);
+        }
+        if let Some(phone) = phone_key(&contact.phone) {
+            groups
+                .entry(("the same phone number", phone))
+                .or_default()
+                .push(index);
+        }
+    }
+    let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut pairs = Vec::new();
+    for ((reason, _), members) in &groups {
+        for window in members.windows(2) {
+            let (a, b) = (window[0].min(window[1]), window[0].max(window[1]));
+            if a == b || !seen.insert((a, b)) || pairs.len() >= limit {
+                continue;
+            }
+            let (one, two) = (&contacts[a], &contacts[b]);
+            let one_first = (fullness(one), std::cmp::Reverse(&one.created_at))
+                >= (fullness(two), std::cmp::Reverse(&two.created_at));
+            let (keep, remove) = if one_first { (one, two) } else { (two, one) };
+            pairs.push(DuplicatePair {
+                keep: keep.clone(),
+                remove: remove.clone(),
+                reason,
+            });
+        }
+    }
+    pairs
+}
+
+/// The pairs of entries that look like duplicates, at most `limit`.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError`] when the read fails.
+pub async fn find_duplicate_contacts(
+    database: &SqliteDatabase,
+    workspace_id: &str,
+    limit: usize,
+) -> Result<Vec<DuplicatePair>, DatabaseError> {
+    let all = list_contacts(
+        database,
+        workspace_id,
+        None,
+        u32::try_from(MAX_CONTACTS).unwrap_or(u32::MAX),
+        0,
+    )
+    .await?;
+    Ok(duplicate_pairs(&all, limit))
+}
+
+/// Folds `remove` into `keep` as [`combine`] describes, in one step: either both changes happen or neither. Returns the entry as it now
+/// is and the entry that was removed, whole, so nothing it held is lost to the caller.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError::InvalidContact`] with field `id` when either entry does not exist in this workspace or they are the same one,
+/// and [`DatabaseError::Sqlite`] when a write fails.
+pub async fn merge_contacts(
+    database: &SqliteDatabase,
+    workspace_id: &str,
+    keep_id: &str,
+    remove_id: &str,
+    now: UtcTimestamp,
+) -> Result<(StoredContact, StoredContact), DatabaseError> {
+    if keep_id == remove_id {
+        return Err(invalid("id"));
+    }
+    let mut transaction = database
+        .pool()
+        .begin()
+        .await
+        .map_err(sqlite("begin a merge"))?;
+    let mut read = Vec::new();
+    for id in [keep_id, remove_id] {
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            columns!(),
+            " FROM contacts WHERE workspace_id = ?1 AND id = ?2"
+        ))
+        .bind(workspace_id)
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(sqlite("read a contact to merge"))?
+        .ok_or_else(|| invalid("id"))?;
+        read.push(decode(&row)?);
+    }
+    let (keep, remove) = (&read[0], &read[1]);
+    let combined = combine(keep, remove);
+    // The other entry goes first: its address may be the one the kept entry takes, and addresses are unique.
+    sqlx::query("DELETE FROM contacts WHERE workspace_id = ?1 AND id = ?2")
+        .bind(workspace_id)
+        .bind(remove_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(sqlite("remove the merged contact"))?;
+    let row = sqlx::query(concat!(
+        "UPDATE contacts SET project_id = ?2, person = ?3, role = ?4, email = ?5, phone = ?6, status = ?7, notes = ?8, source = ?9, \
+         created_at = ?10, updated_at = ?11 WHERE id = ?1 RETURNING ",
+        columns!()
+    ))
+    .bind(keep_id)
+    .bind(combined.project_id.as_deref())
+    .bind(&combined.person)
+    .bind(&combined.role)
+    .bind(&combined.email)
+    .bind(&combined.phone)
+    .bind(combined.status.as_str())
+    .bind(&combined.notes)
+    .bind(&combined.source)
+    .bind(&combined.created_at)
+    .bind(now.to_string())
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(sqlite("update the merged contact"))?;
+    let merged = decode(&row)?;
+    transaction
+        .commit()
+        .await
+        .map_err(sqlite("commit a merge"))?;
+    Ok((merged, remove.clone()))
+}
 #[cfg(test)]
 #[path = "contact_tests.rs"]
 mod tests;

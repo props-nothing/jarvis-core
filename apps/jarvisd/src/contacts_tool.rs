@@ -29,6 +29,10 @@ use crate::project_context::site_of_call;
 pub const SAVE_TOOL: &str = "jarvis.contacts.save";
 /// Searches the contacts.
 pub const SEARCH_TOOL: &str = "jarvis.contacts.search";
+/// Lists entries that look like the same contact, with what a merge would make of them.
+pub const DUPLICATES_TOOL: &str = "jarvis.contacts.duplicates";
+/// Folds one contact into another.
+pub const MERGE_TOOL: &str = "jarvis.contacts.merge";
 /// Counts the contacts by status.
 pub const STATS_TOOL: &str = "jarvis.contacts.stats";
 /// The scope a caller must hold to write contacts.
@@ -70,6 +74,26 @@ const STATS_INPUT: &str = r#"{
   "properties": {}
 }"#;
 
+const DUPLICATES_INPUT: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "limit": { "type": "integer", "minimum": 1, "maximum": 20, "description": "How many pairs to return (10 by default)." }
+  }
+}"#;
+
+const MERGE_INPUT: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["keep_id", "remove_id"],
+  "properties": {
+    "keep_id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The id of the contact to keep, from jarvis.contacts.duplicates or jarvis.contacts.search." },
+    "remove_id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The id of the contact to fold into it; it is removed." }
+  }
+}"#;
+
 const OUTPUT: &str = r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object"
@@ -109,6 +133,7 @@ struct Spec {
     effect: ToolEffect,
     risk: u8,
     scope: &'static str,
+    approval: ApprovalPolicy,
 }
 
 impl ContactsTool {
@@ -136,6 +161,7 @@ impl ContactsTool {
                 effect: ToolEffect::Write,
                 risk: 1,
                 scope: WRITE_SCOPE,
+                approval: ApprovalPolicy::Auto,
             },
             Spec {
                 id: SEARCH_TOOL,
@@ -146,6 +172,7 @@ impl ContactsTool {
                 effect: ToolEffect::ReadOnly,
                 risk: 0,
                 scope: READ_SCOPE,
+                approval: ApprovalPolicy::Auto,
             },
             Spec {
                 id: STATS_TOOL,
@@ -155,6 +182,31 @@ impl ContactsTool {
                 effect: ToolEffect::ReadOnly,
                 risk: 0,
                 scope: READ_SCOPE,
+                approval: ApprovalPolicy::Auto,
+            },
+            Spec {
+                id: DUPLICATES_TOOL,
+                title: "Find duplicate contacts",
+                description: "Lists pairs of contacts that look like the same person or company (the same person at a company spelled two ways, or the \
+                              same phone number), with the entry that would be kept and what a merge would make of them. It changes nothing: merge with \
+                              jarvis.contacts.merge only when the owner agrees.",
+                input: DUPLICATES_INPUT,
+                effect: ToolEffect::ReadOnly,
+                risk: 0,
+                scope: READ_SCOPE,
+                approval: ApprovalPolicy::Auto,
+            },
+            Spec {
+                id: MERGE_TOOL,
+                title: "Merge two contacts",
+                description: "Folds one contact into another: the kept contact's words win, the other fills what is empty, a different value it held goes \
+                              into the notes, and do_not_contact on either side stays. The other entry is removed, and is returned whole in the answer. \
+                              The user is asked first.",
+                input: MERGE_INPUT,
+                effect: ToolEffect::Write,
+                risk: 2,
+                scope: WRITE_SCOPE,
+                approval: ApprovalPolicy::Ask,
             },
         ];
         specs.iter().map(Self::definition).collect()
@@ -171,7 +223,7 @@ impl ContactsTool {
             effects: EffectSet::single(spec.effect),
             risk: spec.risk,
             required_scopes: ScopeSet::single(Scope::new(spec.scope)?),
-            approval: ApprovalPolicy::Auto,
+            approval: spec.approval,
             timeout_seconds: TIMEOUT_SECONDS,
             // A retry would write twice.
             retry: RetryDeclaration::none(),
@@ -269,6 +321,63 @@ impl ContactsTool {
         )
     }
 
+    async fn duplicates(&self, arguments: &Value) -> Result<Value, AdapterError> {
+        let limit = arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map_or(10, |limit| usize::try_from(limit).unwrap_or(20))
+            .clamp(1, 20);
+        let workspace = self.workspace().await?;
+        let pairs = jarvis_storage::find_duplicate_contacts(&self.database, &workspace, limit)
+            .await
+            .map_err(|_| refused("the contacts could not be read"))?;
+        let described: Vec<Value> = pairs
+            .iter()
+            .map(|pair| {
+                json!({
+                    "reason": pair.reason,
+                    "keep": describe(&pair.keep),
+                    "remove": describe(&pair.remove),
+                    "would_become": describe(&jarvis_storage::combine(&pair.keep, &pair.remove)),
+                })
+            })
+            .collect();
+        Ok(json!({ "count": described.len(), "pairs": described }))
+    }
+
+    async fn merge(&self, arguments: &Value, now: UtcTimestamp) -> Result<Value, AdapterError> {
+        let id = |name: &str| {
+            arguments
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty() && id.len() <= 64)
+                .map(str::to_owned)
+                .ok_or_else(|| refused("keep_id and remove_id are both required"))
+        };
+        let (keep, remove) = (id("keep_id")?, id("remove_id")?);
+        let workspace = self.workspace().await?;
+        let (merged, removed) = jarvis_storage::merge_contacts(
+            &self.database,
+            &workspace,
+            &keep,
+            &remove,
+            now,
+        )
+        .await
+        .map_err(|error| match error {
+            DatabaseError::InvalidContact { field: "id" } => refused(
+                "those two ids are not two different contacts that exist; nothing was merged",
+            ),
+            _ => refused("the contacts could not be merged; nothing was changed"),
+        })?;
+        Ok(json!({
+            "merged": describe(&merged),
+            "removed": describe(&removed),
+            "note": "the removed contact is shown whole above; to undo, save it again with jarvis.contacts.save",
+        }))
+    }
+
     async fn stats(&self) -> Result<Value, AdapterError> {
         let workspace = self.workspace().await?;
         let counts = jarvis_storage::contact_stats(&self.database, &workspace)
@@ -295,6 +404,7 @@ fn describe(contact: &StoredContact) -> Value {
             .flatten()
     };
     json!({
+        "id": contact.id,
         "company": contact.company,
         "person": contact.person,
         "role": contact.role,
@@ -358,6 +468,8 @@ impl ToolExecutor for ContactsTool {
             SAVE_TOOL => self.save(call, arguments, now).await?,
             SEARCH_TOOL => self.search(arguments).await?,
             STATS_TOOL => self.stats().await?,
+            DUPLICATES_TOOL => self.duplicates(arguments).await?,
+            MERGE_TOOL => self.merge(arguments, now).await?,
             _ => return Err(AdapterError::NotImplemented { tool }),
         };
         let evidence = ProviderEvidence::new("contacts:store").ok();

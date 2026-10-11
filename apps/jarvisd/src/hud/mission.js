@@ -56,6 +56,7 @@
     "jarvis.gmail.draft": ["mail", "Drafting an email", "out", "pull"],
     "jarvis.calendar.events": ["mail", "Checking the calendar", "in", "scan"],
     "jarvis.calendar.create": ["mail", "Adding an event", "out", "spark"],
+    "jarvis.calendar.delete": ["mail", "Removing an event", "out", "spark"],
     "jarvis.schedule.add": ["time", "Scheduling", "out", "pull"],
     "jarvis.schedule.list": ["time", "Checking the schedule", "in", "pull"],
     "jarvis.schedule.remove": ["time", "Removing a schedule", "out", "pull"],

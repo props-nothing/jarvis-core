@@ -29,9 +29,9 @@ const MAX_COLUMNS: usize = 100;
 /// The most characters in a cell. Excel's own limit is 32,767.
 const MAX_CELL_CHARS: usize = 32_000;
 /// The most blocks in a Word document.
-const MAX_BLOCKS: usize = 2000;
+pub(crate) const MAX_BLOCKS: usize = 2000;
 /// The most items in one list.
-const MAX_ITEMS: usize = 500;
+pub(crate) const MAX_ITEMS: usize = 500;
 /// The widest a column is made, in characters.
 const MAX_WIDTH: f64 = 60.0;
 
@@ -49,12 +49,12 @@ pub enum WriteError {
     Engine(String),
 }
 
-fn invalid(message: impl Into<String>) -> WriteError {
+pub(crate) fn invalid(message: impl Into<String>) -> WriteError {
     WriteError::Invalid(message.into())
 }
 
 /// One cell, already checked.
-enum Cell {
+pub(crate) enum Cell {
     Empty,
     Text(String),
     Number(f64),
@@ -62,10 +62,10 @@ enum Cell {
 }
 
 /// A table of rows with an optional header.
-struct Grid {
-    name: String,
-    header: Vec<String>,
-    rows: Vec<Vec<Cell>>,
+pub(crate) struct Grid {
+    pub(crate) name: String,
+    pub(crate) header: Vec<String>,
+    pub(crate) rows: Vec<Vec<Cell>>,
 }
 
 fn parse_cell(value: &Value, place: &str) -> Result<Cell, WriteError> {
@@ -91,7 +91,11 @@ fn parse_cell(value: &Value, place: &str) -> Result<Cell, WriteError> {
     }
 }
 
-fn parse_grid(value: &Value, fallback_name: &str, cells: &mut usize) -> Result<Grid, WriteError> {
+pub(crate) fn parse_grid(
+    value: &Value,
+    fallback_name: &str,
+    cells: &mut usize,
+) -> Result<Grid, WriteError> {
     let object = value
         .as_object()
         .ok_or_else(|| invalid("a sheet must be an object with header and rows"))?;
@@ -360,7 +364,7 @@ pub fn write_csv(content: &Value, delimiter: char) -> Result<Vec<u8>, WriteError
     Ok(out.into_bytes())
 }
 
-fn text_of(block: &Value, key: &str, place: &str) -> Result<String, WriteError> {
+pub(crate) fn text_of(block: &Value, key: &str, place: &str) -> Result<String, WriteError> {
     let text = block
         .get(key)
         .and_then(Value::as_str)
@@ -431,7 +435,7 @@ fn base_docx() -> Docx {
         .add_numbering(Numbering::new(NUMBERS, NUMBERS))
 }
 
-fn cell_text(cell: &Cell) -> String {
+pub(crate) fn cell_text(cell: &Cell) -> String {
     match cell {
         Cell::Empty => String::new(),
         Cell::Text(text) => text.clone(),

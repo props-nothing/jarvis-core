@@ -205,3 +205,5 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0186](0186-telegram-answers-are-formatted-not-raw-markdown.md) | Telegram answers are formatted, not raw Markdown | Accepted |
 | [0187](0187-fixes-from-the-owners-capability-audit.md) | Fixes from the owner's capability audit | Accepted |
 | [0188](0188-pictures-a-tool-returns-are-shown-in-the-console.md) | Pictures a tool returns are shown in the console, not given to the model | Accepted |
+| [0189](0189-the-calendar-checks-before-it-books-and-contacts-can-be-merged.md) | The calendar checks before it books, events can be deleted, and contacts can be merged | Accepted |
+| [0190](0190-pdf-files-are-written-with-the-standard-fonts-and-no-new-dependency.md) | PDF files are written with the standard fonts and no new dependency | Accepted |

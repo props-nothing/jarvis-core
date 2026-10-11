@@ -38,8 +38,9 @@ pub use config::{
     unrecognized_environment_keys,
 };
 pub use contact_repository::{
-    ContactInput, ContactStatus, MAX_CONTACTS, MAX_SEARCH_RESULTS, StoredContact, contact_stats,
-    contact_status_for_email, delete_contact, list_contacts, save_contact, search_contacts,
+    ContactInput, ContactStatus, DuplicatePair, MAX_CONTACTS, MAX_SEARCH_RESULTS, StoredContact,
+    combine, contact_stats, contact_status_for_email, delete_contact, duplicate_pairs,
+    find_duplicate_contacts, list_contacts, merge_contacts, save_contact, search_contacts,
 };
 pub use credential::{CREDENTIAL_FILE_NAME, CredentialStore, CredentialStoreError};
 pub use database::{

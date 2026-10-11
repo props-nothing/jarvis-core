@@ -223,3 +223,139 @@ async fn only_the_owner_can_lift_do_not_contact() {
     let (lifted, _) = save(&database, &revive, 3).await;
     assert_eq!(lifted.status, ContactStatus::New, "the owner can");
 }
+
+async fn saved(database: &SqliteDatabase, input: &ContactInput, seconds: i128) -> StoredContact {
+    must(save_contact(database, LOCAL_WORKSPACE_ID, None, input, true, at(seconds)).await).0
+}
+
+/// **The same person at a company spelled two ways, and the same phone number, are found; different people are not.**
+#[tokio::test]
+async fn look_alikes_are_found_and_strangers_are_not() {
+    let (_directory, database) = database().await;
+    let mut full = lead("Acme B.V.", "Jan de Vries", "jan@acme.nl");
+    full.phone = Some("+31 6 1234 5678".to_owned());
+    full.role = Some("Owner".to_owned());
+    saved(&database, &full, 1).await;
+    // Same person, company without the legal ending, no address.
+    saved(&database, &lead("ACME", "jan de vries", ""), 2).await;
+    // Another person at the same company.
+    saved(&database, &lead("Acme", "Piet Jansen", "piet@acme.nl"), 3).await;
+    // The same phone number under another name.
+    let mut shared = lead("Other Co", "Kees", "kees@other.nl");
+    shared.phone = Some("0031612345678".to_owned());
+    saved(&database, &shared, 4).await;
+    let pairs = must(find_duplicate_contacts(&database, LOCAL_WORKSPACE_ID, 20).await);
+    let reasons: Vec<_> = pairs.iter().map(|pair| pair.reason).collect();
+    assert_eq!(pairs.len(), 1, "{reasons:?}");
+    assert_eq!(pairs[0].reason, "the same person at the same company");
+    assert_eq!(
+        pairs[0].keep.email, "jan@acme.nl",
+        "the fuller entry is the one kept"
+    );
+    assert_eq!(pairs[0].remove.email, "");
+}
+
+#[test]
+fn company_names_are_compared_without_punctuation_and_legal_endings() {
+    assert_eq!(company_key("Acme B.V."), company_key("acme"));
+    assert_eq!(company_key("De Boer Holding"), company_key("De Boer"));
+    assert_ne!(company_key("Acme"), company_key("Acme Bouw"));
+    // A name that is only an ending keeps it.
+    assert_eq!(company_key("B.V."), "bv");
+    assert_eq!(phone_key("12345"), None);
+    assert_eq!(
+        phone_key("+31 (0)6-1234 5678"),
+        Some("310612345678".to_owned())
+    );
+}
+
+/// **A merge combines the two in one step: the other's gaps are filled, a different value is kept in the notes, do-not-contact wins, and the removed entry is returned whole.**
+#[tokio::test]
+async fn a_merge_keeps_everything_and_do_not_contact_wins() {
+    let (_directory, database) = database().await;
+    let mut keep = lead("Acme", "Jan", "jan@acme.nl");
+    keep.notes = Some("Met at the fair.".to_owned());
+    let keep = saved(&database, &keep, 1).await;
+    let mut other = lead("Acme B.V.", "Jan", "");
+    other.phone = Some("0612345678".to_owned());
+    other.role = Some("Owner".to_owned());
+    other.notes = Some("Asked for a quote.".to_owned());
+    other.status = Some(ContactStatus::DoNotContact);
+    let remove = saved(&database, &other, 2).await;
+
+    let (merged, gone) =
+        must(merge_contacts(&database, LOCAL_WORKSPACE_ID, &keep.id, &remove.id, at(9)).await);
+    assert_eq!(merged.id, keep.id);
+    assert_eq!(merged.phone, "0612345678");
+    assert_eq!(merged.role, "Owner");
+    assert_eq!(merged.email, "jan@acme.nl");
+    assert_eq!(
+        merged.status,
+        ContactStatus::DoNotContact,
+        "the owner's word is never lost in a merge"
+    );
+    assert!(
+        merged.notes.contains("Met at the fair.") && merged.notes.contains("Asked for a quote.")
+    );
+    assert_eq!(gone.id, remove.id);
+    let left = must(list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await);
+    assert_eq!(left.len(), 1);
+}
+
+/// **The other entry's address is taken when the kept one has none, even though addresses are unique.**
+#[tokio::test]
+async fn a_merge_can_move_an_address_across() {
+    let (_directory, database) = database().await;
+    let keep = saved(&database, &lead("Acme", "Jan", ""), 1).await;
+    let remove = saved(&database, &lead("Acme B.V.", "Jan", "jan@acme.nl"), 2).await;
+    // Saved under another spelling of the company, so it is a second entry.
+    assert_ne!(keep.id, remove.id);
+    let (merged, _) =
+        must(merge_contacts(&database, LOCAL_WORKSPACE_ID, &keep.id, &remove.id, at(5)).await);
+    assert_eq!(merged.email, "jan@acme.nl");
+}
+
+/// **A merge that cannot be done changes nothing.**
+#[tokio::test]
+async fn a_merge_with_an_unknown_or_same_entry_is_refused_and_changes_nothing() {
+    let (_directory, database) = database().await;
+    let one = saved(&database, &lead("Acme", "Jan", "jan@acme.nl"), 1).await;
+    for (keep, remove) in [
+        (one.id.as_str(), one.id.as_str()),
+        (one.id.as_str(), "no-such-id"),
+        ("no-such-id", one.id.as_str()),
+    ] {
+        assert!(matches!(
+            merge_contacts(&database, LOCAL_WORKSPACE_ID, keep, remove, at(3)).await,
+            Err(DatabaseError::InvalidContact { field: "id" })
+        ));
+    }
+    assert!(matches!(
+        merge_contacts(&database, "another-workspace", &one.id, &one.id, at(3)).await,
+        Err(DatabaseError::InvalidContact { .. })
+    ));
+    assert_eq!(
+        must(list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await).len(),
+        1
+    );
+}
+
+#[test]
+fn merged_notes_never_exceed_the_limit() {
+    let make = |id: &str, notes: String| StoredContact {
+        id: id.to_owned(),
+        project_id: None,
+        company: "A".to_owned(),
+        person: String::new(),
+        role: String::new(),
+        email: String::new(),
+        phone: String::new(),
+        status: ContactStatus::New,
+        notes,
+        source: String::new(),
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+    };
+    let merged = combine(&make("a", "x".repeat(1900)), &make("b", "y".repeat(1900)));
+    assert_eq!(merged.notes.chars().count(), MAX_MERGED_NOTES);
+}

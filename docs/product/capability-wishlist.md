@@ -18,7 +18,7 @@ Status words: **done** (built and run), **partly** (a first form exists), **plan
 
 | # | Wish | Status | Ledger |
 | --- | --- | --- | --- |
-| 6 | **Writing** PDF, Word, Excel, PowerPoint | **partly**: Excel, CSV and Word built and opened in the real Office (`ADR-0185`); PDF and PowerPoint open | `P11-010` |
+| 6 | **Writing** PDF, Word, Excel, PowerPoint | **partly**: Excel, CSV and Word built and opened in the real Office (`ADR-0185`); PDF built (`ADR-0190`); PowerPoint open | `P11-010` |
 | 7 | Offline OCR for scans and photos | **done** (needs `tesseract` installed; one live run still open) | `P9-082` |
 | 8 | Image generation, inline images in chat | inline display built (`ADR-0188`); generation open | `P11-011` |
 | 9 | Screenshots shown inline | built in the console and Telegram (`ADR-0188`) | `P11-011` |
@@ -45,8 +45,8 @@ Status words: **done** (built and run), **partly** (a first form exists), **plan
 
 | # | Wish | Status | Ledger |
 | --- | --- | --- | --- |
-| 18 | Calendar conflict detection: free/busy before booking | new | `P11-016` |
-| 19 | Contact dedupe and merge | new (contacts exist, merge does not) | `P11-016` |
+| 18 | Calendar conflict detection: free/busy before booking | built (`ADR-0189`) | `P11-016` |
+| 19 | Contact dedupe and merge | built (`ADR-0189`) | `P11-016` |
 | 20 | Trend export: per-cycle CSV/JSON of audit scores | new (`jarvis eval` prints, does not export a series) | `P11-022` |
 | 21 | Integrated skill discovery (`npx skills find` crashes on exit) | new | `P11-021` |
 | 22 | Monitoring and uptime checks with alerts | new (schedules, web fetch and Telegram are the parts) | `P11-018` |

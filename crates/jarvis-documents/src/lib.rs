@@ -13,7 +13,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use roxmltree::{Document, Node, ParsingOptions};
 use thiserror::Error;
 
+mod pdf_metrics;
+mod pdf_write;
 mod write;
+pub use pdf_write::write_pdf;
 pub use write::{WriteError, write_csv, write_docx, write_xlsx};
 
 /// The largest input accepted, in bytes.
