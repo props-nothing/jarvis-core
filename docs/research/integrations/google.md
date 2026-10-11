@@ -1,13 +1,44 @@
 ---
 integration: google
 status: researched
-last_verified: 2026-09-27
+last_verified: 2026-10-11
 owners: []
 selected_spec_version: "Gmail API v1; Calendar API v3 (both unversioned REST revisions, last updated 2026-09-03..18 per page footers)"
 selected_sdk: none selected — this record assumes direct HTTP and did NOT check Google's client-library list for a Rust SDK
 ---
 
 # Google Workspace: identity, Gmail, Calendar, push notifications, quotas, restricted scopes
+
+## 2026-10-11 refresh: polling a Gmail query for `P6-012`
+
+**Question.** Poll one owner-written Gmail search query, identify matching messages, and let JARVIS deduplicate each Gmail message id before starting an ordinary run. This refresh does not select Gmail push, change OAuth, or add a new provider operation; it reuses the direct HTTP read path already used by `jarvis.gmail.search`.
+
+**Live official evidence checked 2026-10-11 UTC:**
+
+- `https://developers.google.com/llms.txt` and `https://developers.google.com/gmail/api/llms.txt` still return HTTP 404. Google publishes no usable `llms.txt` for this API.
+- `https://gmail.googleapis.com/$discovery/rest?version=v1` is the machine-readable Gmail API v1 discovery document selected for request/response names.
+- `https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list`: `GET /gmail/v1/users/{userId}/messages`; `userId=me`; `q` accepts Gmail search syntax and cannot be used with the `gmail.metadata` scope.
+- `https://developers.google.com/workspace/gmail/api/guides/filtering`: `messages.list` supports the Gmail UI's search syntax with documented differences (no alias expansion and no thread-wide search).
+- `https://developers.google.com/workspace/gmail/api/guides/sync`: the list operation returns message ids; content requires `messages.get`. History is normally available for at least a week but can be shorter, and stale history ids return HTTP 404. This slice deliberately polls the query and does not introduce a history cursor.
+- `https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get`: a message id from `messages.list` can be read with `GET /gmail/v1/users/{userId}/messages/{id}`; the request body is empty.
+- `https://developers.google.com/workspace/gmail/api/auth/scopes`: `gmail.readonly` remains a restricted scope; `gmail.metadata` cannot support `q`, so the existing readonly grant is required. Tokens remain in the existing `GoogleAccount` boundary and never enter trigger records.
+- `https://developers.google.com/workspace/gmail/api/reference/quota`: per-minute limits remain 1,200,000 units per project and 6,000 per user per project; `messages.list` costs 5 units. Polling must therefore have a bounded minimum interval and no backlog loop.
+- `https://developers.google.com/workspace/gmail/api/guides/handle-errors`: 401 is invalid credentials; 403 covers permission and rate-limit reasons; 429 and 5xx are retryable with exponential backoff. The trigger records a failed poll and waits for its next interval rather than spinning.
+- `https://developers.google.com/workspace/gmail/release-notes`: the newest listed entry remains 2026-06-24; no later deprecation or wire change relevant to `messages.list` was observed.
+
+**JARVIS decisions.**
+
+- The Gmail query is owner configuration, not model output. It is bounded and encoded as one `q` parameter by the existing account client.
+- The provider message id is untrusted input but is stored only as a bounded dedupe identity. A unique `(trigger_id, event_key)` claim is persisted before a run starts; replay starts no second run.
+- Polling reads Gmail (private/restricted data), starts an ordinary run with no additional authority, and never sends or modifies mail. Any effect requested by that run re-enters the normal tool policy.
+- The first poll establishes a baseline instead of replaying every old match. Later polls start runs only for ids not previously observed. The newest bounded page is sufficient for this slice; pagination and a durable history cursor remain out of scope.
+- 401/403 authentication failures are visible trigger failures and require reauthentication where applicable. 429/5xx/network failures are not treated as empty mailboxes.
+
+**Falsifying tests.** Against the existing local Google stand-in, return the same message id twice and prove exactly one run is created; return a provider error and prove no dedupe claim or run is created; seed an old matching message before the first poll and prove baseline establishment starts no run. The TODO item still requires a live harmless run against the owner's mailbox before `P6-012` can be marked complete.
+
+**Unresolved.** Polling can miss more matches than the bounded first page receives between polls. That blocks high-volume guarantees, not this personal-mail first slice. A future history cursor must use the already researched `history.list` stale-cursor recovery rather than silently increasing the page size.
+
+**Implemented 2026-10-11 (`ADR-0193`):** the poller lists the ten newest ids (`maxResults=10`), records the first look as a baseline, claims each id before its run, and starts at most three runs per look. A hostile or malformed id is ignored. **Verified live 2026-10-11** against the owner's real mailbox: `messages.list` with `q=in:drafts subject:...` answered the documented shape with the existing `gmail.readonly` grant, a new message started one run, and re-listing it started none. Not verified live: a 4xx/5xx from Google, token expiry mid-poll, or a mailbox with more than ten matches between looks.
 
 ## Scope
 

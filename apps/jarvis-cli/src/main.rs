@@ -34,6 +34,7 @@ mod settings;
 mod shell_path;
 mod skills;
 mod tools;
+mod trigger;
 mod watch;
 
 use std::{io, path::PathBuf, process::ExitCode};
@@ -127,6 +128,8 @@ async fn client_main(arguments: Vec<String>) -> ExitCode {
         // where you read what they said.
         Some("schedule") => schedule_command(&arguments, false).await,
         Some("runs") => schedule_command(&arguments, true).await,
+        // A mail that arrives starts a run (`P6-012`, `ADR-0193`).
+        Some("trigger") => trigger_command(&arguments).await,
         // Projects: the goal, guidance, folder and journal of long-running work (`ADR-0151`).
         Some("project") => project_command(&arguments).await,
         Some("digest") => digest_command(&arguments).await,
@@ -205,8 +208,9 @@ async fn launch_command(arguments: &[String]) -> ExitStatus {
 }
 
 const fn usage() -> &'static str {
-    "usage: jarvis [launch] | jarvis <init|start|stop|restart|config|keys|service|status|health|ask|chat|logs|memory|tools|mcp|approvals|cancel|watch|hud|schedule|runs|project|digest|eval|contacts|push|skills|connector|doctor|path|version> [--json] [--lines N] [--repair] [--root DIR]\n       jarvis ask <objective...> [--root DIR]\n       jarvis chat [--root DIR]\n       jarvis start [--no-open] [--root DIR]\n       jarvis memory <list|show|search|remember|correct|confirm|forget|export> [...]\n       jarvis mcp <list|add|test|remove> [...]   # other programs' tools JARVIS can use: `jarvis mcp add files -- npx -y @modelcontextprotocol/server-filesystem DIR`\n       jarvis tools <list|preview> [...]\n       jarvis approvals <list|approve|deny|resume> [...]
+    "usage: jarvis [launch] | jarvis <init|start|stop|restart|config|keys|service|status|health|ask|chat|logs|memory|tools|mcp|approvals|cancel|watch|hud|schedule|trigger|runs|project|digest|eval|contacts|push|skills|connector|doctor|path|version> [--json] [--lines N] [--repair] [--root DIR]\n       jarvis ask <objective...> [--root DIR]\n       jarvis chat [--root DIR]\n       jarvis start [--no-open] [--root DIR]\n       jarvis memory <list|show|search|remember|correct|confirm|forget|export> [...]\n       jarvis mcp <list|add|test|remove> [...]   # other programs' tools JARVIS can use: `jarvis mcp add files -- npx -y @modelcontextprotocol/server-filesystem DIR`\n       jarvis tools <list|preview> [...]\n       jarvis approvals <list|approve|deny|resume> [...]
        jarvis schedule <add|list|pause|resume|remove> [...]
+       jarvis trigger <add|list|pause|resume|remove> [...]   # start a run when a new mail matches a Gmail search: `jarvis trigger add --mail \"is:unread from:acme.example\" note each subject`
        jarvis project <add|list|show|set|pause|resume|done|note|remove> [...]   # long-running work with its own goal, guidance and journal; `jarvis ask --project NAME ...`
        jarvis digest [HOURS] [--json]   # what JARVIS did while you were away: runs, outcomes, project decisions, failures, tokens
        jarvis eval <run|history> [...]  # score a suite of prompts against the daemon and compare with the last run: `jarvis eval run evals/basics.toml`
@@ -392,6 +396,20 @@ async fn schedule_command(arguments: &[String], runs: bool) -> ExitStatus {
     } else {
         schedule::run_schedule(&client, arguments).await
     }
+}
+
+/// Runs one `jarvis trigger` verb over the daemon's HTTP API.
+async fn trigger_command(arguments: &[String]) -> ExitStatus {
+    let root = match requested_root(arguments) {
+        Ok(Some(root)) => vec!["--root".to_owned(), root.display().to_string()],
+        Ok(None) => Vec::new(),
+        Err(status) => return status,
+    };
+    let client = match run_client(&root) {
+        Ok(client) => client,
+        Err(status) => return status,
+    };
+    trigger::run_trigger(&client, arguments).await
 }
 
 /// `jarvis stop` ends the background daemon gracefully; `jarvis restart` stops it (if running) and starts it again.

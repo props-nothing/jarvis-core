@@ -13,6 +13,7 @@ mod schedule_api;
 mod session;
 mod skill_api;
 mod tool_api;
+mod trigger_api;
 mod version;
 mod wire;
 pub use approval::{
@@ -61,6 +62,7 @@ pub use skill_api::{
     SkillReference, SkillReply, SkillStateName, SkillStepBody, SkillTransitionRequest,
 };
 pub use tool_api::{ToolListReply, ToolPreviewReply, ToolPreviewRequest, ToolReply};
+pub use trigger_api::{CreateTriggerRequest, TriggerListReply, TriggerReply};
 pub use version::{
     MAX_SUPPORTED_PROTOCOL, MIN_SUPPORTED_PROTOCOL, NegotiationError, PROTOCOL_VERSION, negotiate,
 };

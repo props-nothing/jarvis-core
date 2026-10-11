@@ -535,7 +535,11 @@ pub async fn enable_ability(
     {
         current.unwrap_or_default()
     } else {
-        match add_to_document(current.as_deref(), &ability.body(), &find_program_on_path) {
+        match add_to_document(
+            current.as_deref(),
+            &ability.body(context.paths().runtime()),
+            &find_program_on_path,
+        ) {
             Ok(text) => text,
             Err(message) => return refused(&message),
         }
@@ -547,7 +551,7 @@ pub async fn enable_ability(
             &message,
         );
     }
-    crate::mcp_abilities::prepare(ability, program);
+    crate::mcp_abilities::prepare(ability, program, context.paths().runtime());
     json_ok(&overview_json(&state, Some(&updated)))
 }
 

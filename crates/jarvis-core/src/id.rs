@@ -205,6 +205,10 @@ typed_id!(
     ScheduleId
 );
 typed_id!(
+    /// Identifies one trigger: an event source that starts an ordinary run.
+    TriggerId
+);
+typed_id!(
     /// Identifies one project: a long-running piece of work with a goal, standing guidance and a journal.
     ProjectId
 );

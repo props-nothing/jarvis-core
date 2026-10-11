@@ -61,6 +61,8 @@ mod tool_activity;
 mod tool_actor;
 mod tool_pipeline;
 mod tool_search;
+mod transcript_budget;
+mod trigger_service;
 
 #[cfg(test)]
 mod approval_fixture;
@@ -698,7 +700,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         tools.as_ref(),
         loaded_config.config().daemon().mcp_serve_port(),
         &mcp_access,
-        &crate::mcp_abilities::vetted_prefixes(mcp_snapshot.loaded.as_deref()),
+        &crate::mcp_abilities::vetted_prefixes(mcp_snapshot.loaded.as_deref(), paths.runtime()),
     )
     .await?;
 
@@ -851,12 +853,12 @@ fn compose_executor(
         return Ok(None);
     };
     let provider = compose_model_provider(daemon)?;
-    let executor = executor::Executor::build(name, provider.as_ref()).map_err(|source| {
-        DaemonError::ExecutorModel {
+    let executor = executor::Executor::build(name, provider.as_ref())
+        .map_err(|source| DaemonError::ExecutorModel {
             name: name.to_owned(),
             source,
-        }
-    })?;
+        })?
+        .with_workspace_daily_token_limit(daemon.workspace_daily_token_limit());
     Ok(Some(Arc::new(executor)))
 }
 
@@ -882,7 +884,7 @@ fn compose_executor(
 /// not offered, and the reason is logged. Also returns the document as it was read, so the management routes can tell
 /// whether the file has changed since.
 async fn compose_mcp(paths: &AppPaths) -> (Option<crate::mcp_host::ComposedHost>, Option<String>) {
-    let (mcp, loaded) = match crate::mcp_abilities::startup_document(paths.config()).await {
+    let (mcp, loaded) = match crate::mcp_abilities::startup_document(paths).await {
         Ok(document) => match crate::mcp_host::compose_host(document.as_deref()).await {
             Ok(host) => (host, document),
             Err(error) => {
@@ -1590,6 +1592,8 @@ struct HttpTransport {
     /// The scheduler, when the daemon drives runs. It shares the transport's lifetime: a daemon that is shutting
     /// down must not start a run, and a scheduler outliving its listener would fire into a daemon nobody can reach.
     scheduler: Option<tokio::task::JoinHandle<()>>,
+    /// The trigger poller, with the scheduler's lifetime and for the same reason (`ADR-0193`).
+    triggers: Option<tokio::task::JoinHandle<()>>,
     /// The Telegram chat's loop. It sleeps until a token is saved in Settings, so it runs whenever runs are driven.
     telegram: Option<tokio::task::JoinHandle<()>>,
 }
@@ -1656,6 +1660,9 @@ impl HttpTransport {
         let scheduler = state
             .drives_runs()
             .then(|| schedule_service::spawn(state.clone()));
+        let triggers = state
+            .drives_runs()
+            .then(|| trigger_service::spawn(state.clone()));
         let telegram = state
             .drives_runs()
             .then(|| tokio::spawn(telegram.run(state.clone())));
@@ -1685,6 +1692,7 @@ impl HttpTransport {
                 shutdown,
                 handle,
                 scheduler,
+                triggers,
                 telegram,
             },
             stopped,
@@ -1705,6 +1713,9 @@ impl HttpTransport {
         // The scheduler first: nothing new may start while the listener drains.
         if let Some(scheduler) = &self.scheduler {
             scheduler.abort();
+        }
+        if let Some(triggers) = &self.triggers {
+            triggers.abort();
         }
         if let Some(telegram) = &self.telegram {
             telegram.abort();

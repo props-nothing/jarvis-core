@@ -25,6 +25,7 @@ jarvis restart           # one restart finishes it
 - The programs are **pinned to a version that was tested**, not "whatever is newest".
 - What a program returns is treated as **information, never as instructions**. A web page that says "ignore your rules" is still just a web page. (In a live test, JARVIS read a page with a hidden instruction, told you about it and did not follow it.)
 - A program starts with a **small environment**: it does not see the keys JARVIS holds.
+- Automatically named browser snapshots and screenshots stay under the profile's temporary runtime directory, not in the folder that launched JARVIS. Explicit filenames still use the folder the browser tool was given.
 - Anything that **changes** something (clicking, typing, uploading) asks you first, as everything else does.
 
 ## If something does not work

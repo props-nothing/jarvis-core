@@ -332,6 +332,13 @@ pub(crate) fn shown_objective(objective: &str) -> String {
     if let Some(task) = objective.strip_prefix(UNATTENDED_NOTICE) {
         return format!("[scheduled] {task}");
     }
+    if let Some(task) = objective.strip_prefix(crate::trigger_service::TRIGGER_NOTICE) {
+        let task = task
+            .split(crate::trigger_service::MESSAGE_MARKER)
+            .next()
+            .unwrap_or(task);
+        return format!("[mail trigger] {task}");
+    }
     if let Some(task) = objective.strip_prefix(crate::delegate::DELEGATED_NOTICE) {
         return format!("[sub-agent] {task}");
     }
@@ -685,7 +692,10 @@ pub async fn list_runs(State(state): State<GatewayState>, RawQuery(raw): RawQuer
 ///
 /// The run cap is a convenience and fails open if the count cannot be read. The token cap guards spend, so it **fails closed**: when the
 /// tokens used cannot be read, the fire is held rather than allowed.
-async fn over_daily_cap(state: &GatewayState, project: &jarvis_storage::StoredProject) -> bool {
+pub(crate) async fn over_daily_cap(
+    state: &GatewayState,
+    project: &jarvis_storage::StoredProject,
+) -> bool {
     let since = crate::project_service::day_window_start();
     if project.daily_run_limit > 0
         && jarvis_storage::count_project_runs_since(state.database(), &project.id, since)

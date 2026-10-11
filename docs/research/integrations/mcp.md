@@ -1,7 +1,7 @@
 ---
 integration: model-context-protocol
 status: researched
-last_verified: 2026-10-10
+last_verified: 2026-10-11
 owners: []
 selected_spec_version: "2026-07-28"
 selected_sdk: "rmcp 3.4.0 (Apache-2.0, Tier 1)"
@@ -36,6 +36,39 @@ apps, skills) are **not** selected here.
 | Rust SDK source | https://github.com/modelcontextprotocol/rust-sdk (`main`) | 2026-09-22 | negotiation behaviour, version constants |
 | Deprecated features | https://modelcontextprotocol.io/specification/2026-07-28/deprecated.md | 2026-09-22 | features new implementations must not adopt |
 | Separate docs `llms.txt` | `not found` — the single `llms.txt` above covers both docs and specification | 2026-09-22 | — |
+| Playwright MCP README | https://github.com/microsoft/playwright-mcp/blob/main/README.md | 2026-10-11 | Current CLI documents `--output-dir <path>` for automatically named files and `PLAYWRIGHT_MCP_OUTPUT_DIR`; explicitly named files still resolve against the workspace root. |
+| Playwright MCP pinned source | https://github.com/microsoft/playwright-mcp/tree/v0.0.83 (`config.d.ts`, `package.json`, `cli.js`) | 2026-10-11 | Selected package is Apache-2.0, Node >=18, delegates its CLI to pinned `playwright-core` `1.64.0-alpha-1790635538000`, and exposes `outputDir?: string` in its public configuration. |
+| Playwright MCP release | https://github.com/microsoft/playwright-mcp/releases/tag/v0.0.83 | 2026-10-11 | `0.0.83` remains the latest release and the already-selected version; no dependency change is required. |
+
+## Playwright output containment refresh (2026-10-11, `P11-003a`)
+
+**Question.** Keep automatically named browser snapshots and screenshots out of the directory that started `jarvisd`, while preserving the exact-command check used before built-in browser tools are re-served to other agents.
+
+**Verified facts.**
+
+- The current official README documents `--output-dir <path>` as the directory for automatically named output files. An explicit filename is resolved against the workspace root and is not affected by this option.
+- The pinned `0.0.83` package's public `config.d.ts` contains `outputDir?: string`; `package.json` pins the CLI implementation in `playwright-core` and requires Node 18 or newer.
+- The package is Apache-2.0 and `0.0.83` is still the latest release. Its release notes do not deprecate output configuration.
+- No credential or authentication changes. The browser remains an isolated, headless local child process with the existing environment allowlist.
+
+**JARVIS decision.**
+
+- Add `--output-dir <absolute profile runtime path>/playwright-mcp` to the built-in browser command. Playwright MCP owns its output directory; an output failure affects the browser rather than preventing unrelated MCP servers from starting.
+- Migrate only the exact old built-in command. A server named `browser` with any owner-edited command remains untouched.
+- Derive catalog commands from the active profile paths. `vetted_prefixes` compares against that same derived command, so migration cannot accidentally grant the built-in trust posture to a different process.
+- The runtime directory is transient profile state. No browser artifact is copied into a granted project folder or the repository.
+
+**Limits and unresolved questions.**
+
+- Explicit filenames are outside `--output-dir` according to the official README. Those tools retain their existing policy and granted-root behavior; this slice fixes only the automatic `.playwright-mcp/` output observed in the daemon's working directory.
+- The selected tag's README was generated before the current option table and does not name the CLI flag, although its public configuration contains `outputDir`. The selected package was therefore checked directly: `npx -y @playwright/mcp@0.0.83 --help` advertised `--output-dir <path>` on 2026-10-11.
+
+**Falsifying tests.**
+
+1. The pinned package help must advertise `--output-dir`.
+2. A fresh seed must contain the absolute runtime output path.
+3. The exact old seeded command must migrate once; an owner-edited browser command must not change.
+4. The old command must cease to be vetted and the migrated command must remain vetted.
 
 ## Live findings against real servers (2026-10-10, `P11-001`, `ADR-0168`)
 

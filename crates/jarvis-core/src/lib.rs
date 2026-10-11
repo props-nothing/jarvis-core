@@ -59,7 +59,7 @@ pub use escalation::{EscalationSignal, InvalidEscalationSignal};
 pub use id::{
     ApprovalId, ClientId, ContactId, CorrelationId, DaemonRunId, EntityId, IdGenerator, InvalidId,
     InvalidIdReason, MemoryId, ProfileId, ProjectId, ProjectNoteId, RequestId, RunId, ScheduleId,
-    SessionId, SkillId, SystemIdGenerator, WorkspaceId,
+    SessionId, SkillId, SystemIdGenerator, TriggerId, WorkspaceId,
 };
 pub use isolation::{
     FENCE_CLOSE, FENCE_OPEN, FENCE_TOKEN, IsolatedText, IsolationError, MAX_ISOLATED_CHARS,

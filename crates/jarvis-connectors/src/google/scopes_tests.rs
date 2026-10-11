@@ -4,7 +4,7 @@
 //!
 //! That this crate **correctly reads a hand-transcribed table** and that the accounting **fails closed** on a
 //! scope the table does not list. They do **not** prove that Google's categories are these categories: the
-//! table was transcribed from the scopes page on 2026-09-27 and a recategorisation would make it stale, which
+//! table was rechecked against the scopes page on 2026-10-11 and a recategorisation would make it stale, which
 //! is why the table carries a date and the research record's Verification Plan keeps the "fixture with a date"
 //! requirement.
 //!

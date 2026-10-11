@@ -44,16 +44,17 @@ use jarvis_core::LoopbackHost;
 use jarvis_protocol::{
     AddAliasRequest, AddProjectNoteRequest, ApprovalDecisionBody, ApprovalListReply, ApprovalReply,
     ConfirmMemoryRequest, CorrectMemoryRequest, CreateEntityRequest, CreateProjectRequest,
-    CreateScheduleRequest, CreateSkillRequest, DeletionReceipt, EntityDetailReply, EntityListReply,
-    EntityLookupReply, ForgetMemoryRequest, ForgetSkillRequest, JSON_BODY_CONTENT_TYPE,
-    MemoryDetailReply, MemoryExportReply, MemoryListReply, MemoryReply, MemorySearchReply,
-    MemorySearchRequest, MergeEntityRequest, ProjectDetailReply, ProjectListReply,
-    ProjectNoteReply, ProjectReply, PromoteSkillRequest, RememberRequest, RunListReply,
-    RunPathError, RunReply, RunStreamDecoder, RunStreamFrame, SSE_ACCEPT, ScheduleListReply,
-    ScheduleReply, SetScheduleProjectRequest, SkillDeletionReceipt, SkillDetailReply,
-    SkillExportReply, SkillListReply, SkillReply, SkillTransitionRequest, StartRunRequest,
-    ToolListReply, ToolPreviewReply, ToolPreviewRequest, UpdateProjectRequest, WireError,
-    dotted_path_segment, path_segment, run_path, run_stream_path, runs_path,
+    CreateScheduleRequest, CreateSkillRequest, CreateTriggerRequest, DeletionReceipt,
+    EntityDetailReply, EntityListReply, EntityLookupReply, ForgetMemoryRequest, ForgetSkillRequest,
+    JSON_BODY_CONTENT_TYPE, MemoryDetailReply, MemoryExportReply, MemoryListReply, MemoryReply,
+    MemorySearchReply, MemorySearchRequest, MergeEntityRequest, ProjectDetailReply,
+    ProjectListReply, ProjectNoteReply, ProjectReply, PromoteSkillRequest, RememberRequest,
+    RunListReply, RunPathError, RunReply, RunStreamDecoder, RunStreamFrame, SSE_ACCEPT,
+    ScheduleListReply, ScheduleReply, SetScheduleProjectRequest, SkillDeletionReceipt,
+    SkillDetailReply, SkillExportReply, SkillListReply, SkillReply, SkillTransitionRequest,
+    StartRunRequest, ToolListReply, ToolPreviewReply, ToolPreviewRequest, TriggerListReply,
+    TriggerReply, UpdateProjectRequest, WireError, dotted_path_segment, path_segment, run_path,
+    run_stream_path, runs_path,
 };
 
 /// The base path of the memory surface.
@@ -127,6 +128,7 @@ fn skill_path(revision_id: &str) -> Result<String, RunPathError> {
 
 /// The scheduled-task collection's path.
 const SCHEDULES_PATH: &str = "/api/v1/schedules";
+const TRIGGERS_PATH: &str = "/api/v1/triggers";
 /// The project collection's path.
 const PROJECTS_PATH: &str = "/api/v1/projects";
 /// The digest's path; a window in hours follows it.
@@ -505,6 +507,62 @@ impl ApiClient {
     /// Returns [`ApiError::Refused`] with a `404` when there is no such task.
     pub async fn remove_schedule(&self, schedule_id: &str) -> Result<(), ApiError> {
         let path = format!("{SCHEDULES_PATH}/{}", path_segment(schedule_id)?);
+        let response = self
+            .bounded_request(reqwest::Method::DELETE, &path)
+            .send()
+            .await
+            .map_err(|error| ApiError::Transport(classify(&error)))?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        Err(self.refusal(response).await)
+    }
+
+    /// Creates a trigger that starts a run for each new mail matching a Gmail search.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] with a `422` naming the field that is not acceptable.
+    pub async fn create_trigger(
+        &self,
+        request: &CreateTriggerRequest,
+    ) -> Result<TriggerReply, ApiError> {
+        self.send_json(reqwest::Method::POST, TRIGGERS_PATH, request)
+            .await
+    }
+
+    /// Lists the workspace's triggers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError`] when the transport fails or the daemon refuses.
+    pub async fn list_triggers(&self) -> Result<TriggerListReply, ApiError> {
+        self.get_json(TRIGGERS_PATH).await
+    }
+
+    /// Pauses or resumes a trigger.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] when the trigger is unknown.
+    pub async fn set_trigger_enabled(
+        &self,
+        trigger_id: &str,
+        enabled: bool,
+    ) -> Result<TriggerReply, ApiError> {
+        let verb = if enabled { "resume" } else { "pause" };
+        let path = format!("{TRIGGERS_PATH}/{}/{verb}", path_segment(trigger_id)?);
+        self.send_json(reqwest::Method::POST, &path, &serde_json::json!({}))
+            .await
+    }
+
+    /// Removes a trigger.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Refused`] with a `404` when there is no such trigger.
+    pub async fn remove_trigger(&self, trigger_id: &str) -> Result<(), ApiError> {
+        let path = format!("{TRIGGERS_PATH}/{}", path_segment(trigger_id)?);
         let response = self
             .bounded_request(reqwest::Method::DELETE, &path)
             .send()

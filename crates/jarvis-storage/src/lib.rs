@@ -24,6 +24,7 @@ mod schedule_repository;
 pub mod settings;
 mod skill_repository;
 mod tool_call_repository;
+mod trigger_repository;
 mod workspace_repository;
 
 pub use approval_repository::{
@@ -83,7 +84,7 @@ pub use project_repository::{
     ProjectChanges, ProjectStatus, StoredProject, StoredProjectNote, add_project_note,
     count_project_runs_since, create_project, delete_project, earlier_important_notes,
     find_project, link_project, list_projects, project_for, project_tokens_since,
-    recent_project_notes, set_project_link, update_project,
+    recent_project_notes, set_project_link, update_project, workspace_tokens_since,
 };
 pub use run_event_repository::{
     NewRunEvent, StoredRunEvent, append_run_event, find_run_event, highest_run_event_sequence,
@@ -121,5 +122,12 @@ pub use tool_call_repository::{
     CallBinding, CallOrigin, CallTarget, NewToolCall, StoredToolCall, admit_tool_call,
     advance_tool_call, count_tool_calls, find_tool_call, link_tool_call_approval,
     read_run_tool_calls, read_unrepeatable_calls, record_tool_outcome, settle_orphaned_calls,
+};
+pub use trigger_repository::{
+    MAX_TRIGGER_INTERVAL_SECONDS, MAX_TRIGGER_OBJECTIVE_CHARS, MAX_TRIGGER_QUERY_CHARS,
+    MAX_TRIGGERS_PER_WORKSPACE, MIN_TRIGGER_INTERVAL_SECONDS, NewTrigger, StoredTrigger,
+    claim_due_triggers, claim_trigger_event, count_trigger_runs_since, create_trigger,
+    delete_trigger, find_trigger, list_triggers, mark_trigger_baselined, record_trigger_poll,
+    record_trigger_run, set_trigger_enabled,
 };
 pub use workspace_repository::{DataPolicy, NewWorkspace, WorkspaceMode, record_workspace};

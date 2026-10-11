@@ -904,14 +904,15 @@ impl GoogleTool {
         }
     }
 
-    async fn mail_search(&self, query: &str, limit: u64) -> Result<(String, usize), Failure> {
+    /// The ids of the newest messages matching a Gmail search, newest first. Ids only: nothing of a message is read.
+    pub(crate) async fn mail_ids(&self, query: &str, limit: u64) -> Result<Vec<String>, Failure> {
         let listed = self
             .get(
                 &format!("{}/users/me/messages", self.account.gmail_base()),
                 &[("q", query.to_owned()), ("maxResults", limit.to_string())],
             )
             .await?;
-        let ids: Vec<String> = listed
+        Ok(listed
             .get("messages")
             .and_then(Value::as_array)
             .map(|messages| {
@@ -922,7 +923,11 @@ impl GoogleTool {
                     })
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_default())
+    }
+
+    async fn mail_search(&self, query: &str, limit: u64) -> Result<(String, usize), Failure> {
+        let ids = self.mail_ids(query, limit).await?;
         let mut text = String::new();
         for id in &ids {
             let message = self

@@ -207,3 +207,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0188](0188-pictures-a-tool-returns-are-shown-in-the-console.md) | Pictures a tool returns are shown in the console, not given to the model | Accepted |
 | [0189](0189-the-calendar-checks-before-it-books-and-contacts-can-be-merged.md) | The calendar checks before it books, events can be deleted, and contacts can be merged | Accepted |
 | [0190](0190-pdf-files-are-written-with-the-standard-fonts-and-no-new-dependency.md) | PDF files are written with the standard fonts and no new dependency | Accepted |
+| [0191](0191-a-run-stops-after-the-model-call-that-reaches-a-daily-token-limit.md) | A run stops after the model call that reaches a daily token limit | Accepted |
+| [0192](0192-the-built-in-browser-keeps-automatic-output-in-profile-runtime-state.md) | The built-in browser keeps automatic output in profile runtime state | Accepted |
+| [0193](0193-a-new-mail-can-start-an-ordinary-run-and-mail-is-treated-as-written-by-a-stranger.md) | A new mail can start an ordinary run, and mail is treated as written by a stranger | Accepted |
+| [0194](0194-a-long-run-leaves-out-its-oldest-tool-results-instead-of-overflowing-the-models-context.md) | A long run leaves out its oldest tool results instead of overflowing the model's context | Accepted |

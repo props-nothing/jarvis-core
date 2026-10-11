@@ -114,6 +114,13 @@ pub fn deferred_groups(entries: &[Entry]) -> BTreeMap<String, Vec<Entry>> {
     groups
 }
 
+/// Whether a tool result is a discovery answer. `found_groups` reads these back out of the transcript to decide which tools to offer, so
+/// they must never be shortened (`ADR-0194`).
+#[must_use]
+pub fn is_discovery_result(text: &str) -> bool {
+    text.starts_with('{') && text.contains(RESULT_KIND)
+}
+
 /// The groups this run has already found, read from its own transcript.
 ///
 /// A group counts as found when a search result named it, or when the model has already called one of its tools (a run that knows a tool by

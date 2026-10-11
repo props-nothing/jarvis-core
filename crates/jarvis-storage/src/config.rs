@@ -162,6 +162,12 @@ pub struct DaemonConfig {
     /// resolves the same wherever the daemon is started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     executor_api_key_ref: Option<PathBuf>,
+    /// Maximum input plus output tokens all runs in this workspace may use in a rolling 24 hours.
+    ///
+    /// Zero means unlimited. The executor checks before and after every billable model call, so an
+    /// exhausted workspace makes no new call and the call that reaches the limit remains recorded.
+    #[serde(default)]
+    workspace_daily_token_limit: u64,
     /// The absolute directories the read-only filesystem tool is confined to.
     ///
     /// # Why this is configuration and not derived
@@ -305,6 +311,12 @@ impl DaemonConfig {
     #[must_use]
     pub fn executor_api_key_ref(&self) -> Option<&Path> {
         self.executor_api_key_ref.as_deref()
+    }
+
+    /// Returns the workspace-wide rolling 24-hour token limit; zero means unlimited.
+    #[must_use]
+    pub const fn workspace_daily_token_limit(&self) -> u64 {
+        self.workspace_daily_token_limit
     }
 
     /// Returns whether every live-provider setting is present.
@@ -456,6 +468,7 @@ impl Default for DaemonConfig {
             executor_fallback_api_key_ref: None,
             executor_base_url: None,
             executor_api_key_ref: None,
+            workspace_daily_token_limit: 0,
             // Empty: no filesystem tool is registered until an operator grants roots.
             tool_workspace_roots: Vec::new(),
             // Not served: an inbound MCP endpoint is opt-in, deliberately.
@@ -1398,6 +1411,7 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "executor_fallback_api_key_ref",
                 "executor_base_url",
                 "executor_api_key_ref",
+                "workspace_daily_token_limit",
                 "tool_workspace_roots",
                 "mcp_serve_port",
                 "code_sandbox_image",
@@ -1844,6 +1858,29 @@ shutdown_timeout_seconds = 30
         assert_eq!(loaded.config().profile().name(), "work");
         assert_eq!(loaded.config().logging().level(), LogLevel::Debug);
         assert_eq!(loaded.config().daemon().shutdown_timeout_seconds(), 45);
+    }
+
+    #[test]
+    fn workspace_daily_token_limit_is_optional_and_round_trips() {
+        let unlimited =
+            Config::parse_with_environment(V1_CONFIG, std::iter::empty::<(&str, &str)>())
+                .unwrap_or_else(|error| panic!("default config should load: {error}"));
+        assert_eq!(unlimited.config().daemon().workspace_daily_token_limit(), 0);
+
+        let configured = V1_CONFIG.replace(
+            "shutdown_timeout_seconds = 30",
+            "shutdown_timeout_seconds = 30\nworkspace_daily_token_limit = 250000",
+        );
+        let loaded =
+            Config::parse_with_environment(&configured, std::iter::empty::<(&str, &str)>())
+                .unwrap_or_else(|error| panic!("configured cap should load: {error}"));
+        assert_eq!(
+            loaded.config().daemon().workspace_daily_token_limit(),
+            250_000
+        );
+        let encoded = toml::to_string(loaded.config())
+            .unwrap_or_else(|error| panic!("configured cap should serialize: {error}"));
+        assert!(encoded.contains("workspace_daily_token_limit = 250000"));
     }
 
     /// A config that selects the live provider reads all four settings, from the document and the

@@ -270,11 +270,12 @@ impl GatewayState {
         let tools = self.tools.clone();
         let run_id = run_id.to_owned();
         tokio::spawn(async move {
-            if let Err(error) = crate::executor::execute_run_with_tools(
+            if let Err(error) = crate::executor::execute_run_with_limits(
                 &database,
                 executor.model(),
                 executor.model_id(),
                 tools.as_ref(),
+                executor.workspace_daily_token_limit(),
                 &run_id,
             )
             .await
@@ -422,7 +423,8 @@ pub fn router(state: GatewayState) -> Router {
         .merge(crate::digest_service::routes())
         .merge(crate::push::routes())
         .merge(crate::project_service::routes())
-        .merge(crate::schedule_service::routes());
+        .merge(crate::schedule_service::routes())
+        .merge(crate::trigger_service::routes());
 
     Router::new()
         // The heads-up display's two static assets: no data, no secret, served without the credential
@@ -873,11 +875,12 @@ async fn continue_parked_run(state: &GatewayState, run_id: &str, call_id: &str) 
     let run_id = run_id.to_owned();
     let call_id = call_id.to_owned();
     tokio::spawn(async move {
-        if let Err(error) = crate::executor::resume_run_with_tools(
+        if let Err(error) = crate::executor::resume_run_with_limits(
             &database,
             executor.model(),
             executor.model_id(),
             tools.as_ref(),
+            executor.workspace_daily_token_limit(),
             &run_id,
             &call_id,
         )
@@ -1037,11 +1040,12 @@ async fn continue_declined_run(state: &GatewayState, run_id: &str, approval_id: 
     let tools = state.tools.clone();
     let run_id = run_id.to_owned();
     tokio::spawn(async move {
-        if let Err(error) = crate::executor::resume_run_declined(
+        if let Err(error) = crate::executor::resume_run_declined_with_limits(
             &database,
             executor.model(),
             executor.model_id(),
             tools.as_ref(),
+            executor.workspace_daily_token_limit(),
             &run_id,
             &call_id,
         )

@@ -61,6 +61,7 @@ window.JarvisSettings = function (context) {
     // One setting: its field, Save (and Unset when set), and either its help (when set) or what "unset" means (when not).
     var LABELS = {
       "daemon.executor_model_name": "Model", "daemon.executor_base_url": "Model server", "daemon.executor_reasoning_effort": "Thinking effort",
+      "daemon.workspace_daily_token_limit": "Daily token limit",
       "daemon.tool_workspace_roots": "Folders", "daemon.code_sandbox_image": "Sandbox image", "daemon.code_sandbox_interpreter": "Interpreter",
       "daemon.speech_voice_id": "Voice", "daemon.speech_model": "Voice model", "daemon.http_port": "Console port",
       "daemon.mcp_serve_port": "Let other apps use JARVIS (port)", "daemon.notifications": "Notifications", "daemon.google_client_id": "Client ID",
@@ -918,6 +919,8 @@ window.JarvisSettings = function (context) {
         body.appendChild(providerCard("fallback"));
         var effort = byKey("daemon.executor_reasoning_effort");
         if (effort) body.appendChild(settingRow(effort, "Thinking effort"));
+        var tokenLimit = byKey("daemon.workspace_daily_token_limit");
+        if (tokenLimit) body.appendChild(settingRow(tokenLimit, "Daily token limit"));
       } else if (sview.tab === "search") {
         body.appendChild(keyRow("search", "Search key"));
       } else if (sview.tab === "voice") {

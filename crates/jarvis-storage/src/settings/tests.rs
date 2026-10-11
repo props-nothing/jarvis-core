@@ -68,6 +68,24 @@ fn setting_one_value_keeps_everything_else() {
     assert!(!after.contains("\"m1\""));
 }
 
+#[test]
+fn workspace_daily_token_limit_is_saved_as_a_nonnegative_integer() {
+    let (_scratch, paths) = Scratch::new();
+
+    set(&paths, "workspace_daily_token_limit", &words("250000"))
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let loaded = ConfigStore::from_paths(&paths)
+        .load()
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        loaded.config().daemon().workspace_daily_token_limit(),
+        250_000
+    );
+    assert!(set(&paths, "workspace_daily_token_limit", &words("-1")).is_err());
+    assert!(set(&paths, "workspace_daily_token_limit", &words("1.5")).is_err());
+}
+
 /// **A change the daemon would refuse is refused here, and the file is left exactly as it was.**
 #[test]
 fn an_invalid_change_is_refused_and_leaves_the_file_untouched() {

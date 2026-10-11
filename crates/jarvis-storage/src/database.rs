@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Current application-owned SQLite schema version.
-pub const CURRENT_SCHEMA_VERSION: i64 = 21;
+pub const CURRENT_SCHEMA_VERSION: i64 = 22;
 /// Default filename for the canonical local database.
 pub const DEFAULT_DATABASE_FILENAME: &str = "jarvis.sqlite3";
 
@@ -404,6 +404,18 @@ pub enum DatabaseError {
     /// The workspace already holds the most scheduled tasks it may.
     #[error("this workspace already holds the maximum number of scheduled tasks")]
     ScheduleLimit,
+    /// No trigger exists for the requested identifier in this workspace.
+    #[error("no trigger exists for the requested identifier")]
+    TriggerNotFound,
+    /// The workspace already holds the most triggers it may.
+    #[error("this workspace already holds the maximum number of triggers")]
+    TriggerLimit,
+    /// A trigger field was refused (blank, too long, or an interval outside the allowed range).
+    #[error("the trigger's {field} is not acceptable")]
+    InvalidTrigger {
+        /// Stable field name without the offending value.
+        field: &'static str,
+    },
     /// A finished one-off cannot be resumed: its moment has passed.
     #[error("a one-off task that has already fired cannot be resumed")]
     ScheduleFinished,

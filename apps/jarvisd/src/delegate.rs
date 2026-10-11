@@ -386,11 +386,12 @@ impl AgentTool {
         let executor = Arc::clone(&self.executor);
         let run_id = started.run_id.clone();
         tokio::spawn(async move {
-            if let Err(error) = crate::executor::execute_run_with_tools(
+            if let Err(error) = crate::executor::execute_run_with_limits(
                 &database,
                 executor.model(),
                 executor.model_id(),
                 Some(&pipeline),
+                executor.workspace_daily_token_limit(),
                 &run_id,
             )
             .await

@@ -320,6 +320,7 @@ pub enum ExecutorBuildError {
 pub struct Executor {
     model: Box<dyn ModelGateway>,
     model_id: ModelId,
+    workspace_daily_token_limit: u64,
 }
 
 impl std::fmt::Debug for Executor {
@@ -359,6 +360,7 @@ impl Executor {
                 Ok(Self {
                     model: Box::new(model),
                     model_id: scripted_model_id()?,
+                    workspace_daily_token_limit: 0,
                 })
             }
             // The live provider. `validate` refuses this selection without complete coordinates, so a
@@ -410,7 +412,24 @@ impl Executor {
             }
             _ => Box::new(model),
         };
-        Ok(Self { model, model_id })
+        Ok(Self {
+            model,
+            model_id,
+            workspace_daily_token_limit: 0,
+        })
+    }
+
+    /// Applies the rolling 24-hour token limit for the profile's workspace.
+    #[must_use]
+    pub const fn with_workspace_daily_token_limit(mut self, limit: u64) -> Self {
+        self.workspace_daily_token_limit = limit;
+        self
+    }
+
+    /// Returns the rolling 24-hour token limit; zero means unlimited.
+    #[must_use]
+    pub const fn workspace_daily_token_limit(&self) -> u64 {
+        self.workspace_daily_token_limit
     }
 
     /// One OpenAI-compatible provider adapter from an address and a key.
@@ -513,6 +532,8 @@ struct RunDeps<'a> {
     model_id: &'a ModelId,
     /// The composed tool path, absent when this profile has no registry and no adapters.
     tools: Option<&'a Arc<ToolPipeline>>,
+    /// Input plus output tokens all runs in the workspace may use in a rolling 24 hours; zero is unlimited.
+    workspace_daily_token_limit: u64,
 }
 
 /// Enforces the model-call budget and performs one model call.
@@ -526,6 +547,9 @@ async fn generate_step(
     state: &mut RunLoopState,
     correlation_id: CorrelationId,
 ) -> Result<StoredRun, DatabaseError> {
+    if let Some(settled) = enforce_spend_guard(deps, run, correlation_id).await? {
+        return Ok(settled);
+    }
     if state.over_model_budget() {
         return fail(
             deps.database,
@@ -651,6 +675,7 @@ struct PendingCall {
 ///
 /// Returns [`DatabaseError`] when a run event or the settlement cannot be persisted. A model or tool
 /// failure is a **run outcome** and settles the run, returning `Ok(settled)`.
+#[cfg(test)]
 pub async fn execute_run_with_tools(
     database: &Arc<SqliteDatabase>,
     model: &dyn ModelGateway,
@@ -658,11 +683,24 @@ pub async fn execute_run_with_tools(
     tools: Option<&Arc<ToolPipeline>>,
     run_id: &str,
 ) -> Result<StoredRun, DatabaseError> {
+    execute_run_with_limits(database, model, model_id, tools, 0, run_id).await
+}
+
+/// Drives a run with the configured workspace-wide rolling token limit.
+pub async fn execute_run_with_limits(
+    database: &Arc<SqliteDatabase>,
+    model: &dyn ModelGateway,
+    model_id: &ModelId,
+    tools: Option<&Arc<ToolPipeline>>,
+    workspace_daily_token_limit: u64,
+    run_id: &str,
+) -> Result<StoredRun, DatabaseError> {
     let deps = RunDeps {
         database,
         model,
         model_id,
         tools,
+        workspace_daily_token_limit,
     };
     drive_run(deps, run_id, RunLoopState::default()).await
 }
@@ -686,11 +724,25 @@ pub async fn execute_run_with_tools(
 /// # Errors
 ///
 /// Returns [`DatabaseError`] under the same conditions as [`execute_run_with_tools`].
+#[cfg(test)]
 pub async fn resume_run_with_tools(
     database: &Arc<SqliteDatabase>,
     model: &dyn ModelGateway,
     model_id: &ModelId,
     tools: Option<&Arc<ToolPipeline>>,
+    run_id: &str,
+    call_id: &str,
+) -> Result<StoredRun, DatabaseError> {
+    resume_run_with_limits(database, model, model_id, tools, 0, run_id, call_id).await
+}
+
+/// Continues an approved run with the configured workspace-wide rolling token limit.
+pub async fn resume_run_with_limits(
+    database: &Arc<SqliteDatabase>,
+    model: &dyn ModelGateway,
+    model_id: &ModelId,
+    tools: Option<&Arc<ToolPipeline>>,
+    workspace_daily_token_limit: u64,
     run_id: &str,
     call_id: &str,
 ) -> Result<StoredRun, DatabaseError> {
@@ -707,6 +759,7 @@ pub async fn resume_run_with_tools(
         model,
         model_id,
         tools,
+        workspace_daily_token_limit,
     };
     drive_run(deps, run_id, state).await
 }
@@ -721,11 +774,25 @@ pub async fn resume_run_with_tools(
 /// # Errors
 ///
 /// Returns [`DatabaseError`] under the same conditions as [`execute_run_with_tools`].
+#[cfg(test)]
 pub async fn resume_run_declined(
     database: &Arc<SqliteDatabase>,
     model: &dyn ModelGateway,
     model_id: &ModelId,
     tools: Option<&Arc<ToolPipeline>>,
+    run_id: &str,
+    call_id: &str,
+) -> Result<StoredRun, DatabaseError> {
+    resume_run_declined_with_limits(database, model, model_id, tools, 0, run_id, call_id).await
+}
+
+/// Continues a declined run with the configured workspace-wide rolling token limit.
+pub async fn resume_run_declined_with_limits(
+    database: &Arc<SqliteDatabase>,
+    model: &dyn ModelGateway,
+    model_id: &ModelId,
+    tools: Option<&Arc<ToolPipeline>>,
+    workspace_daily_token_limit: u64,
     run_id: &str,
     call_id: &str,
 ) -> Result<StoredRun, DatabaseError> {
@@ -742,6 +809,7 @@ pub async fn resume_run_declined(
         model,
         model_id,
         tools,
+        workspace_daily_token_limit,
     };
     drive_run(deps, run_id, state).await
 }
@@ -1903,6 +1971,28 @@ async fn note_reasoning_limit(
     .await
 }
 
+/// Records that old tool results were left out of the model's working context, for a person watching the run. The results themselves
+/// stay in the run's stored events.
+async fn note_context_trimmed(
+    database: &Arc<SqliteDatabase>,
+    run: &StoredRun,
+    trimmed: crate::transcript_budget::Trimmed,
+    correlation_id: CorrelationId,
+) -> Result<(), DatabaseError> {
+    append(
+        database,
+        run,
+        RunEventKind::ActivityUpdated,
+        Some("context trimmed"),
+        &format!(
+            r#"{{"phase":"context_trimmed","results":{},"bytes":{}}}"#,
+            trimmed.results, trimmed.bytes
+        ),
+        correlation_id,
+    )
+    .await
+}
+
 /// Calls the model once, records the answer or the failure, and runs any requested tools.
 ///
 /// # What this returns, and which state the run is in afterwards
@@ -1934,6 +2024,13 @@ async fn generate(
     correlation_id: CorrelationId,
 ) -> Result<StoredRun, DatabaseError> {
     let database = deps.database;
+    // A long run keeps its working context inside a bound by leaving out the bulk of its oldest tool results (`ADR-0194`). Before the
+    // tool surface is derived below, which reads the transcript.
+    if let Some(trimmed) =
+        crate::transcript_budget::trim_old_results(&mut state.messages, state.base_len)
+    {
+        note_context_trimmed(database, run, trimmed, correlation_id).await?;
+    }
     // The tool surface is re-derived from the registry on every call rather than carried in the
     // transcript, so the offered set is always the current one and there is one statement of it.
     let sub_agent = crate::delegate::is_delegated_objective(run.objective());
@@ -2010,23 +2107,10 @@ async fn generate(
         .await;
     }
 
-    // Usage is recorded for every call, not only the last, because an agent loop is several billable
-    // calls and recording only the final one understates the run's cost.
-    if let Some(usage) = summary.usage() {
-        append(
-            database,
-            run,
-            RunEventKind::UsageUpdated,
-            None,
-            &format!(
-                r#"{{"input_tokens":{},"output_tokens":{},"cached_input_tokens":{}}}"#,
-                usage.input_tokens(),
-                usage.output_tokens(),
-                usage.cached_input_tokens()
-            ),
-            correlation_id,
-        )
-        .await?;
+    if let Some(settled) =
+        record_usage_and_enforce(deps, run, summary.usage(), correlation_id).await?
+    {
+        return Ok(settled);
     }
 
     // A turn that requested tools is not the answer. The invocations are executed and their results fed
@@ -2045,6 +2129,191 @@ async fn generate(
     }
 
     record_final_answer(database, run, &text, correlation_id).await
+}
+
+/// Records every billable call and applies the spend guard at the same durable boundary.
+async fn record_usage_and_enforce(
+    deps: RunDeps<'_>,
+    run: &StoredRun,
+    usage: Option<jarvis_models::TokenUsage>,
+    correlation_id: CorrelationId,
+) -> Result<Option<StoredRun>, DatabaseError> {
+    let Some(usage) = usage else {
+        return Ok(None);
+    };
+    append(
+        deps.database,
+        run,
+        RunEventKind::UsageUpdated,
+        None,
+        &format!(
+            r#"{{"input_tokens":{},"output_tokens":{},"cached_input_tokens":{}}}"#,
+            usage.input_tokens(),
+            usage.output_tokens(),
+            usage.cached_input_tokens()
+        ),
+        correlation_id,
+    )
+    .await?;
+    enforce_spend_guard(deps, run, correlation_id).await
+}
+
+/// Stops a run before spending past, or after the billable call that reaches, a rolling token limit.
+///
+/// Usage is persisted before this check, so the guard cannot hide the call that caused it to fire.
+/// Reads fail closed: when a configured cap cannot be measured, no later call or tool effect starts.
+async fn enforce_spend_guard(
+    deps: RunDeps<'_>,
+    run: &StoredRun,
+    correlation_id: CorrelationId,
+) -> Result<Option<StoredRun>, DatabaseError> {
+    let since = crate::project_service::day_window_start();
+    let project = match jarvis_storage::project_for(
+        deps.database,
+        jarvis_storage::LinkKind::Session,
+        run.session_id(),
+    )
+    .await
+    {
+        Ok(project) => project,
+        Err(error) => {
+            let settled = fail_spend_guard_unavailable(
+                deps.database,
+                run,
+                "the run stopped because its project token limit could not be checked",
+                correlation_id,
+            )
+            .await?;
+            tracing::error!(run_id = run.id(), error = %error, "the project spend guard failed closed");
+            return Ok(Some(settled));
+        }
+    };
+
+    if let Some(project) = project.as_ref()
+        && project.daily_token_limit > 0
+    {
+        let used = match jarvis_storage::project_tokens_since(deps.database, &project.id, since)
+            .await
+        {
+            Ok((input, output)) => input.saturating_add(output),
+            Err(error) => {
+                let settled = fail_spend_guard_unavailable(
+                    deps.database,
+                    run,
+                    "the run stopped because its project token limit could not be checked",
+                    correlation_id,
+                )
+                .await?;
+                tracing::error!(run_id = run.id(), error = %error, "the project spend guard failed closed");
+                return Ok(Some(settled));
+            }
+        };
+        if used >= u64::from(project.daily_token_limit) {
+            let message = format!(
+                "the run stopped after using {used} tokens in the last 24 hours because project '{}' has a daily limit of {}",
+                project.name, project.daily_token_limit
+            );
+            note_spend_stop(deps.database, project, run, &message).await;
+            return fail_spend_limit(deps.database, run, &message, correlation_id)
+                .await
+                .map(Some);
+        }
+    }
+
+    if deps.workspace_daily_token_limit > 0 {
+        let used = match jarvis_storage::workspace_tokens_since(
+            deps.database,
+            run.workspace_id(),
+            since,
+        )
+        .await
+        {
+            Ok((input, output)) => input.saturating_add(output),
+            Err(error) => {
+                let settled = fail_spend_guard_unavailable(
+                    deps.database,
+                    run,
+                    "the run stopped because the workspace token limit could not be checked",
+                    correlation_id,
+                )
+                .await?;
+                tracing::error!(run_id = run.id(), error = %error, "the workspace spend guard failed closed");
+                return Ok(Some(settled));
+            }
+        };
+        if used >= deps.workspace_daily_token_limit {
+            let message = format!(
+                "the run stopped after the workspace used {used} tokens in the last 24 hours because its daily limit is {}",
+                deps.workspace_daily_token_limit
+            );
+            if let Some(project) = project.as_ref() {
+                note_spend_stop(deps.database, project, run, &message).await;
+            }
+            return fail_spend_limit(deps.database, run, &message, correlation_id)
+                .await
+                .map(Some);
+        }
+    }
+
+    Ok(None)
+}
+
+async fn note_spend_stop(
+    database: &SqliteDatabase,
+    project: &jarvis_storage::StoredProject,
+    run: &StoredRun,
+    message: &str,
+) {
+    if let Err(error) = jarvis_storage::add_project_note(
+        database,
+        &project.id,
+        jarvis_storage::NoteKind::Blocker,
+        message,
+        Some(run.id()),
+        UtcTimestamp::now(&SystemClock),
+    )
+    .await
+    {
+        tracing::error!(run_id = run.id(), error = %error, "the spend stop could not be written to the project journal");
+    }
+}
+
+async fn fail_spend_limit(
+    database: &Arc<SqliteDatabase>,
+    run: &StoredRun,
+    message: &str,
+    correlation_id: CorrelationId,
+) -> Result<StoredRun, DatabaseError> {
+    fail(
+        database,
+        run,
+        RunErrorCode::new("daily_token_limit").map_err(|_| DatabaseError::InvalidRunRequest {
+            field: "error_code",
+        })?,
+        message,
+        correlation_id,
+    )
+    .await
+}
+
+async fn fail_spend_guard_unavailable(
+    database: &Arc<SqliteDatabase>,
+    run: &StoredRun,
+    message: &str,
+    correlation_id: CorrelationId,
+) -> Result<StoredRun, DatabaseError> {
+    fail(
+        database,
+        run,
+        RunErrorCode::new("token_limit_unavailable").map_err(|_| {
+            DatabaseError::InvalidRunRequest {
+                field: "error_code",
+            }
+        })?,
+        message,
+        correlation_id,
+    )
+    .await
 }
 
 /// Records the final answer and advances the run to `Observing`.
@@ -3850,6 +4119,134 @@ mod tests {
         );
         database.close().await;
     }
+
+    #[tokio::test]
+    async fn a_project_run_stops_at_its_daily_token_limit_and_records_the_blocker() {
+        use jarvis_storage::{LOCAL_WORKSPACE_ID, LinkKind, NewProject, NoteKind};
+
+        let (_profile, database) = database().await;
+        let now = UtcTimestamp::now(&SystemClock);
+        let project = jarvis_storage::create_project(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            &NewProject {
+                name: "Metered".to_owned(),
+                goal: "Stay bounded".to_owned(),
+                guidance: String::new(),
+                folder: String::new(),
+                daily_run_limit: 0,
+                daily_token_limit: 18,
+            },
+            now,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("project: {error}"));
+        let run = start(&database, "use the remaining budget").await;
+        jarvis_storage::link_project(&database, LinkKind::Session, run.session_id(), &project.id)
+            .await
+            .unwrap_or_else(|error| panic!("link: {error}"));
+
+        let settled = execute_run(
+            &database,
+            &model(vec![Turn::answer("not returned")]),
+            run.id(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("run: {error}"));
+
+        assert_eq!(settled.state(), RunState::Failed);
+        assert_eq!(settled.error_code(), Some("daily_token_limit"));
+        let notes = jarvis_storage::recent_project_notes(&database, &project.id, 10)
+            .await
+            .unwrap_or_else(|error| panic!("notes: {error}"));
+        let blocker = notes
+            .iter()
+            .find(|note| note.run_id.as_deref() == Some(run.id()))
+            .unwrap_or_else(|| panic!("the spend stop must be in the journal: {notes:?}"));
+        assert_eq!(blocker.kind, NoteKind::Blocker);
+        assert!(
+            blocker.body.contains("daily limit of 18"),
+            "{}",
+            blocker.body
+        );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn the_workspace_token_limit_counts_earlier_runs_and_stops_the_next_one() {
+        let (_profile, database) = database().await;
+        let first = start(&database, "first").await;
+        let first = execute_run_with_limits(
+            &database,
+            &model(vec![Turn::answer("first answer")]),
+            &fixture_model_id(),
+            None,
+            19,
+            first.id(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("first run: {error}"));
+        assert_eq!(first.state(), RunState::Completed);
+
+        let second = start(&database, "second").await;
+        let second = execute_run_with_limits(
+            &database,
+            &model(vec![Turn::answer("not returned")]),
+            &fixture_model_id(),
+            None,
+            19,
+            second.id(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("second run: {error}"));
+
+        assert_eq!(second.state(), RunState::Failed);
+        assert_eq!(second.error_code(), Some("daily_token_limit"));
+        let used = jarvis_storage::workspace_tokens_since(
+            &database,
+            second.workspace_id(),
+            crate::project_service::day_window_start(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("usage: {error}"));
+        assert_eq!(used, (22, 14));
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_run_does_not_call_the_model_when_the_workspace_is_already_at_its_limit() {
+        let (_profile, database) = database().await;
+        let earlier = start(&database, "earlier").await;
+        execute_run(
+            &database,
+            &model(vec![Turn::answer("used the budget")]),
+            earlier.id(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("earlier run: {error}"));
+
+        let run = start(&database, "must not spend more").await;
+        let unused_model = model(vec![Turn::answer("must not be called")]);
+        let settled = execute_run_with_limits(
+            &database,
+            &unused_model,
+            &fixture_model_id(),
+            None,
+            18,
+            run.id(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("guarded run: {error}"));
+
+        assert_eq!(settled.state(), RunState::Failed);
+        assert_eq!(settled.error_code(), Some("daily_token_limit"));
+        assert!(
+            unused_model.seen_messages().is_empty(),
+            "an exhausted workspace must not make another billable call"
+        );
+        database.close().await;
+    }
+
     /// A first turn must not replay anything, because there is nothing to replay.
     ///
     /// The counterpart to the test above: a daemon that read *some* transcript unconditionally would
@@ -4525,6 +4922,96 @@ mod tests {
             Some(jarvis_core::RunOutcome::Succeeded),
             "thirty tool calls is ordinary work and must not hit a budget: {:?}",
             settled.error_code()
+        );
+    }
+
+    /// **A long run does not outgrow the model's context: old bulk is left out, new work is kept, and the run completes.**
+    ///
+    /// Thirty reads of two 11,500-character files is about 350 KB of results. Without trimming, every one is sent on every call and a real
+    /// provider answers `model_context_overflow` partway. Asserted on what the model was actually sent, not on what the loop held.
+    #[tokio::test]
+    async fn a_long_run_leaves_out_old_results_and_still_completes() {
+        let (profile, database) = database().await;
+        let root = profile.0.join("workspace");
+        std::fs::create_dir_all(&root)
+            .unwrap_or_else(|error| panic!("create the workspace root: {error}"));
+        std::fs::write(root.join("a.txt"), "a".repeat(11_500))
+            .unwrap_or_else(|error| panic!("write a.txt: {error}"));
+        std::fs::write(root.join("b.txt"), "b".repeat(11_500))
+            .unwrap_or_else(|error| panic!("write b.txt: {error}"));
+
+        let tools = filesystem_pipeline(&profile, &database, &root);
+        let run = start(&database, "read both files many times").await;
+        let mut turns = Vec::new();
+        for step in 0..30 {
+            let name = if step % 2 == 0 { "a.txt" } else { "b.txt" };
+            turns.push(Turn::tool_call(
+                &format!("call_{step}"),
+                "jarvis.files.read",
+                &format!(r#"{{"path":"{name}"}}"#),
+            ));
+        }
+        turns.push(Turn::answer("Done."));
+        let model = model(turns);
+        let settled = execute_run_with_tools(
+            &database,
+            &model,
+            &fixture_model_id(),
+            Some(&tools),
+            run.id(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("run: {error}"));
+        assert_eq!(
+            settled.terminal_outcome(),
+            Some(jarvis_core::RunOutcome::Succeeded),
+            "{:?}",
+            settled.error_code()
+        );
+
+        let requests = model.seen_messages();
+        let last = requests
+            .last()
+            .unwrap_or_else(|| panic!("the model was called"));
+        let sent: usize = last.iter().map(|message| message.text().len()).sum();
+        assert!(
+            sent < crate::transcript_budget::SOFT_BUDGET_BYTES + 20_000,
+            "the last request was {sent} bytes"
+        );
+        let results: Vec<String> = last
+            .iter()
+            .filter(|message| message.role() == jarvis_models::Role::Tool)
+            .map(jarvis_models::ChatMessage::text)
+            .collect();
+        assert_eq!(results.len(), 30, "every call still has its result");
+        assert!(
+            results[0].starts_with("[earlier tool result left out"),
+            "the oldest is left out: {}",
+            results[0]
+        );
+        let recent = &results[results.len() - crate::transcript_budget::KEEP_RECENT_RESULTS..];
+        assert!(
+            recent
+                .iter()
+                .all(|text| !text.starts_with("[earlier tool result left out")
+                    && text.len() > 11_000),
+            "the newest results are whole"
+        );
+
+        // A person watching is told, and the full results are still in the stored record.
+        let events = jarvis_storage::read_run_events(
+            &database,
+            run.id(),
+            jarvis_core::ReplayRequest::new(jarvis_core::RunEventSequence::first(), 1000)
+                .unwrap_or_else(|error| panic!("replay: {error}")),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("events: {error}"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.payload().contains("context_trimmed")),
+            "the trim is visible in the run's events"
         );
     }
 

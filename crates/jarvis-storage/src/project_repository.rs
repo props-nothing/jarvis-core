@@ -756,6 +756,39 @@ pub async fn project_tokens_since(
     Ok((read("input_tokens"), read("output_tokens")))
 }
 
+/// The tokens used since `since` by all runs in a workspace, as `(input, output)`.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError`] when the read fails.
+pub async fn workspace_tokens_since(
+    database: &SqliteDatabase,
+    workspace_id: &str,
+    since: UtcTimestamp,
+) -> Result<(u64, u64), DatabaseError> {
+    let row = sqlx::query(
+        "SELECT COALESCE(SUM(json_extract(event.payload, '$.input_tokens')), 0) AS input_tokens, \
+                COALESCE(SUM(json_extract(event.payload, '$.output_tokens')), 0) AS output_tokens \
+         FROM run_events AS event JOIN agent_runs AS run ON run.id = event.run_id \
+         WHERE event.kind = 'usage_updated' AND run.started_at >= ?2 AND run.workspace_id = ?1",
+    )
+    .bind(workspace_id)
+    .bind(since.to_string())
+    .fetch_one(database.pool())
+    .await
+    .map_err(|source| DatabaseError::Sqlite {
+        operation: "total a workspace's tokens",
+        source,
+    })?;
+    let read = |column: &str| -> u64 {
+        row.try_get::<i64, _>(column)
+            .ok()
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0)
+    };
+    Ok((read("input_tokens"), read("output_tokens")))
+}
+
 /// The project a session or schedule belongs to, if any.
 ///
 /// # Errors

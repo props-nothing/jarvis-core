@@ -19,6 +19,7 @@ enum Kind {
     Folders,
     Words,
     Port,
+    Count,
     ToolIds,
     Flag,
 }
@@ -31,6 +32,7 @@ impl Kind {
             Self::Folders => "folders",
             Self::Words => "words",
             Self::Port => "port",
+            Self::Count => "count",
             Self::ToolIds => "tools",
             Self::Flag => "flag",
         }
@@ -122,6 +124,16 @@ const SETTINGS: &[Setting] = &[
         default: None,
         unset_means: "The model decides how long to think. Lower is faster and cheaper; a run that thinks past its budget is already asked to think less.",
         example: "low",
+    },
+    Setting {
+        table: "daemon",
+        field: "workspace_daily_token_limit",
+        kind: Kind::Count,
+        help: "the most input plus output tokens all runs may use in a rolling 24 hours; 0 means unlimited",
+        group: "brain",
+        default: Some("0"),
+        unset_means: "Unlimited. Set a positive count to stop runs after the billable call that reaches the cap.",
+        example: "250000",
     },
     Setting {
         table: "daemon",
@@ -408,6 +420,12 @@ fn convert(kind: Kind, values: &[String]) -> Result<Value, String> {
             .filter(|port| *port > 0)
             .map(|port| Value::Integer(i64::from(port)))
             .ok_or_else(|| "a port is a number from 1 to 65535".to_owned()),
+        Kind::Count => one()?
+            .parse::<u64>()
+            .ok()
+            .and_then(|count| i64::try_from(count).ok())
+            .map(Value::Integer)
+            .ok_or_else(|| "a count is a whole number from 0 to 9223372036854775807".to_owned()),
         Kind::ToolIds => {
             if values.iter().any(|value| value.trim().is_empty()) {
                 return Err("tool ids must not be blank".to_owned());
