@@ -52,11 +52,26 @@ pub struct FailedRun {
     pub error_code: String,
 }
 
+/// What one model was asked in a window, as far as its calls recorded which model they asked (`ADR-0196`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelUsage {
+    /// The model identifier the calls asked for; empty for calls recorded before the model was written down.
+    pub model: String,
+    /// How many model calls.
+    pub calls: u64,
+    /// Prompt tokens sent.
+    pub input_tokens: u64,
+    /// Tokens written.
+    pub output_tokens: u64,
+}
+
 /// A window's worth of activity.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StoredDigest {
     /// Counts and tokens over every run.
     pub totals: RunTotals,
+    /// Calls and tokens per model, the most tokens first.
+    pub models: Vec<ModelUsage>,
     /// Projects that had runs, busiest first.
     pub projects: Vec<ProjectActivity>,
     /// The newest failed runs.
@@ -67,6 +82,42 @@ pub struct StoredDigest {
 const MAX_PROJECTS: i64 = 20;
 const MAX_HIGHLIGHTS: i64 = 5;
 const MAX_PROBLEMS: i64 = 5;
+const MAX_MODELS: i64 = 10;
+
+/// Calls and tokens per model over the runs that started at or after `since`.
+async fn model_usage(
+    database: &SqliteDatabase,
+    workspace_id: &str,
+    since: &str,
+) -> Result<Vec<ModelUsage>, DatabaseError> {
+    let rows = sqlx::query(
+        "SELECT COALESCE(json_extract(event.payload, '$.model'), '') AS model, COUNT(*) AS calls, \
+                COALESCE(SUM(json_extract(event.payload, '$.input_tokens')), 0) AS input_tokens, \
+                COALESCE(SUM(json_extract(event.payload, '$.output_tokens')), 0) AS output_tokens \
+         FROM run_events AS event JOIN agent_runs AS run ON run.id = event.run_id \
+         WHERE run.workspace_id = ?1 AND run.started_at >= ?2 AND event.kind = 'usage_updated' \
+         GROUP BY model ORDER BY SUM(json_extract(event.payload, '$.input_tokens')) \
+                + SUM(json_extract(event.payload, '$.output_tokens')) DESC, model LIMIT ?3",
+    )
+    .bind(workspace_id)
+    .bind(since)
+    .bind(MAX_MODELS)
+    .fetch_all(database.pool())
+    .await
+    .map_err(sqlite("total the models of a digest"))?;
+    let mut models = Vec::with_capacity(rows.len());
+    for row in &rows {
+        models.push(ModelUsage {
+            model: row
+                .try_get("model")
+                .map_err(sqlite("decode a digest model"))?,
+            calls: count(row, "calls")?,
+            input_tokens: count(row, "input_tokens")?,
+            output_tokens: count(row, "output_tokens")?,
+        });
+    }
+    Ok(models)
+}
 
 fn sqlite(operation: &'static str) -> impl FnOnce(sqlx::Error) -> DatabaseError {
     move |source| DatabaseError::Sqlite { operation, source }
@@ -200,8 +251,10 @@ pub async fn digest_since(
     }
 
     let problems = failed_runs(database, workspace_id, &since).await?;
+    let models = model_usage(database, workspace_id, &since).await?;
     Ok(StoredDigest {
         totals,
+        models,
         projects,
         problems,
     })

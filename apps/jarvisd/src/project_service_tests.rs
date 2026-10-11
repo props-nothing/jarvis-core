@@ -624,11 +624,12 @@ async fn the_digest_counts_runs_by_project_and_lists_what_was_decided_and_what_f
         Some(r#"{"text":"fiddling","kind":"progress"}"#),
     )
     .await;
-    // Each model call records its own usage event; the digest adds them up.
+    // Each model call records its own usage event; the digest adds them up. The first names its model, the second is one recorded
+    // before the model was written down.
     let run: RunReply = parse(&text);
-    for (input, output) in [(1000, 40), (500, 10)] {
+    for (input, output, model) in [(1000, 40, r#","model":"glm-5.3-flash""#), (500, 10, "")] {
         let payload = format!(
-            r#"{{"input_tokens":{input},"output_tokens":{output},"cached_input_tokens":0}}"#
+            r#"{{"input_tokens":{input},"output_tokens":{output},"cached_input_tokens":0{model}}}"#
         );
         let event = must(jarvis_storage::NewRunEvent::new(
             jarvis_core::RunId::new().to_string(),
@@ -651,6 +652,16 @@ async fn the_digest_counts_runs_by_project_and_lists_what_was_decided_and_what_f
         (48, 2, 2, 0)
     );
     assert_eq!((digest.input_tokens, digest.output_tokens), (1500, 50));
+    let by_model: Vec<(&str, u64, u64)> = digest
+        .models
+        .iter()
+        .map(|usage| (usage.model.as_str(), usage.calls, usage.input_tokens))
+        .collect();
+    assert_eq!(
+        by_model,
+        [("glm-5.3-flash", 1, 1000), ("", 1, 500)],
+        "calls are grouped by the model they asked, the most tokens first, and an unrecorded model is its own group"
+    );
     assert_eq!(
         digest.projects.len(),
         1,

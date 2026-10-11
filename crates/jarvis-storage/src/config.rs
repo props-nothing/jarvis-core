@@ -141,6 +141,12 @@ pub struct DaemonConfig {
     /// The key file for the different fallback provider, absolute, like [`Self::executor_api_key_ref`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     executor_fallback_api_key_ref: Option<PathBuf>,
+    /// The model sub-agents are asked, when it should differ from the main one (`ADR-0196`); the main model otherwise. Needs a live provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    executor_subagent_model_name: Option<String>,
+    /// The model scheduled and trigger-started runs are asked, when it should differ from the main one (`ADR-0196`); the main model otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    executor_background_model_name: Option<String>,
     /// The base URL a **live** provider is called at, including its version path (`https://host/v1`).
     ///
     /// # Why no credential may appear here
@@ -464,6 +470,23 @@ impl DaemonConfig {
     pub fn executor_fallback_api_key_ref(&self) -> Option<&Path> {
         self.executor_fallback_api_key_ref.as_deref()
     }
+
+    /// The model sub-agents are asked, when one is configured.
+    #[must_use]
+    pub fn executor_subagent_model_name(&self) -> Option<&str> {
+        self.executor_subagent_model_name.as_deref()
+    }
+
+    /// The model scheduled and trigger-started runs are asked, when one is configured.
+    #[must_use]
+    pub fn executor_background_model_name(&self) -> Option<&str> {
+        self.executor_background_model_name.as_deref()
+    }
+}
+
+/// A model identifier as providers write them: not blank, at most 128 bytes, printable ASCII with no space.
+fn valid_model_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 128 && name.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
 impl Default for DaemonConfig {
@@ -480,6 +503,8 @@ impl Default for DaemonConfig {
             executor_fallback_model_name: None,
             executor_fallback_base_url: None,
             executor_fallback_api_key_ref: None,
+            executor_subagent_model_name: None,
+            executor_background_model_name: None,
             executor_base_url: None,
             executor_api_key_ref: None,
             workspace_daily_token_limit: 0,
@@ -806,12 +831,20 @@ impl Config {
         // A model identifier as providers write them: no spaces or control characters, and the fallback is meaningless without a
         // live provider to ask it of.
         if let Some(name) = &self.daemon.executor_fallback_model_name
-            && (!live
-                || name.is_empty()
-                || name.len() > 128
-                || !name.bytes().all(|byte| byte.is_ascii_graphic()))
+            && (!live || !valid_model_name(name))
         {
             return Err(ConfigError::InvalidFallbackModel);
+        }
+        for name in [
+            &self.daemon.executor_subagent_model_name,
+            &self.daemon.executor_background_model_name,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !live || !valid_model_name(name) {
+                return Err(ConfigError::InvalidRoutedModel);
+            }
         }
         self.validate_fallback_provider()?;
         if let Some(path) = &self.daemon.search_api_key_ref
@@ -1236,6 +1269,11 @@ pub enum ConfigError {
         "daemon.executor_fallback_model_name must be a model identifier with no spaces, and needs daemon.executor_model = openai-compatible"
     )]
     InvalidFallbackModel,
+    /// A sub-agent or background model name was blank, over-long, had a space or control character, or no live provider is selected.
+    #[error(
+        "daemon.executor_subagent_model_name and daemon.executor_background_model_name must be model identifiers with no spaces, and need daemon.executor_model = openai-compatible"
+    )]
+    InvalidRoutedModel,
     /// A different fallback provider needs its address (http or https, no credentials in it) and an absolute key file together, and a fallback model name.
     #[error(
         "daemon.executor_fallback_base_url needs daemon.executor_fallback_model_name and must be an http(s) address with no login in it; daemon.executor_fallback_api_key_ref must be an absolute path and needs the address"
@@ -1434,6 +1472,8 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "executor_fallback_model_name",
                 "executor_fallback_base_url",
                 "executor_fallback_api_key_ref",
+                "executor_subagent_model_name",
+                "executor_background_model_name",
                 "executor_base_url",
                 "executor_api_key_ref",
                 "workspace_daily_token_limit",
@@ -2068,6 +2108,57 @@ executor_api_key_ref = "/etc/jarvis/model.key"
             parse(scripted).err(),
             Some(ConfigError::InvalidReasoningEffort)
         );
+    }
+
+    /// **A sub-agent or background model is a plain identifier, and only means something with a live model.**
+    #[test]
+    fn routed_model_names_are_plain_identifiers_and_need_a_live_model() {
+        let key = if cfg!(windows) {
+            "C:/keys/model.key"
+        } else {
+            "/keys/model.key"
+        };
+        let live = |extra: &str| {
+            format!(
+                "schema_version = 1\n[profile]\nname = \"home\"\n[logging]\nlevel = \"warn\"\n[daemon]\nshutdown_timeout_seconds = 30\n\
+                 executor_model = \"openai-compatible\"\nexecutor_model_name = \"m\"\n\
+                 executor_base_url = \"http://127.0.0.1:11434/v1\"\nexecutor_api_key_ref = \"{key}\"\n{extra}"
+            )
+        };
+        let parse = |document: &str| {
+            Config::parse_with_environment(document, Vec::<(String, String)>::new())
+        };
+        let loaded = parse(&live(
+            "executor_subagent_model_name = \"glm-5.3-flash\"\nexecutor_background_model_name = \"glm-5.3-flash\"\n",
+        ))
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            loaded.config().daemon().executor_subagent_model_name(),
+            Some("glm-5.3-flash")
+        );
+        assert_eq!(
+            loaded.config().daemon().executor_background_model_name(),
+            Some("glm-5.3-flash")
+        );
+        for field in [
+            "executor_subagent_model_name",
+            "executor_background_model_name",
+        ] {
+            for bad in ["", "has space"] {
+                assert_eq!(
+                    parse(&live(&format!("{field} = \"{bad}\"\n"))).err(),
+                    Some(ConfigError::InvalidRoutedModel),
+                    "{field} {bad:?}"
+                );
+            }
+            let scripted = format!(
+                "schema_version = 1\n[profile]\nname = \"home\"\n[logging]\nlevel = \"warn\"\n[daemon]\nshutdown_timeout_seconds = 30\n{field} = \"x\"\n"
+            );
+            assert_eq!(
+                parse(&scripted).err(),
+                Some(ConfigError::InvalidRoutedModel)
+            );
+        }
     }
 
     /// **A fallback model is a plain identifier, and only means something with a live model.**

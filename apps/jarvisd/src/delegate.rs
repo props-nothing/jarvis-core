@@ -385,11 +385,12 @@ impl AgentTool {
         let database = Arc::clone(&self.database);
         let executor = Arc::clone(&self.executor);
         let run_id = started.run_id.clone();
+        let model_id = executor.model_id_for(&started.objective).clone();
         tokio::spawn(async move {
             if let Err(error) = crate::executor::execute_run_with_limits(
                 &database,
                 executor.model(),
-                executor.model_id(),
+                &model_id,
                 Some(&pipeline),
                 executor.workspace_daily_token_limit(),
                 &run_id,

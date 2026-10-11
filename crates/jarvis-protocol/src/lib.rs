@@ -21,7 +21,7 @@ pub use approval::{
     PendingApprovalReply,
 };
 pub use contact_api::{ContactCount, ContactListReply, ContactReply, SaveContactRequest};
-pub use digest_api::{DigestHighlight, DigestProblem, DigestProject, DigestReply};
+pub use digest_api::{DigestHighlight, DigestModel, DigestProblem, DigestProject, DigestReply};
 pub use entity_api::{
     AddAliasRequest, AliasVerificationName, CreateEntityRequest, EntityAliasReply,
     EntityDetailReply, EntityKindName, EntityListReply, EntityLookupReply, EntityMatchReply,

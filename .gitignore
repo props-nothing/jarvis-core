@@ -18,6 +18,9 @@ dist/
 coverage/
 ui/web/.env.local
 
+# The public website is its own git repository (see frontend/README.md)
+/frontend/
+
 # Editors and operating systems
 .DS_Store
 Thumbs.db

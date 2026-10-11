@@ -38,6 +38,7 @@ mod memory_search;
 mod memory_service;
 mod model_fallback;
 mod model_probe;
+mod model_routing;
 mod notify;
 mod ocr;
 mod project_context;
@@ -801,6 +802,10 @@ fn compose_model_provider(
         executor::ModelProviderConfig::new(base_url, model, key)
             .with_reasoning_effort(effort)
             .with_fallback_model(daemon.executor_fallback_model_name().map(str::to_owned))
+            .with_routed_models(
+                daemon.executor_subagent_model_name().map(str::to_owned),
+                daemon.executor_background_model_name().map(str::to_owned),
+            )
             .with_fallback_provider(fallback_provider),
     ))
 }

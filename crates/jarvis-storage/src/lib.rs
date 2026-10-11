@@ -48,7 +48,9 @@ pub use database::{
     CURRENT_SCHEMA_VERSION, DEFAULT_DATABASE_FILENAME, DaemonInstanceStart, DaemonStopReason,
     DatabaseError, SqliteDatabase,
 };
-pub use digest_repository::{FailedRun, ProjectActivity, RunTotals, StoredDigest, digest_since};
+pub use digest_repository::{
+    FailedRun, ModelUsage, ProjectActivity, RunTotals, StoredDigest, digest_since,
+};
 pub use embedding_repository::{
     DEFAULT_INDEXED_DIMENSIONS, EmbeddingError, MAX_SIMILARITY_RESULTS, NewMemoryEmbedding,
     SimilarMemory, SimilarityQuery, index_ddl, record_memory_embedding, search_similar,

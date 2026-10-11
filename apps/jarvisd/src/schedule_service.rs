@@ -53,7 +53,7 @@ const MAX_RUN_LIST: u32 = 50;
 const MAX_LISTED_ANSWER_CHARS: usize = 4000;
 
 /// Prefixed to a scheduled objective so the model knows nobody is there to answer a question.
-const UNATTENDED_NOTICE: &str = "This is a scheduled task running while the user is away, so there is no one to \
+pub(crate) const UNATTENDED_NOTICE: &str = "This is a scheduled task running while the user is away, so there is no one to \
 ask. Do the work, make reasonable assumptions, and report the result briefly.\n\nTask: ";
 
 /// What one scheduler pass did, for the log and for tests.

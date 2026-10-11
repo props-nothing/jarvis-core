@@ -242,6 +242,10 @@ pub struct ModelProviderConfig {
     fallback_model: Option<String>,
     /// A different provider that serves the fallback model: its base URL and API key.
     fallback_provider: Option<(String, String)>,
+    /// A model for sub-agents, at the same provider.
+    subagent_model: Option<String>,
+    /// A model for scheduled and trigger-started runs, at the same provider.
+    background_model: Option<String>,
 }
 
 impl ModelProviderConfig {
@@ -259,7 +263,21 @@ impl ModelProviderConfig {
             api_key: api_key.into(),
             fallback_model: None,
             fallback_provider: None,
+            subagent_model: None,
+            background_model: None,
         }
+    }
+
+    /// Sets the models sub-agents and background (scheduled or trigger-started) runs are asked, when they differ from the main one.
+    #[must_use]
+    pub fn with_routed_models(
+        mut self,
+        subagent: Option<String>,
+        background: Option<String>,
+    ) -> Self {
+        self.subagent_model = subagent;
+        self.background_model = background;
+        self
     }
 
     /// Sets a different provider (base URL and key) at which the fallback model is asked.
@@ -320,6 +338,7 @@ pub enum ExecutorBuildError {
 pub struct Executor {
     model: Box<dyn ModelGateway>,
     model_id: ModelId,
+    routes: crate::model_routing::ModelRoutes,
     workspace_daily_token_limit: u64,
 }
 
@@ -360,6 +379,7 @@ impl Executor {
                 Ok(Self {
                     model: Box::new(model),
                     model_id: scripted_model_id()?,
+                    routes: crate::model_routing::ModelRoutes::default(),
                     workspace_daily_token_limit: 0,
                 })
             }
@@ -412,9 +432,20 @@ impl Executor {
             }
             _ => Box::new(model),
         };
+        let named = |name: &Option<String>, field: &'static str| {
+            name.clone()
+                .map(ModelId::new)
+                .transpose()
+                .map_err(|_| ExecutorBuildError::InvalidProviderField { field })
+        };
+        let routes = crate::model_routing::ModelRoutes::new(
+            named(&provider.subagent_model, "sub-agent model")?,
+            named(&provider.background_model, "background model")?,
+        );
         Ok(Self {
             model,
             model_id,
+            routes,
             workspace_daily_token_limit: 0,
         })
     }
@@ -464,14 +495,23 @@ impl Executor {
         self.model.as_ref()
     }
 
-    /// Returns the model identifier every run is asked for.
+    /// Returns the main model identifier, which a run that has no model of its own kind is asked for.
     ///
     /// Held rather than hardcoded, because a run's request names a model and the scripted model serves
     /// exactly one identifier. Deriving it in the loop would be a second place the name lives, and the two
     /// could disagree — a run asking the scripted adapter for a model it does not serve.
+    #[cfg(test)]
     #[must_use]
     pub const fn model_id(&self) -> &ModelId {
         &self.model_id
+    }
+
+    /// The model a run that began with `objective` is asked: the main model, or the one set for sub-agents or for scheduled and
+    /// trigger-started runs (`ADR-0196`).
+    #[must_use]
+    pub fn model_id_for(&self, objective: &str) -> &ModelId {
+        self.routes
+            .model_for(crate::model_routing::role_of(objective), &self.model_id)
     }
 }
 
@@ -2146,12 +2186,13 @@ async fn record_usage_and_enforce(
         run,
         RunEventKind::UsageUpdated,
         None,
-        &format!(
-            r#"{{"input_tokens":{},"output_tokens":{},"cached_input_tokens":{}}}"#,
-            usage.input_tokens(),
-            usage.output_tokens(),
-            usage.cached_input_tokens()
-        ),
+        &serde_json::json!({
+            "input_tokens": usage.input_tokens(),
+            "output_tokens": usage.output_tokens(),
+            "cached_input_tokens": usage.cached_input_tokens(),
+            "model": deps.model_id.as_str(),
+        })
+        .to_string(),
         correlation_id,
     )
     .await?;
@@ -3388,6 +3429,46 @@ mod tests {
         );
     }
 
+    /// **Sub-agent and background runs are asked their own models, the owner's questions keep the main one, and a bad name is refused.**
+    #[test]
+    fn routed_models_apply_by_how_the_run_began() {
+        let provider = ModelProviderConfig::new(
+            "http://127.0.0.1:11434/v1",
+            "strong-model",
+            "test-key-not-a-real-credential",
+        )
+        .with_routed_models(Some("cheap-sub".to_owned()), Some("cheap-bg".to_owned()));
+        let executor = Executor::build(jarvis_storage::LIVE_PROVIDER_MODEL_NAME, Some(&provider))
+            .unwrap_or_else(|error| panic!("the routed executor must build: {error}"));
+        let delegated = format!("{}find it", crate::delegate::DELEGATED_NOTICE);
+        let scheduled = format!("{}check it", crate::schedule_service::UNATTENDED_NOTICE);
+        assert_eq!(
+            executor.model_id_for("what is on today").as_str(),
+            "strong-model"
+        );
+        assert_eq!(executor.model_id_for(&delegated).as_str(), "cheap-sub");
+        assert_eq!(executor.model_id_for(&scheduled).as_str(), "cheap-bg");
+
+        let unrouted = ModelProviderConfig::new(
+            "http://127.0.0.1:11434/v1",
+            "strong-model",
+            "test-key-not-a-real-credential",
+        );
+        let plain = Executor::build(jarvis_storage::LIVE_PROVIDER_MODEL_NAME, Some(&unrouted))
+            .unwrap_or_else(|error| panic!("the plain executor must build: {error}"));
+        assert_eq!(plain.model_id_for(&delegated).as_str(), "strong-model");
+        assert_eq!(plain.model_id_for(&scheduled).as_str(), "strong-model");
+
+        let bad = ModelProviderConfig::new("http://127.0.0.1:11434/v1", "m", "k")
+            .with_routed_models(Some(String::new()), None);
+        assert_eq!(
+            Executor::build(jarvis_storage::LIVE_PROVIDER_MODEL_NAME, Some(&bad)).err(),
+            Some(ExecutorBuildError::InvalidProviderField {
+                field: "sub-agent model"
+            })
+        );
+    }
+
     /// **A fallback provider the adapter rejects is refused, naming the field and not echoing the value; a good one builds.**
     #[test]
     fn a_fallback_provider_is_checked_like_the_main_one() {
@@ -3673,6 +3754,33 @@ mod tests {
             Some(&RunEventKind::RunCompleted),
             "the last event must be the terminal one"
         );
+        database.close().await;
+    }
+
+    /// **Every billable call's usage names the model the run asked for, so cost can be told apart by model.**
+    #[tokio::test]
+    async fn the_usage_event_names_the_model_that_was_asked() {
+        let (_profile, database) = database().await;
+        let run = start(&database, "anything").await;
+        execute_run(&database, &model(vec![Turn::answer("ok")]), run.id())
+            .await
+            .unwrap_or_else(|error| panic!("execute: {error}"));
+        let events = jarvis_storage::read_run_events(
+            &database,
+            run.id(),
+            jarvis_core::ReplayRequest::new(jarvis_core::RunEventSequence::first(), 100)
+                .unwrap_or_else(|error| panic!("replay request: {error}")),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("read events: {error}"));
+        let usage = events
+            .iter()
+            .find(|event| event.kind() == RunEventKind::UsageUpdated)
+            .unwrap_or_else(|| panic!("a usage event is recorded"));
+        let payload: serde_json::Value = serde_json::from_str(usage.payload())
+            .unwrap_or_else(|error| panic!("the usage payload is JSON: {error}"));
+        assert_eq!(payload["model"], SCRIPTED_MODEL_ID);
+        assert!(payload["input_tokens"].is_u64() && payload["output_tokens"].is_u64());
         database.close().await;
     }
 

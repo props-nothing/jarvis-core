@@ -80,6 +80,16 @@ fn reply(hours: u32, stored: jarvis_storage::StoredDigest) -> DigestReply {
         waiting: totals.waiting,
         input_tokens: totals.input_tokens,
         output_tokens: totals.output_tokens,
+        models: stored
+            .models
+            .into_iter()
+            .map(|usage| jarvis_protocol::DigestModel {
+                model: usage.model,
+                calls: usage.calls,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+            })
+            .collect(),
         projects: stored
             .projects
             .into_iter()

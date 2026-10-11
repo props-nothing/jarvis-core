@@ -83,6 +83,29 @@ pub(crate) fn render(digest: &DigestReply) -> String {
             tokens(digest.output_tokens)
         );
     }
+    // One line per model once a run was asked for a model by name and there is anything to tell apart: a second model, or calls
+    // recorded before the model was written down (so the lines are never mistaken for the whole total).
+    let named = digest
+        .models
+        .iter()
+        .filter(|usage| !usage.model.is_empty())
+        .count();
+    if named > 1 || (named == 1 && digest.models.len() > 1) {
+        for usage in &digest.models {
+            let model = if usage.model.is_empty() {
+                "(model not recorded)"
+            } else {
+                usage.model.as_str()
+            };
+            let _ = writeln!(
+                text,
+                "    {model}: {} call(s), {} in, {} out",
+                usage.calls,
+                tokens(usage.input_tokens),
+                tokens(usage.output_tokens)
+            );
+        }
+    }
     for project in &digest.projects {
         let _ = writeln!(text, "\n{}  ({} run(s))", project.name, project.runs);
         for note in &project.highlights {
@@ -101,7 +124,7 @@ pub(crate) fn render(digest: &DigestReply) -> String {
 
 #[cfg(test)]
 mod tests {
-    use jarvis_protocol::{DigestHighlight, DigestProblem, DigestProject};
+    use jarvis_protocol::{DigestHighlight, DigestModel, DigestProblem, DigestProject};
 
     use super::*;
 
@@ -115,6 +138,20 @@ mod tests {
             waiting: 1,
             input_tokens: 123_456,
             output_tokens: 2_500_000,
+            models: vec![
+                DigestModel {
+                    model: "glm-5.3-flash".to_owned(),
+                    calls: 9,
+                    input_tokens: 100_000,
+                    output_tokens: 2_000_000,
+                },
+                DigestModel {
+                    model: "gpt-oss:20b".to_owned(),
+                    calls: 3,
+                    input_tokens: 23_456,
+                    output_tokens: 500_000,
+                },
+            ],
             projects: vec![DigestProject {
                 name: "Prospecting".to_owned(),
                 runs: 4,
@@ -140,6 +177,44 @@ mod tests {
             text.contains("Prospecting  (4 run(s))") && text.contains("[decision] Dentists first")
         );
         assert!(text.contains("[scheduled] check mail  (interrupted_by_restart)"));
+    }
+
+    #[test]
+    fn tokens_are_split_by_model_only_when_more_than_one_was_asked() {
+        let text = render(&digest());
+        assert!(text.contains("    glm-5.3-flash: 9 call(s), 100.0k in, 2.0M out"));
+        assert!(text.contains("    gpt-oss:20b: 3 call(s), 23.4k in, 500.0k out"));
+        let single = DigestReply {
+            models: vec![DigestModel {
+                model: "glm-5.3-flash".to_owned(),
+                calls: 12,
+                input_tokens: 1,
+                output_tokens: 1,
+            }],
+            ..digest()
+        };
+        assert!(!render(&single).contains("call(s), "));
+        let with_old = DigestReply {
+            models: vec![
+                DigestModel {
+                    model: "glm-5.3-flash".to_owned(),
+                    calls: 3,
+                    input_tokens: 10,
+                    output_tokens: 1,
+                },
+                DigestModel {
+                    model: String::new(),
+                    calls: 40,
+                    input_tokens: 7_000_000,
+                    output_tokens: 1,
+                },
+            ],
+            ..digest()
+        };
+        assert!(
+            render(&with_old).contains("(model not recorded): 40 call(s), 7.0M in"),
+            "older calls are shown as their own line so the lines add up to the total"
+        );
     }
 
     #[test]

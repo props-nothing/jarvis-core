@@ -250,7 +250,7 @@ impl GatewayState {
         request: &StartRunRequest,
     ) -> Result<jarvis_protocol::RunReply, crate::run_service::RunServiceError> {
         let reply = self.runs.start(request).await?;
-        self.drive(&reply.run_id);
+        self.drive(&reply.run_id, &reply.objective);
         Ok(reply)
     }
 
@@ -258,13 +258,15 @@ impl GatewayState {
     ///
     /// The task is deliberately not awaited and its failure is logged rather than returned: the run is already
     /// durably recorded, so a task that fails leaves a run that is visibly unfinished rather than a response that
-    /// claims a start it did not make. With no executor composed there is nothing to drive.
-    pub(crate) fn drive(&self, run_id: &str) {
+    /// claims a start it did not make. With no executor composed there is nothing to drive. The objective only
+    /// chooses the model (`ADR-0196`).
+    pub(crate) fn drive(&self, run_id: &str, objective: &str) {
         let Some(executor) = &self.executor else {
             return;
         };
         let database = Arc::clone(&self.database);
         let executor = Arc::clone(executor);
+        let model_id = executor.model_id_for(objective).clone();
         // The composed tool pipeline, when one exists, so the run is an agent loop rather than a single model
         // call. `None` for a profile with no tool surface, in which case the run answers without tools.
         let tools = self.tools.clone();
@@ -273,7 +275,7 @@ impl GatewayState {
             if let Err(error) = crate::executor::execute_run_with_limits(
                 &database,
                 executor.model(),
-                executor.model_id(),
+                &model_id,
                 tools.as_ref(),
                 executor.workspace_daily_token_limit(),
                 &run_id,
@@ -874,12 +876,13 @@ async fn continue_parked_run(state: &GatewayState, run_id: &str, call_id: &str) 
     // spawn, which keeps "resume always answers" from turning into "resume re-drives a run it should
     // not" — the domain would refuse the second drive, but reaching for it at all is the mistake.
     let parked = match state.runs.read(run_id).await {
-        Ok(reply) => reply.state == jarvis_core::RunState::AwaitingApproval,
-        Err(_) => false,
+        Ok(reply) => (reply.state == jarvis_core::RunState::AwaitingApproval)
+            .then(|| executor.model_id_for(&reply.objective).clone()),
+        Err(_) => None,
     };
-    if !parked {
+    let Some(model_id) = parked else {
         return;
-    }
+    };
 
     let database = Arc::clone(&state.database);
     let executor = Arc::clone(executor);
@@ -890,7 +893,7 @@ async fn continue_parked_run(state: &GatewayState, run_id: &str, call_id: &str) 
         if let Err(error) = crate::executor::resume_run_with_limits(
             &database,
             executor.model(),
-            executor.model_id(),
+            &model_id,
             tools.as_ref(),
             executor.workspace_daily_token_limit(),
             &run_id,
@@ -1035,12 +1038,13 @@ async fn continue_declined_run(state: &GatewayState, run_id: &str, approval_id: 
         return;
     };
     let parked = match state.runs.read(run_id).await {
-        Ok(reply) => reply.state == jarvis_core::RunState::AwaitingApproval,
-        Err(_) => false,
+        Ok(reply) => (reply.state == jarvis_core::RunState::AwaitingApproval)
+            .then(|| executor.model_id_for(&reply.objective).clone()),
+        Err(_) => None,
     };
-    if !parked {
+    let Some(model_id) = parked else {
         return;
-    }
+    };
     // The held call's identifier is the approval's own correlation identity — the pipeline names a call by it.
     let Ok(approval) = jarvis_storage::find_approval(state.database(), approval_id).await else {
         return;
@@ -1055,7 +1059,7 @@ async fn continue_declined_run(state: &GatewayState, run_id: &str, approval_id: 
         if let Err(error) = crate::executor::resume_run_declined_with_limits(
             &database,
             executor.model(),
-            executor.model_id(),
+            &model_id,
             tools.as_ref(),
             executor.workspace_daily_token_limit(),
             &run_id,

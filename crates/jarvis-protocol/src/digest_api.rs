@@ -33,6 +33,19 @@ pub struct DigestProblem {
     pub error_code: String,
 }
 
+/// What one model was asked in the window.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DigestModel {
+    /// The model identifier; empty for calls recorded before the model was written down.
+    pub model: String,
+    /// How many model calls.
+    pub calls: u64,
+    /// Prompt tokens sent.
+    pub input_tokens: u64,
+    /// Tokens written.
+    pub output_tokens: u64,
+}
+
 /// What happened in the last `hours` hours.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DigestReply {
@@ -52,6 +65,9 @@ pub struct DigestReply {
     pub input_tokens: u64,
     /// Tokens the model wrote.
     pub output_tokens: u64,
+    /// Calls and tokens per model, the most tokens first.
+    #[serde(default)]
+    pub models: Vec<DigestModel>,
     /// Projects that had runs, busiest first.
     pub projects: Vec<DigestProject>,
     /// The newest failed runs.
