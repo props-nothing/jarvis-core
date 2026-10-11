@@ -163,8 +163,10 @@
       localStorage.setItem(CURRENT_KEY, currentChat.id);
     } catch (ignored) { /* storage full or blocked: the conversation still works, it is just not kept */ }
   }
-  function remember(role, text) {
-    transcript.push({ role: role, text: text });
+  function remember(role, text, pictures) {
+    var entry = { role: role, text: text };
+    if (pictures && pictures.length) entry.pictures = pictures;
+    transcript.push(entry);
     transcript = transcript.slice(-60);
     currentChat.transcript = transcript;
     if (role === "user" && !currentChat.title) currentChat.title = clip(text, 56);
@@ -210,9 +212,29 @@
     scroll();
     return { node: node, body: body, chips: chips };
   }
-  function show(role, text) {
+  // A picture a tool made (a screenshot). It is fetched with the credential and shown from a blob, because an <img> cannot send a header.
+  // One the daemon has since cleared away simply does not appear.
+  function addPicture(view, id) {
+    var frame = el("div", "apics", "");
+    var image = document.createElement("img");
+    image.alt = "a picture from a tool";
+    image.loading = "lazy";
+    frame.appendChild(image);
+    view.node.insertBefore(frame, view.chips);
+    fetch("/api/v1/images/" + encodeURIComponent(id), { headers: { Authorization: "Bearer " + token }, cache: "force-cache" })
+      .then(function (response) { if (!response.ok) throw new Error(String(response.status)); return response.blob(); })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        image.src = url;
+        image.addEventListener("click", function () { window.open(url, "_blank", "noopener"); });
+        image.addEventListener("load", scroll);
+      })
+      .catch(function () { frame.remove(); });
+  }
+  function show(role, text, pictures) {
     var view = bubble(role, role === "user" ? "you" : role === "jarvis" ? "jarvis" : "");
     view.body.appendChild(role === "jarvis" ? markdown(text) : document.createTextNode(text));
+    (pictures || []).forEach(function (id) { addPicture(view, id); });
     return view;
   }
   function renderEmpty() {
@@ -234,7 +256,7 @@
   function renderChat() {
     chat.replaceChildren();
     if (transcript.length === 0) renderEmpty();
-    else transcript.forEach(function (entry) { show(entry.role, entry.text); });
+    else transcript.forEach(function (entry) { show(entry.role, entry.text, entry.pictures); });
     scroll();
   }
   renderChat();
@@ -331,6 +353,7 @@
     status.hidden = true;
     view.node.insertBefore(status, view.chips);
     var began = Date.now(), steps = 0, doing = "thinking";
+    var shownPictures = {};
     // A long quiet stretch is spoken about (when the voice is on), so you are not left listening to nothing: at most once a minute.
     var lastSignal = began, lastSpoken = 0, quietHook = null;
     function tick() {
@@ -378,6 +401,14 @@
           more.textContent = "+" + hidden + " earlier";
         }
       },
+      // Pictures a tool made (a screenshot): fetched with the credential, so shown from a blob rather than a bare address.
+      pictures: function (ids) {
+        ids.forEach(function (id) {
+          if (shownPictures[id]) return;
+          shownPictures[id] = true;
+          addPicture(view, id);
+        });
+      },
       sources: function (links) {
         if (!links.length) return;
         var strip = el("div", "asources");
@@ -398,7 +429,7 @@
         if (typeof final === "string" && final.length) text = final;
         view.body.classList.remove("cursor");
         view.body.replaceChildren(markdown(text || "(no answer)"));
-        remember("jarvis", text || "(no answer)");
+        remember("jarvis", text || "(no answer)", Object.keys(shownPictures));
         scroll();
         return text;
       },
@@ -470,6 +501,7 @@
             }
             else if (frame.event === "activity_updated" && payload.phase) {
               // The model is working but has said nothing yet (reasoning, or writing a large tool call): show that it is alive.
+              if (payload.phase === "tool_result") { if (payload.images && payload.images.length) view.pictures(payload.images); continue; }
               if (payload.phase === "reasoning_limit") { view.activity("it was thinking too long, so I asked it to act", false); continue; }
               var size = Math.round((payload.chars || 0) / 4);
               var amount = size >= 1000 ? (size / 1000).toFixed(1) + "k" : String(size);

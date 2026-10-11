@@ -134,3 +134,41 @@ fn an_ordinary_tool_result_is_ok_without_links() {
     assert_eq!(payload["ok"], true);
     assert!(payload.get("links").is_none() && payload.get("detail").is_none());
 }
+
+#[test]
+fn a_shown_picture_is_named_by_its_identifier_and_nothing_else_is() {
+    let id = "0123456789abcdef0123456789abcdef";
+    let text =
+        format!("[picture {id}: shown to the user in the console; you cannot see it]\nPage loaded");
+    let payload: Value = serde_json::from_str(&result_payload(
+        "mcp.browser.browser_take_screenshot",
+        &text,
+    ))
+    .unwrap_or_default();
+    assert_eq!(payload["images"], json!([id]));
+
+    // A server cannot make the console ask for a path, a short id, or a picture it never showed.
+    for hostile in [
+        "[picture ../../secret: shown to the user",
+        "[picture 0123456789ABCDEF0123456789ABCDEF: shown to the user",
+        "[picture 0123456789abcdef0123456789abcdef: but not really",
+        "[picture 0123456789abcdef: shown to the user",
+    ] {
+        let payload: Value =
+            serde_json::from_str(&result_payload("x", hostile)).unwrap_or_default();
+        assert!(payload.get("images").is_none(), "{hostile}");
+    }
+}
+
+#[test]
+fn no_more_than_four_pictures_are_named_and_a_failure_names_none() {
+    let mut many = String::new();
+    for index in 0..9 {
+        let _ = writeln!(many, "[picture {index:032x}: shown to the user]");
+    }
+    let payload: Value = serde_json::from_str(&result_payload("x", &many)).unwrap_or_default();
+    assert_eq!(payload["images"].as_array().map(Vec::len), Some(4));
+    let failed = format!("error: {many}");
+    let payload: Value = serde_json::from_str(&result_payload("x", &failed)).unwrap_or_default();
+    assert!(payload.get("images").is_none());
+}

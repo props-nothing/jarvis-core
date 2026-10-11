@@ -283,6 +283,8 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); padding: 0 5px; col
 .mshead b { color: var(--dim); font-weight: 500; }
 #mchips { display: flex; flex-direction: column; gap: 4px; }
 .mchip.big { width: 100%; }
+.apics { margin: 8px 0 4px; }
+.apics img { display: block; max-width: min(100%, 520px); max-height: 340px; border: 1px solid var(--line, rgba(120, 200, 255, .25)); border-radius: 6px; cursor: zoom-in; background: rgba(0, 0, 0, .3); }
 .asources { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; align-items: center; }
 .alink { color: var(--cyan); text-decoration: underline; text-decoration-color: rgba(94, 227, 255, 0.4); text-underline-offset: 2px; overflow-wrap: anywhere; }
 .alink:hover { color: #fff; }

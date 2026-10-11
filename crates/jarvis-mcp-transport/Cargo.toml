@@ -36,6 +36,8 @@ async-trait.workspace = true
 futures-util.workspace = true
 jarvis-core.workspace = true
 jarvis-mcp.workspace = true
+# A tool's pictures arrive base64-encoded in the result (`P11-011`).
+base64.workspace = true
 # Declared directly rather than reached through `rmcp`, because this crate **builds the HTTP client**
 # for a remote MCP connection instead of accepting the SDK's convenience constructor. The SDK's own
 # `default_http_client` disables redirects but does not call `no_proxy`, so proxy behaviour there is a

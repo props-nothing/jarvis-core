@@ -57,7 +57,7 @@ pub const STYLE_PATH: &str = "/hud.css";
 
 /// The policy sent with every response of this module.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
-connect-src 'self'; media-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+connect-src 'self'; media-src blob:; img-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// The browser features the page may use: the microphone (voice input) and nothing else.
 const PERMISSIONS_POLICY: &str = "microphone=(self), camera=(), geolocation=(), payment=(), usb=()";
@@ -275,6 +275,8 @@ mod tests {
         }
         assert!(CONTENT_SECURITY_POLICY.contains("default-src 'none'"));
         assert!(CONTENT_SECURITY_POLICY.contains("connect-src 'self'"));
+        // Pictures from tools are shown from blobs the page fetched itself; no remote or data: image may load.
+        assert!(CONTENT_SECURITY_POLICY.contains("img-src blob:"));
     }
 
     #[test]

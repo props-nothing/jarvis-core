@@ -75,6 +75,7 @@ mod enforcement;
 mod error;
 mod host;
 mod host_config;
+mod images;
 mod revision;
 mod serve;
 mod serving;
@@ -94,8 +95,9 @@ pub use binding::{
     ServedEndpoint,
 };
 pub use client::{
-    McpCallResult, McpConnection, McpEra, OwnedListing, ServerCapabilities, StdioCommand,
-    ToolBuffer, connect_http, connect_over, connect_stdio, server_environment,
+    MAX_IMAGE_BYTES, MAX_RESULT_IMAGES, McpCallResult, McpConnection, McpEra, McpImage,
+    OwnedListing, ServerCapabilities, StdioCommand, ToolBuffer, connect_http, connect_over,
+    connect_stdio, server_environment,
 };
 pub use endpoint::{EndpointError, MAX_ENDPOINT_BYTES, McpHttpEndpoint};
 pub use enforcement::{RequestAdmission, RequestGate, RequestRefusal};
@@ -104,6 +106,7 @@ pub use host::{HostBuild, HostedServer, UnreadableServer, build_catalog};
 pub use host_config::{
     HostConfigError, HostError, MAX_HOST_CONFIG_BYTES, McpHost, McpHostConfig, ServerTransport,
 };
+pub use images::{ImageSink, install_image_sink};
 pub use serve::{
     JarvisMcpServer, SERVER_NAME, SERVER_VERSION, ServedToolRunner, served_protocol_version,
 };

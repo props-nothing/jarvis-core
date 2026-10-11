@@ -204,3 +204,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0185](0185-jarvis-writes-spreadsheets-csv-and-word-documents.md) | JARVIS writes spreadsheets, CSV and Word documents | Accepted |
 | [0186](0186-telegram-answers-are-formatted-not-raw-markdown.md) | Telegram answers are formatted, not raw Markdown | Accepted |
 | [0187](0187-fixes-from-the-owners-capability-audit.md) | Fixes from the owner's capability audit | Accepted |
+| [0188](0188-pictures-a-tool-returns-are-shown-in-the-console.md) | Pictures a tool returns are shown in the console, not given to the model | Accepted |

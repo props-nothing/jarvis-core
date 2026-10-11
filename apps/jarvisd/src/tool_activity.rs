@@ -83,6 +83,34 @@ pub(crate) fn target_for(tool: &str, arguments: &Value) -> Option<String> {
     }
 }
 
+/// The pictures a tool result says it showed: the identifiers inside `[picture <id>: shown to the user`, which the MCP adapter writes
+/// (`P11-011`). Only a well-formed identifier counts, and at most [`MAX_PICTURES`], so text a server returns cannot make the console
+/// ask for a path.
+fn pictures_in(result_text: &str) -> Vec<String> {
+    const MARKER: &str = "[picture ";
+    let mut found: Vec<String> = Vec::new();
+    let mut rest = result_text;
+    while let Some(at) = rest.find(MARKER) {
+        rest = &rest[at + MARKER.len()..];
+        let candidate: String = rest.chars().take(32).collect();
+        let well_formed = candidate.len() == 32
+            && candidate
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && rest[32..].starts_with(": shown to the user");
+        if well_formed && !found.contains(&candidate) {
+            found.push(candidate);
+            if found.len() >= MAX_PICTURES {
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// Pictures named in one tool result.
+const MAX_PICTURES: usize = 4;
+
 /// An outcome a tool reports when it did not do what was asked.
 fn outcome_is_bad(outcome: &str) -> bool {
     matches!(
@@ -141,6 +169,14 @@ pub(crate) fn result_payload(tool: &str, result_text: &str) -> String {
     }
 
     let mut payload = json!({ "phase": "tool_result", "tool": tool, "ok": ok });
+    let pictures = if ok {
+        pictures_in(result_text)
+    } else {
+        Vec::new()
+    };
+    if !pictures.is_empty() {
+        payload["images"] = json!(pictures);
+    }
     if let Some(count) = count {
         payload["count"] = json!(count);
     }

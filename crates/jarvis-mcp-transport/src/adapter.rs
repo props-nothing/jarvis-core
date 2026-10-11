@@ -174,7 +174,10 @@ impl McpToolAdapter {
             })?;
 
         match self.connection.call_tool(remote, object).await {
-            Ok(result) => Ok(Self::convert(&result, remote, evidence)),
+            Ok(result) => {
+                let pictures = crate::images::keep_images(&result);
+                Ok(Self::convert(&result, remote, evidence, &pictures))
+            }
             Err(error) => Err(Self::classify(error, remote)),
         }
     }
@@ -184,7 +187,12 @@ impl McpToolAdapter {
     /// The two branches are the protocol's own two kinds of bad news, and they map to different
     /// outcomes for the reason the module doc gives: a tool that ran and refused produced evidence that
     /// nothing happened, while a request that was refused never ran anything.
-    fn convert(result: &McpCallResult, remote: &str, evidence: ProviderEvidence) -> ToolCallResult {
+    fn convert(
+        result: &McpCallResult,
+        remote: &str,
+        evidence: ProviderEvidence,
+        pictures: &[String],
+    ) -> ToolCallResult {
         let reported_at = UtcTimestamp::now(&SystemClock);
         if result.is_error {
             // The tool ran. It said it could not do the thing, which is `Failed` with a reason. The
@@ -202,7 +210,7 @@ impl McpToolAdapter {
         // text". A server that returned no text and no structured content still gets `Confirmed`,
         // because the *call* is the evidence — an empty result from a tool that ran is a successful
         // call, not a missing one.
-        let output = output_for(result);
+        let output = output_for(result, pictures);
         let Ok(record) = ToolOutcomeRecord::confirmed(evidence.as_str()) else {
             return undescribable(reported_at);
         };
@@ -368,19 +376,37 @@ fn undescribable(reported_at: UtcTimestamp) -> ToolCallResult {
 /// result from a third-party process is exactly where a prompt injection arrives (a page a browser
 /// server read, a file a search server found, a ticket text), and `jarvis.web.fetch` already fences
 /// its content (`ADR-0049`); this did not, found 2026-10-10 while connecting the first real server.
-fn output_for(result: &McpCallResult) -> Option<BoundedOutput> {
+fn output_for(result: &McpCallResult, pictures: &[String]) -> Option<BoundedOutput> {
     let text = if let Some(structured) = &result.structured {
         serde_json::to_string(structured).unwrap_or_else(|_| "null".to_owned())
     } else {
         result.text.clone()
     };
-    if text.trim().is_empty() {
+    let shown = picture_notes(pictures);
+    if text.trim().is_empty() && shown.is_empty() {
         // Nothing at all came back. `None` rather than an empty output: an empty string is a *value* the
         // tool might have returned, and recording it would make "the tool returned nothing"
         // indistinguishable from "the tool returned an empty string".
         return None;
     }
-    Some(BoundedOutput::truncating(fence_untrusted(&text)))
+    // Outside the fence, first so a long result cannot cut it off, and written by this adapter: the model is told a
+    // picture was shown, never given the bytes.
+    let mut rendered = shown.join("\n");
+    if !text.trim().is_empty() {
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        rendered.push_str(&fence_untrusted(&text));
+    }
+    Some(BoundedOutput::truncating(rendered))
+}
+
+/// The sentence that tells the model (and, by its shape, the console) that a picture reached the person.
+fn picture_notes(pictures: &[String]) -> Vec<String> {
+    pictures
+        .iter()
+        .map(|id| format!("[picture {id}: shown to the user in the console; you cannot see it]"))
+        .collect()
 }
 
 /// What a model is told before the fenced pieces of a server's result.
@@ -421,6 +447,36 @@ fn fence_untrusted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plain_result(text: &str) -> McpCallResult {
+        McpCallResult {
+            is_error: false,
+            images: Vec::new(),
+            text: text.to_owned(),
+            structured: None,
+        }
+    }
+
+    #[test]
+    fn a_picture_is_announced_to_the_model_outside_the_fence_and_never_inlined() {
+        let id = "ab".repeat(16);
+        let output = output_for(&plain_result("a page"), std::slice::from_ref(&id))
+            .unwrap_or_else(|| panic!("an output"))
+            .content()
+            .to_owned();
+        assert!(
+            output.starts_with(&format!("[picture {id}: shown to the user")),
+            "{output}"
+        );
+        assert!(output.contains("a page"));
+    }
+
+    #[test]
+    fn a_result_of_only_a_picture_still_has_an_output() {
+        let output = output_for(&plain_result(""), &["cd".repeat(16)]);
+        assert!(output.is_some());
+        assert!(output_for(&plain_result(""), &[]).is_none());
+    }
 
     #[test]
     fn a_reason_is_bounded_and_prefixed() {

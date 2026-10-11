@@ -21,6 +21,10 @@ struct Fake {
     reject_token: Mutex<bool>,
     /// Answer a message that asks for HTML the way Telegram answers markup it cannot parse.
     reject_html: Mutex<bool>,
+    /// Refuse a photo the way Telegram refuses one with odd proportions.
+    reject_photo: Mutex<bool>,
+    /// Every file upload: the method, the content type, and the bytes of the body.
+    uploads: Mutex<Vec<(String, String, Vec<u8>)>>,
 }
 
 impl Fake {
@@ -56,6 +60,39 @@ impl Fake {
             .iter()
             .any(|(bot, _, _)| bot == &format!("bot{TOKEN}"))
     }
+}
+
+fn record_upload(
+    axum::extract::State(fake): axum::extract::State<Arc<Fake>>,
+    UrlPath(bot): UrlPath<String>,
+    method: &'static str,
+    headers: &axum::http::HeaderMap,
+    body: &axum::body::Bytes,
+) -> Json<Value> {
+    fake.calls
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((bot, method.to_owned(), json!({})));
+    let content_type = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    fake.uploads
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((method.to_owned(), content_type, body.to_vec()));
+    if method == "sendPhoto"
+        && *fake
+            .reject_photo
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    {
+        return Json(
+            json!({ "ok": false, "error_code": 400, "description": "Bad Request: PHOTO_INVALID_DIMENSIONS" }),
+        );
+    }
+    Json(json!({ "ok": true, "result": { "message_id": 1 } }))
 }
 
 async fn serve(fake: Arc<Fake>) -> String {
@@ -117,6 +154,18 @@ async fn serve(fake: Arc<Fake>) -> String {
         }
     }
     let app = Router::new()
+        .route(
+            "/{bot}/sendPhoto",
+            post(|state, path, headers, body| async move {
+                record_upload(state, path, "sendPhoto", &headers, &body)
+            }),
+        )
+        .route(
+            "/{bot}/sendDocument",
+            post(|state, path, headers, body| async move {
+                record_upload(state, path, "sendDocument", &headers, &body)
+            }),
+        )
         .route("/{bot}/{method}", post(handle))
         .with_state(fake);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -606,4 +655,88 @@ fn an_approval_card_says_what_it_will_do_and_clips_long_arguments() {
         ..approval
     };
     assert!(approval_card(&hidden).contains("(arguments not shown)"));
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+/// **A picture reaches the chat as a photo upload, with the token only in the path.**
+#[tokio::test]
+async fn a_picture_is_sent_as_a_photo_upload() {
+    let rig = rig().await;
+    let api = BotApi::new(&rig.base, TOKEN.to_owned()).unwrap_or_else(|| panic!("api"));
+    let bytes = [0x89, b'P', b'N', b'G', 1, 2, 3, 4, 5];
+    api.send_picture(111, "image/png", &bytes)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let uploads = rig
+        .fake
+        .uploads
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(uploads.len(), 1);
+    let (method, content_type, body) = &uploads[0];
+    assert_eq!(method, "sendPhoto");
+    assert!(
+        content_type.starts_with("multipart/form-data"),
+        "{content_type}"
+    );
+    assert!(
+        contains(body, &bytes),
+        "the picture's bytes are in the body"
+    );
+    assert!(contains(body, b"name=\"chat_id\""));
+    assert!(contains(body, b"name=\"photo\""));
+    assert!(
+        !contains(body, TOKEN.as_bytes()),
+        "the token is never in the body"
+    );
+}
+
+/// **A photo Telegram refuses is sent again as a file, so the picture still arrives.**
+#[tokio::test]
+async fn a_photo_telegram_refuses_is_sent_as_a_document() {
+    let rig = rig().await;
+    *rig.fake
+        .reject_photo
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = true;
+    let api = BotApi::new(&rig.base, TOKEN.to_owned()).unwrap_or_else(|| panic!("api"));
+    api.send_picture(111, "image/jpeg", &[0xFF, 0xD8, 0xFF, 9])
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let uploads = rig
+        .fake
+        .uploads
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let methods: Vec<&str> = uploads
+        .iter()
+        .map(|(method, _, _)| method.as_str())
+        .collect();
+    assert_eq!(methods, ["sendPhoto", "sendDocument"]);
+    assert!(contains(&uploads[1].2, b"name=\"document\""));
+}
+
+#[test]
+fn only_a_tool_result_event_names_pictures() {
+    let id = "0123456789abcdef0123456789abcdef";
+    assert_eq!(
+        picture_ids_in(&json!({ "phase": "tool_result", "ok": true, "images": [id] }).to_string()),
+        vec![id.to_owned()]
+    );
+    // Another kind of activity, malformed text, and a non-string entry name nothing.
+    assert!(
+        picture_ids_in(&json!({ "phase": "reasoning", "images": [id] }).to_string()).is_empty()
+    );
+    assert!(picture_ids_in("not json").is_empty());
+    assert!(
+        picture_ids_in(&json!({ "phase": "tool_result", "images": [7, null] }).to_string())
+            .is_empty()
+    );
 }

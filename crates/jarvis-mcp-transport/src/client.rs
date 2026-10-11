@@ -456,6 +456,8 @@ impl McpConnection {
 pub struct McpCallResult {
     /// The tool reported a failure. The call completed; the work did not.
     pub is_error: bool,
+    /// The pictures the tool returned, decoded and bounded (`P11-011`): at most [`MAX_RESULT_IMAGES`], each at most [`MAX_IMAGE_BYTES`].
+    pub images: Vec<McpImage>,
     /// The concatenated text blocks, which is what a model-facing tool result usually is.
     pub text: String,
     /// The structured object, when the server supplied one.
@@ -486,13 +488,50 @@ impl McpCallResult {
             .map(|text| text.text.clone())
             .collect::<Vec<_>>()
             .join("\n");
+        let images = result
+            .content
+            .iter()
+            .filter_map(|block| block.as_image())
+            .filter_map(|image| {
+                // Encoded length first: a result that claims a huge picture is not decoded at all.
+                if image.data.len() > MAX_IMAGE_BYTES * 4 / 3 + 8 {
+                    return None;
+                }
+                let bytes = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    image.data.trim(),
+                )
+                .ok()?;
+                (bytes.len() <= MAX_IMAGE_BYTES).then(|| McpImage {
+                    mime_type: image.mime_type.clone(),
+                    bytes,
+                })
+            })
+            .take(MAX_RESULT_IMAGES)
+            .collect();
         Self {
             is_error: result.is_error.unwrap_or(false),
+            images,
             text,
             structured: result.structured_content.clone(),
         }
     }
 }
+
+/// One picture a tool returned: what the server said it was, and its bytes. Nothing has checked the bytes yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct McpImage {
+    /// The media type the server declared. Untrusted: the store decides from the bytes.
+    pub mime_type: String,
+    /// The decoded bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// The most pictures kept from one result.
+pub const MAX_RESULT_IMAGES: usize = 4;
+
+/// The largest picture kept, in bytes once decoded. A full-page screenshot is a few hundred kilobytes.
+pub const MAX_IMAGE_BYTES: usize = 6 * 1024 * 1024;
 
 /// Owns the wire form of a server's tool list so [`McpToolListing`] can borrow from it.
 ///
@@ -872,6 +911,42 @@ mod tests {
 
     fn server(name: &str) -> ServerName {
         ServerName::new(name).unwrap_or_else(|error| panic!("fixture server {name}: {error}"))
+    }
+
+    fn sdk_result(blocks: &[serde_json::Value]) -> rmcp::model::CallToolResult {
+        serde_json::from_value(json!({ "content": blocks }))
+            .unwrap_or_else(|error| panic!("fixture result: {error}"))
+    }
+
+    fn image_block(bytes: &[u8]) -> serde_json::Value {
+        json!({
+            "type": "image",
+            "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
+            "mimeType": "image/png",
+        })
+    }
+
+    /// A picture comes out decoded; text and picture arrive together; broken or oversized ones are dropped
+    /// and the rest of the result is untouched (`P11-011`).
+    #[test]
+    fn a_result_keeps_its_pictures_decoded_and_bounded() {
+        let result = McpCallResult::from_sdk(&sdk_result(&[
+            json!({ "type": "text", "text": "Took a screenshot" }),
+            image_block(&[1, 2, 3]),
+            json!({ "type": "image", "data": "!!not base64!!", "mimeType": "image/png" }),
+            image_block(&vec![0; MAX_IMAGE_BYTES + 1]),
+        ]));
+        assert_eq!(result.text, "Took a screenshot");
+        assert_eq!(result.images.len(), 1);
+        assert_eq!(result.images[0].bytes, vec![1, 2, 3]);
+
+        let many: Vec<_> = (0..MAX_RESULT_IMAGES + 3)
+            .map(|_| image_block(&[9]))
+            .collect();
+        assert_eq!(
+            McpCallResult::from_sdk(&sdk_result(&many)).images.len(),
+            MAX_RESULT_IMAGES
+        );
     }
 
     /// **A credential in the daemon's environment never reaches a server.** The allowlist keeps what a

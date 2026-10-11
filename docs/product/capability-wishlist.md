@@ -20,8 +20,8 @@ Status words: **done** (built and run), **partly** (a first form exists), **plan
 | --- | --- | --- | --- |
 | 6 | **Writing** PDF, Word, Excel, PowerPoint | **partly**: Excel, CSV and Word built and opened in the real Office (`ADR-0185`); PDF and PowerPoint open | `P11-010` |
 | 7 | Offline OCR for scans and photos | **done** (needs `tesseract` installed; one live run still open) | `P9-082` |
-| 8 | Image generation, inline images in chat | new | `P11-011` |
-| 9 | Screenshots shown inline | new | `P11-011` |
+| 8 | Image generation, inline images in chat | inline display built (`ADR-0188`); generation open | `P11-011` |
+| 9 | Screenshots shown inline | built in the console and Telegram (`ADR-0188`) | `P11-011` |
 | 10 | Charts and graphs | new | `P11-010` |
 
 ## Runtime and code

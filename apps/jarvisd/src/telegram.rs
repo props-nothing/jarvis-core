@@ -113,6 +113,11 @@ impl BotApi {
             .send()
             .await
             .map_err(|error| ApiError::Network(error.without_url().to_string()))?;
+        Self::reply(response).await
+    }
+
+    /// Reads a Bot API answer: the result, or why it was refused.
+    async fn reply(response: reqwest::Response) -> Result<Value, ApiError> {
         let status = response.status();
         let parsed: Value = response
             .json()
@@ -137,6 +142,53 @@ impl BotApi {
                 .pointer("/parameters/retry_after")
                 .and_then(Value::as_u64),
         })
+    }
+
+    /// Sends a picture the way Telegram shows it, or as a file when Telegram will not take it as a photo (too large, odd proportions).
+    async fn send_picture(
+        &self,
+        chat_id: i64,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<(), ApiError> {
+        match self
+            .upload("sendPhoto", "photo", chat_id, media_type, bytes)
+            .await
+        {
+            Err(ApiError::Refused { code: 400, .. }) => self
+                .upload("sendDocument", "document", chat_id, media_type, bytes)
+                .await
+                .map(|_| ()),
+            other => other.map(|_| ()),
+        }
+    }
+
+    async fn upload(
+        &self,
+        method: &str,
+        field: &'static str,
+        chat_id: i64,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<Value, ApiError> {
+        let extension = media_type.rsplit('/').next().unwrap_or("png");
+        let part = reqwest::multipart::Part::bytes(bytes.to_vec())
+            .file_name(format!("picture.{extension}"))
+            .mime_str(media_type)
+            .map_err(|error| ApiError::Network(error.to_string()))?;
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part(field, part);
+        let url = format!("{}/bot{}/{method}", self.base, self.token);
+        let response = self
+            .client
+            .post(url)
+            .timeout(Duration::from_secs(60))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|error| ApiError::Network(error.without_url().to_string()))?;
+        Self::reply(response).await
     }
 
     async fn quick(&self, method: &str, body: &Value) -> Result<Value, ApiError> {
@@ -207,6 +259,55 @@ impl BotApi {
             }
         }
     }
+}
+/// Most pictures sent for one answer.
+const MAX_PICTURES_SENT: usize = 4;
+
+/// The picture identifiers named in one `tool_result` event payload.
+fn picture_ids_in(payload: &str) -> Vec<String> {
+    serde_json::from_str::<Value>(payload)
+        .ok()
+        .filter(|value| value["phase"] == "tool_result")
+        .and_then(|value| value["images"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The pictures a whole run showed, oldest first, at most [`MAX_PICTURES_SENT`], read through the stream a page at a time.
+async fn picture_ids_of_run(state: &GatewayState, run_id: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut from = Some(jarvis_core::RunEventSequence::first());
+    while let Some(start) = from.take() {
+        let Ok(request) = jarvis_core::ReplayRequest::new(start, jarvis_core::MAX_REPLAY_EVENTS)
+        else {
+            break;
+        };
+        let Ok(events) = jarvis_storage::read_run_events(state.database(), run_id, request).await
+        else {
+            break;
+        };
+        for event in &events {
+            if event.kind() == jarvis_core::RunEventKind::ActivityUpdated {
+                for id in picture_ids_in(event.payload()) {
+                    if !found.contains(&id) && found.len() < MAX_PICTURES_SENT {
+                        found.push(id);
+                    }
+                }
+            }
+        }
+        // A full page means there may be more.
+        if events.len() >= jarvis_core::MAX_REPLAY_EVENTS as usize {
+            from = events
+                .last()
+                .map(jarvis_storage::StoredRunEvent::sequence)
+                .and_then(|last| {
+                    jarvis_core::RunEventSequence::new(last.get().saturating_add(1)).ok()
+                });
+        }
+    }
+    found
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Paired {
@@ -762,6 +863,9 @@ impl TelegramBridge {
                         inner.active_run = None;
                     }
                 }
+                if answer.is_some() {
+                    self.send_run_pictures(state, api, chat_id, run_id).await;
+                }
                 api.send_long(
                     chat_id,
                     &answer.unwrap_or_else(|| "I could not finish that.".to_owned()),
@@ -776,6 +880,30 @@ impl TelegramBridge {
                         &json!({ "chat_id": chat_id, "action": "typing" }),
                     )
                     .await;
+            }
+        }
+    }
+
+    /// Sends the pictures a run's tools showed (a screenshot), before the answer that speaks of them.
+    async fn send_run_pictures(
+        &self,
+        state: &GatewayState,
+        api: &BotApi,
+        chat_id: i64,
+        run_id: &str,
+    ) {
+        let Some(store) = state.images() else {
+            return;
+        };
+        for id in picture_ids_of_run(state, run_id).await {
+            let Some(image) = store.read(&id) else {
+                continue;
+            };
+            if let Err(error) = api
+                .send_picture(chat_id, image.media_type, &image.bytes)
+                .await
+            {
+                tracing::warn!(%error, "a picture could not be sent to Telegram");
             }
         }
     }

@@ -23,6 +23,7 @@ mod google_service;
 mod google_tools;
 mod health;
 mod hud;
+mod image_store;
 mod inbound_approvals;
 mod mail_mime;
 mod mcp_abilities;
@@ -1639,11 +1640,17 @@ impl HttpTransport {
             Err(error) => tracing::warn!(%error, "Google sign-in is not available"),
         }
         let telegram = Arc::new(telegram::TelegramBridge::new(settings.paths().clone()));
+        // Pictures a tool returns (a screenshot) are kept here and shown in the console; the first daemon in a process owns the sink.
+        let images = Arc::new(image_store::ImageStore::new(settings.paths().data()));
+        jarvis_mcp_transport::install_image_sink(
+            Arc::clone(&images) as Arc<dyn jarvis_mcp_transport::ImageSink>
+        );
         state = state
             .with_settings(settings)
             .with_mcp(mcp_snapshot)
             .with_mcp_access(mcp_access)
-            .with_telegram(Arc::clone(&telegram));
+            .with_telegram(Arc::clone(&telegram))
+            .with_images(images);
         // Scheduled tasks fire through the same state the routes use, so a scheduled run is an ordinary run. Only
         // when runs are driven at all: a scheduler over a daemon with no executor would start runs nothing runs.
         let scheduler = state

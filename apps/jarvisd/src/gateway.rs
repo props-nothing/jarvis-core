@@ -92,6 +92,8 @@ pub struct GatewayState {
     mcp_access: Option<Arc<crate::mcp_access::McpAccess>>,
     /// The Telegram chat, when the daemon serves one (ADR-0184).
     telegram: Option<Arc<crate::telegram::TelegramBridge>>,
+    /// The pictures tools produced, for the console to show (`P11-011`).
+    images: Option<Arc<crate::image_store::ImageStore>>,
 }
 
 impl GatewayState {
@@ -113,7 +115,21 @@ impl GatewayState {
             mcp: Arc::new(crate::mcp_admin::McpSnapshot::default()),
             mcp_access: None,
             telegram: None,
+            images: None,
         }
+    }
+
+    /// Attaches the picture store, which turns its route on.
+    #[must_use]
+    pub fn with_images(mut self, images: Arc<crate::image_store::ImageStore>) -> Self {
+        self.images = Some(images);
+        self
+    }
+
+    /// Returns the picture store, when the daemon keeps one.
+    #[must_use]
+    pub(crate) fn images(&self) -> Option<&Arc<crate::image_store::ImageStore>> {
+        self.images.as_ref()
     }
 
     /// Attaches the Telegram chat, which turns its routes on.
@@ -400,6 +416,7 @@ pub fn router(state: GatewayState) -> Router {
         .merge(crate::mcp_admin::routes())
         .merge(crate::mcp_access::routes())
         .merge(crate::telegram::routes())
+        .merge(crate::image_store::routes())
         .merge(crate::google_service::routes())
         .merge(crate::contacts_service::routes())
         .merge(crate::digest_service::routes())

@@ -90,7 +90,7 @@ jarvis-web = { path = "crates/jarvis-web", version = "0.1.0" }
 # See docs/research/integrations/json-schema-validation.md.
 jsonschema = { version = "=0.57.0", default-features = false }
 libsqlite3-sys = { version = "=0.37.0", features = ["bundled"] }
-reqwest = { version = "=0.13.5", default-features = false, features = ["http2", "json", "rustls", "stream"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["http2", "json", "multipart", "rustls", "stream"] }
 # The official MCP Rust SDK, selected in `docs/research/integrations/mcp.md` (P3-007) and adopted
 # here (P3-008e). Apache-2.0.
 #
@@ -136,6 +136,8 @@ sha2 = { version = "=0.10.9", default-features = false }
 sqlx = { version = "=0.9.0", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite-bundled", "postgres"] }
 thiserror = "2.0.20"
 # Writing spreadsheets and Word files (`P11-010`, `docs/research/integrations/office-writers.md`). Both are pinned; neither is built with its optional extras.
+# Decoding the pictures an MCP tool returns (P11-011).
+base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 rust_xlsxwriter = { version = "=0.99.1", default-features = false }
 docx-rs = { version = "=0.4.22", default-features = false }
 # Wall-clock schedules (`P6-003`, `docs/research/integrations/jiff-time-zones.md`). The whole zone database is
