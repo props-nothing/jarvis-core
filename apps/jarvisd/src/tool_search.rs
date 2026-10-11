@@ -5,7 +5,8 @@
 //!
 //! **The rule is about groups, not single tools.** The tools of one MCP server form a group (`mcp.<server>.<tool>`). A group with more than
 //! [`DEFER_GROUP_OVER`] tools is **deferred**: its tools are not offered until the model asks. A small group (a documentation lookup with two
-//! tools) is cheaper to offer than to search for, so it is offered as always. The model is told, in the description of [`SEARCH_TOOL`], which
+//! tools) is cheaper to offer than to search for, so it is offered as always. A few **built-in families that most runs never touch**
+//! ([`DEFERRED_NATIVE_FAMILIES`]: calendar and scheduling) are deferred too, as the groups `jarvis-calendar` and `jarvis-schedule` (`ADR-0197`). The model is told, in the description of [`SEARCH_TOOL`], which
 //! groups exist and what is in them, calls `jarvis.tools.search` with a few words, and from then on **the whole group** is offered for the rest of
 //! the run (finding `browser_navigate` and then lacking `browser_snapshot` would be the worse trade).
 //!
@@ -57,7 +58,7 @@ const INPUT_SCHEMA: &str = r#"{
   "additionalProperties": false,
   "required": ["query"],
   "properties": {
-    "query": { "type": "string", "minLength": 1, "maxLength": 200, "description": "A few words about what you need to do, or the name of a group listed above." }
+    "query": { "type": "string", "minLength": 1, "maxLength": 200, "description": "A few English words about what you need to do, or the name of a group listed above." }
   }
 }"#;
 
@@ -92,10 +93,30 @@ pub struct Entry {
     pub description: String,
 }
 
-/// The group a tool belongs to: the server name of `mcp.<server>.<tool>`, and nothing for a native tool.
+/// Built-in tool families that are offered only when the model asks, because most runs never touch them and each rides along on every call.
+/// Chosen by what the owner's runs actually use: a family used by routine work (files, web, mail, memory, contacts, projects, delegation,
+/// the skills the model proposes) stays offered, since one search costs more than a few calls' worth of its definitions.
+pub const DEFERRED_NATIVE_FAMILIES: &[&str] = &["calendar", "schedule"];
+
+/// The prefix of a deferred built-in group's name, so it can never be mistaken for an MCP server of the same name.
+const NATIVE_GROUP_PREFIX: &str = "jarvis-";
+
+/// The group a tool belongs to: the server name of `mcp.<server>.<tool>`, `jarvis-<family>` for a deferrable built-in family, and nothing
+/// for any other tool.
 #[must_use]
-pub fn group_of(id: &str) -> Option<&str> {
-    id.strip_prefix("mcp.")?.split('.').next()
+pub fn group_of(id: &str) -> Option<String> {
+    if let Some(rest) = id.strip_prefix("mcp.") {
+        return rest.split('.').next().map(str::to_owned);
+    }
+    let family = id.strip_prefix("jarvis.")?.split('.').next()?;
+    DEFERRED_NATIVE_FAMILIES
+        .contains(&family)
+        .then(|| format!("{NATIVE_GROUP_PREFIX}{family}"))
+}
+
+/// A tool's own name inside its group: `query-docs` for `mcp.docs.query-docs`, `add` for `jarvis.schedule.add`.
+fn short_name(id: &str) -> &str {
+    id.splitn(3, '.').nth(2).unwrap_or(id)
 }
 
 /// The deferred groups of a catalog, each with its tools, in a stable order.
@@ -104,13 +125,12 @@ pub fn deferred_groups(entries: &[Entry]) -> BTreeMap<String, Vec<Entry>> {
     let mut groups: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
     for entry in entries {
         if let Some(group) = group_of(&entry.id) {
-            groups
-                .entry(group.to_owned())
-                .or_default()
-                .push(entry.clone());
+            groups.entry(group).or_default().push(entry.clone());
         }
     }
-    groups.retain(|_, tools| tools.len() > DEFER_GROUP_OVER);
+    groups.retain(|group, tools| {
+        group.starts_with(NATIVE_GROUP_PREFIX) || tools.len() > DEFER_GROUP_OVER
+    });
     groups
 }
 
@@ -133,7 +153,7 @@ pub fn found_groups(messages: &[ChatMessage]) -> BTreeSet<String> {
             Role::Assistant => {
                 for call in message.tool_calls() {
                     if let Some(group) = group_of(call.name()) {
-                        found.insert(group.to_owned());
+                        found.insert(group);
                     }
                 }
             }
@@ -162,7 +182,7 @@ pub fn catalog_line(waiting: &BTreeMap<String, Vec<Entry>>) -> String {
     for (group, tools) in waiting {
         let names: Vec<&str> = tools
             .iter()
-            .filter_map(|entry| entry.id.strip_prefix(&format!("mcp.{group}.")))
+            .map(|entry| short_name(&entry.id))
             .take(8)
             .collect();
         parts.push(format!(
@@ -179,22 +199,46 @@ pub fn catalog_line(waiting: &BTreeMap<String, Vec<Entry>>) -> String {
     parts.join("; ")
 }
 
+/// A word cut back to its stem, so "scheduling" reaches a tool described as "schedule" and "emails" one described as "email". Deliberately
+/// crude (a few English endings, then a final silent `e`): the match is a substring test, so a stem only has to be a prefix of the words
+/// it should find.
+fn stem(word: &str) -> String {
+    let mut stem = word;
+    for ending in ["ing", "ed", "es", "s"] {
+        if let Some(rest) = stem.strip_suffix(ending)
+            && rest.chars().count() >= 4
+        {
+            stem = rest;
+            break;
+        }
+    }
+    if stem.chars().count() >= 5
+        && let Some(rest) = stem.strip_suffix('e')
+    {
+        stem = rest;
+    }
+    stem.to_owned()
+}
+
+/// The words of a query that can say which tool is meant, as stems: longer than two letters and not a filler word.
+fn query_words(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.chars().count() > 2)
+        .map(str::to_lowercase)
+        .filter(|word| !NOISE.contains(&word.as_str()))
+        .map(|word| stem(&word))
+        .collect()
+}
+
 /// Ranks the waiting tools for a query. Deterministic: the score counts query words found in the group name (3), the tool name (2) and the
 /// description (1); ties keep the catalog order.
 fn rank(waiting: &BTreeMap<String, Vec<Entry>>, query: &str) -> Vec<(usize, Entry)> {
-    let words: Vec<String> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| word.chars().count() > 1)
-        .map(str::to_lowercase)
-        .collect();
+    let words = query_words(query);
     let mut scored = Vec::new();
     for (group, tools) in waiting {
         for entry in tools {
-            let name = entry
-                .id
-                .strip_prefix(&format!("mcp.{group}."))
-                .unwrap_or(&entry.id)
-                .to_lowercase();
+            let name = short_name(&entry.id).to_lowercase();
             let description = entry.description.to_lowercase();
             let score: usize = words
                 .iter()
@@ -239,7 +283,7 @@ pub fn search_body(waiting: &BTreeMap<String, Vec<Entry>>, query: &str) -> Value
     let mut listed = Vec::new();
     for (_, entry) in ranked.iter().take(MAX_LISTED) {
         if let Some(group) = group_of(&entry.id) {
-            groups.insert(group.to_owned());
+            groups.insert(group);
         }
         let description: String = entry
             .description
@@ -267,7 +311,8 @@ const MAX_ALREADY_OFFERED: usize = 8;
 /// Words that say nothing about which tool is meant.
 const NOISE: &[&str] = &[
     "the", "and", "for", "with", "tool", "tools", "use", "want", "need", "can", "all", "any",
-    "from", "that", "this", "how", "please",
+    "from", "that", "this", "how", "please", "what", "when", "where", "which", "who", "are", "was",
+    "you", "your", "our", "not", "but", "has", "have", "does", "into", "about", "some", "get",
 ];
 
 /// The tools the model **already has** that fit a query: native tools and small servers, which are always offered and so are never
@@ -279,12 +324,7 @@ pub fn already_offered(
     waiting: &BTreeMap<String, Vec<Entry>>,
     query: &str,
 ) -> Vec<Entry> {
-    let words: Vec<String> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| word.chars().count() > 1)
-        .map(str::to_lowercase)
-        .filter(|word| !NOISE.contains(&word.as_str()))
-        .collect();
+    let words = query_words(query);
     let held: BTreeSet<&str> = waiting
         .values()
         .flatten()
@@ -386,7 +426,7 @@ impl ToolSearchTool {
             id: ToolId::new(SEARCH_TOOL)?,
             version: "1.0.0".to_owned(),
             title: "Find more tools".to_owned(),
-            description: "Finds tools that are not offered yet and makes them available. Say in a few words what you need to do.".to_owned(),
+            description: "Finds tools that are not offered yet and makes them available. Say in a few words, in English, what you need to do (tool names and descriptions are English, whatever language the user writes in).".to_owned(),
             input_schema: ToolSchema::parse(INPUT_SCHEMA)?,
             output_schema: ToolSchema::parse(OUTPUT_SCHEMA)?,
             // It reads this daemon's own tool list and changes nothing.
@@ -537,8 +577,71 @@ mod tests {
         let groups = deferred_groups(&catalog());
         assert_eq!(groups.keys().collect::<Vec<_>>(), ["browser"]);
         assert_eq!(groups["browser"].len(), 8);
-        assert_eq!(group_of("mcp.docs.query-docs"), Some("docs"));
+        assert_eq!(group_of("mcp.docs.query-docs").as_deref(), Some("docs"));
         assert_eq!(group_of("jarvis.files.read"), None);
+        assert_eq!(group_of("jarvis.gmail.send"), None);
+    }
+
+    /// **Rarely used built-in families are held back like a big server, under a name that cannot collide with an MCP server.**
+    #[test]
+    fn calendar_and_schedule_tools_are_deferred_under_their_own_group_names() {
+        let mut entries = catalog();
+        entries.push(entry("jarvis.calendar.events", "Lists calendar events"));
+        entries.push(entry("jarvis.calendar.create", "Creates a calendar event"));
+        entries.push(entry("jarvis.schedule.add", "Schedules a recurring task"));
+        entries.push(entry("jarvis.schedule.list", "Lists scheduled tasks"));
+        // An MCP server may be called "calendar" without being mistaken for the built-in family.
+        entries.push(entry("mcp.calendar.list-events", "A server's events"));
+        let groups = deferred_groups(&entries);
+        assert_eq!(
+            groups.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["browser", "jarvis-calendar", "jarvis-schedule"]
+        );
+        assert_eq!(groups["jarvis-calendar"].len(), 2);
+        assert_eq!(
+            group_of("mcp.calendar.list-events").as_deref(),
+            Some("calendar")
+        );
+        assert_eq!(
+            catalog_line(&groups),
+            "browser (8 tools: browser_navigate, browser_snapshot, browser_click, browser_type, browser_take_screenshot, browser_tabs, browser_wait_for, browser_fill_form); jarvis-calendar (2 tools: events, create); jarvis-schedule (2 tools: add, list)"
+        );
+
+        let body = search_body(&groups, "what is on my calendar tomorrow");
+        assert_eq!(body["found_groups"], json!(["jarvis-calendar"]));
+        let body = search_body(&groups, "run this every morning on a schedule");
+        assert_eq!(body["found_groups"], json!(["jarvis-schedule"]));
+        // Word endings do not decide the match: "scheduling" and "events" reach "schedule" and "event".
+        let body = search_body(&groups, "scheduling tasks");
+        assert_eq!(body["found_groups"], json!(["jarvis-schedule"]));
+        let body = search_body(&groups, "look at upcoming events");
+        assert_eq!(body["found_groups"], json!(["jarvis-calendar"]));
+
+        // Calling a tool of the family counts as having found it, so a resumed run keeps what it was using.
+        let call = jarvis_models::ToolCall::new("c1", "jarvis.schedule.list", "{}");
+        let messages = vec![ChatMessage::assistant_tool_calls("", vec![call])];
+        assert_eq!(
+            found_groups(&messages).into_iter().collect::<Vec<_>>(),
+            ["jarvis-schedule"]
+        );
+    }
+
+    #[test]
+    fn a_stem_is_a_prefix_of_the_words_it_should_find() {
+        for (word, expected) in [
+            ("scheduling", "schedul"),
+            ("schedule", "schedul"),
+            ("scheduled", "schedul"),
+            ("schedules", "schedul"),
+            ("emails", "email"),
+            ("events", "event"),
+            ("sending", "send"),
+            ("calendar", "calendar"),
+            ("file", "file"),
+            ("is", "is"),
+        ] {
+            assert_eq!(stem(word), expected, "{word}");
+        }
     }
 
     #[test]
@@ -592,11 +695,14 @@ mod tests {
         let mut entries = catalog();
         entries.push(entry("jarvis.gmail.search", "Searches the owner's Gmail"));
         entries.push(entry("jarvis.gmail.send", "Sends an email"));
-        entries.push(entry("jarvis.calendar.events", "Lists calendar events"));
+        entries.push(entry(
+            "jarvis.memory.search",
+            "Searches the owner's memories",
+        ));
         entries.push(entry("jarvis.contacts.search", "Finds contacts"));
         entries.push(entry(SEARCH_TOOL, "Finds more tools"));
         let waiting = deferred_groups(&entries);
-        let body = search_everything(&entries, &waiting, "gmail calendar contacts");
+        let body = search_everything(&entries, &waiting, "gmail memories contacts");
         let ids: Vec<&str> = body["already_available"]
             .as_array()
             .unwrap_or_else(|| panic!("{body}"))
@@ -606,8 +712,7 @@ mod tests {
         for wanted in [
             "jarvis.gmail.search",
             "jarvis.gmail.send",
-            "jarvis.calendar.events",
-            "jarvis.contacts.search",
+            "jarvis.memory.search",
         ] {
             assert!(ids.contains(&wanted), "{wanted} missing from {ids:?}");
         }

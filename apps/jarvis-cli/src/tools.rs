@@ -101,16 +101,39 @@ fn render_list(reply: &ToolListReply) {
         "{} tool(s); workspace ceiling {}, approval from {}",
         reply.total, reply.max_risk, reply.approval_threshold
     );
-    // What a run is sent about its tools on every model call: the price of having them, paid before it says a word.
+    // What a run is sent about its tools on every model call: the price of having them, paid before it says a word. A tool held back
+    // until the run searches for it is not part of that, so it is counted apart.
+    let sent = |tool: &&jarvis_protocol::ToolReply| {
+        tool.callable && !tool.denied && tool.deferred_group.is_none()
+    };
     let offered: u32 = reply
         .tools
         .iter()
-        .filter(|tool| tool.callable && !tool.denied)
+        .filter(sent)
         .map(|tool| tool.offer_tokens)
         .sum();
     println!(
         "  each model call is sent about {offered} tokens of tool definitions (rough: characters / 4); the last column is each tool's share"
     );
+    let mut held: std::collections::BTreeMap<&str, (usize, u32)> =
+        std::collections::BTreeMap::new();
+    for tool in &reply.tools {
+        if let Some(group) = tool.deferred_group.as_deref() {
+            let entry = held.entry(group).or_default();
+            entry.0 += 1;
+            entry.1 += tool.offer_tokens;
+        }
+    }
+    if !held.is_empty() {
+        let groups: Vec<String> = held
+            .iter()
+            .map(|(group, (count, tokens))| format!("{group} ({count} tools, ~{tokens} tok)"))
+            .collect();
+        println!(
+            "  held back until a run searches for them, so not in that figure: {}",
+            groups.join(", ")
+        );
+    }
     if reply.tools.is_empty() {
         println!("  (none registered)");
         return;
@@ -143,7 +166,11 @@ fn render_list(reply: &ToolListReply) {
             risk = tool.risk.as_str(),
             approval = approval,
             state = state,
-            tokens = tool.offer_tokens
+            tokens = if tool.deferred_group.is_some() {
+                format!("{} (searched)", tool.offer_tokens)
+            } else {
+                tool.offer_tokens.to_string()
+            }
         );
     }
 }

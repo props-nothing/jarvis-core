@@ -1309,7 +1309,7 @@ fn tool_specs(
         .filter(|(group, _)| !found.contains(group.as_str()))
         .map(|(group, tools)| (group.clone(), tools.clone()))
         .collect();
-    tools
+    let specs = tools
         .registry()
         .discover()
         .tools
@@ -1319,7 +1319,7 @@ fn tool_specs(
             !(sub_agent && summary.id.starts_with(crate::delegate::AGENT_TOOL_PREFIX))
         })
         .filter(|summary| {
-            crate::tool_search::group_of(&summary.id).is_none_or(|group| !waiting.contains_key(group))
+            crate::tool_search::group_of(&summary.id).is_none_or(|group| !waiting.contains_key(&group))
         })
         // With nothing held back there is nothing to search for, so the search tool is not offered at all.
         .filter(|summary| summary.id != crate::tool_search::SEARCH_TOOL || !waiting.is_empty())
@@ -1342,10 +1342,31 @@ fn tool_specs(
             };
             ToolSpec::new(summary.id.clone(), description, parameters)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    cache_stable_order(specs, &found)
 }
 
-/// The names a run would be offered, for tests of what a sub-agent is not offered.
+/// Puts what changes during a run after what does not: the tools of groups the run has found, and the search tool whose description
+/// shrinks when it finds something, go last. A provider that caches the start of a request can then reuse everything before them on the
+/// next call (`OpenClaw` keeps its tool prefix identical between turns for the same reason); a group landing in the middle would change the
+/// whole request from that point. Stable, so the order inside each part is the registry's.
+fn cache_stable_order(
+    mut specs: Vec<ToolSpec>,
+    found: &std::collections::BTreeSet<String>,
+) -> Vec<ToolSpec> {
+    specs.sort_by_key(|spec| {
+        if spec.name() == crate::tool_search::SEARCH_TOOL {
+            1_u8
+        } else if crate::tool_search::group_of(spec.name())
+            .is_some_and(|group| found.contains(&group))
+        {
+            2
+        } else {
+            0
+        }
+    });
+    specs
+}
 #[cfg(test)]
 pub(crate) fn tool_specs_for_test(tools: &Arc<ToolPipeline>, sub_agent: bool) -> Vec<String> {
     tool_specs(tools, sub_agent, &[])
@@ -3427,6 +3448,52 @@ mod tests {
             "gpt-oss:20b",
             "the run must name the model the operator configured, not a built-in literal"
         );
+    }
+
+    /// **What a run found goes after what never changes, so the start of every request stays the same from call to call.**
+    #[test]
+    fn found_tools_and_the_search_tool_follow_the_stable_ones() {
+        let spec = |name: &str| ToolSpec::new(name, "d", serde_json::json!({ "type": "object" }));
+        let specs = vec![
+            spec("jarvis.agent.delegate"),
+            spec("jarvis.calendar.events"),
+            spec("jarvis.files.read"),
+            spec("jarvis.tools.search"),
+            spec("jarvis.web.fetch"),
+            spec("mcp.browser.browser_click"),
+            spec("mcp.docs.query-docs"),
+        ];
+        let found: std::collections::BTreeSet<String> = ["jarvis-calendar", "browser"]
+            .iter()
+            .map(|group| (*group).to_owned())
+            .collect();
+        let ordered: Vec<String> = cache_stable_order(specs.clone(), &found)
+            .iter()
+            .map(|spec| spec.name().to_owned())
+            .collect();
+        assert_eq!(
+            ordered,
+            [
+                "jarvis.agent.delegate",
+                "jarvis.files.read",
+                "jarvis.web.fetch",
+                "mcp.docs.query-docs",
+                "jarvis.tools.search",
+                "jarvis.calendar.events",
+                "mcp.browser.browser_click",
+            ]
+        );
+        // Nothing found: only the search tool moves, to the end.
+        let none = std::collections::BTreeSet::new();
+        let ordered: Vec<String> = cache_stable_order(specs, &none)
+            .iter()
+            .map(|spec| spec.name().to_owned())
+            .collect();
+        assert_eq!(
+            ordered.last().map(String::as_str),
+            Some("jarvis.tools.search")
+        );
+        assert_eq!(ordered[1], "jarvis.calendar.events");
     }
 
     /// **Sub-agent and background runs are asked their own models, the owner's questions keep the main one, and a bad name is refused.**

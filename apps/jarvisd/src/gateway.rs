@@ -1235,9 +1235,22 @@ async fn list_tools(State(state): State<GatewayState>) -> Response {
             // The ceiling and threshold come from the policy the pipeline actually decides with, not from
             // configuration — recomposing them would let the displayed policy differ from the enforced one.
             let policy = tools.workspace_policy();
+            // Which tools a run is not sent until it searches (`ADR-0176`, `ADR-0197`), so the token figure is what a call really costs.
+            let held: std::collections::BTreeMap<String, String> =
+                crate::tool_search::deferred_groups(&crate::tool_search::entries_of(tools))
+                    .into_iter()
+                    .flat_map(|(group, members)| {
+                        members
+                            .into_iter()
+                            .map(move |entry| (entry.id, group.clone()))
+                    })
+                    .collect();
             let reply = jarvis_protocol::ToolListReply {
                 total: entries.len(),
-                tools: entries.iter().map(tool_reply).collect(),
+                tools: entries
+                    .iter()
+                    .map(|entry| tool_reply(entry, held.get(&entry.id).cloned()))
+                    .collect(),
                 max_risk: policy.max_risk(),
                 approval_threshold: policy.approval_threshold(),
             };
@@ -1258,7 +1271,10 @@ async fn list_tools(State(state): State<GatewayState>) -> Response {
 /// A named function rather than a closure so the field mapping is readable in one place, and so a
 /// field added to either side is a compile error here rather than a field that silently stops being
 /// reported.
-fn tool_reply(entry: &crate::tool_pipeline::PolicyInventoryEntry) -> jarvis_protocol::ToolReply {
+fn tool_reply(
+    entry: &crate::tool_pipeline::PolicyInventoryEntry,
+    deferred_group: Option<String>,
+) -> jarvis_protocol::ToolReply {
     jarvis_protocol::ToolReply {
         id: entry.id.clone(),
         title: entry.title.clone(),
@@ -1275,6 +1291,7 @@ fn tool_reply(entry: &crate::tool_pipeline::PolicyInventoryEntry) -> jarvis_prot
         unavailable_reason: entry.unavailable_reason.clone(),
         asks_first: entry.asks_first,
         offer_tokens: u32::try_from(entry.offer_chars / 4).unwrap_or(u32::MAX),
+        deferred_group,
     }
 }
 
@@ -5701,6 +5718,10 @@ mod tests {
         assert!(
             entry.offer_tokens > 0,
             "the cost of offering the tool to a model on every call must be reported"
+        );
+        assert!(
+            entry.deferred_group.is_none(),
+            "a tool that is always offered is not reported as held back"
         );
         // The workspace settings are reported beside the per-tool entries, so a single tool's posture is
         // readable against the ceiling it sits under.

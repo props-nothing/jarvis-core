@@ -2,8 +2,9 @@
 #
 #   jarvis eval run evals/discovery.toml
 #
-# The built-in browser has 25 tools, so its group is held back until the model asks for it. These cases need Node.js (the browser is
-# started with npx) and internet access, and each one is an ordinary run that opens a public page. Nothing is written, sent or changed.
+# The built-in browser has 25 tools, so its group is held back until the model asks for it; so are the built-in calendar and schedule tools
+# (`ADR-0197`), which most runs never need. The browser cases need Node.js (the browser is started with npx) and internet access, and each
+# opens a public page. The calendar case needs the Google sign-in. Nothing is written, sent or changed.
 # A model that never searches, or searches and then does not use what it found, fails here.
 
 name = "discovery"
@@ -16,6 +17,27 @@ prompt = "Use the browser to open https://example.com and tell me the title of t
 tools_used = ["tools.search", "browser.browser_navigate"]
 contains = ["Example Domain"]
 max_seconds = 180
+
+[[case]]
+id = "finds-the-schedule-tools"
+prompt = "Which tasks do I have scheduled to run on their own? List them briefly. Do not change anything."
+[case.expect]
+tools_used = ["tools.search", "schedule.list"]
+max_seconds = 120
+
+[[case]]
+id = "finds-the-schedule-tools-from-dutch"
+prompt = "Welke taken heb ik ingepland die vanzelf draaien? Geef een korte lijst in het Nederlands. Verander niets."
+[case.expect]
+tools_used = ["tools.search", "schedule.list"]
+max_seconds = 120
+
+[[case]]
+id = "finds-the-calendar-tools"
+prompt = "What is on my calendar in the next three days? Only look; do not create or change anything."
+[case.expect]
+tools_used = ["tools.search", "calendar.events"]
+max_seconds = 120
 
 [[case]]
 id = "does-not-search-for-nothing"

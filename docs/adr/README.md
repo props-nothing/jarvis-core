@@ -213,3 +213,5 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0194](0194-a-long-run-leaves-out-its-oldest-tool-results-instead-of-overflowing-the-models-context.md) | A long run leaves out its oldest tool results instead of overflowing the model's context | Accepted |
 | [0195](0195-triggers-can-watch-a-folder-or-listen-for-a-request-and-quiet-hours-hold-announcements.md) | Triggers can watch a folder or listen for a request, and quiet hours hold announcements | Accepted |
 | [0196](0196-sub-agents-and-background-runs-can-use-their-own-model.md) | Sub-agents and background runs can use their own model | Accepted |
+| [0197](0197-rarely-used-built-in-tools-are-offered-on-request.md) | Rarely used built-in tools are offered on request | Accepted |
+| [0198](0198-tool-search-ignores-word-endings-and-asks-for-english-and-held-back-tools-are-counted-apart.md) | Tool search ignores word endings and asks for English, held-back tools are counted apart, and found tools come last | Accepted |

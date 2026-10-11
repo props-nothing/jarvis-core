@@ -94,6 +94,10 @@ pub struct ToolReply {
     /// divided by four). A run is sent every tool it may call, so the sum over the tools is what each call pays before it says a word.
     #[serde(default)]
     pub offer_tokens: u32,
+    /// The group this tool waits in until a run searches for it (`ADR-0176`, `ADR-0197`), when it is held back; such a tool is not part of
+    /// what every call is sent, and its tokens are paid only by a run that asks for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_group: Option<String>,
 }
 
 /// Response body for `GET /api/v1/tools`.
