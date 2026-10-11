@@ -53,13 +53,45 @@ const MIN_LEFT_OUT_BYTES: usize = 600;
 /// What every left-out result starts with, so a second pass does not mask it again.
 const LEFT_OUT: &str = "[earlier tool result left out to keep the working context small";
 
+/// What a long string inside an old call's arguments is replaced by (a file the model wrote, a long note), so a second pass does not
+/// shorten it again. The words say that the content was sent, so a model does not read it as the content to send.
+const ARGUMENT_LEFT_OUT: &str = "[left out of the working context: ";
+
 /// What a trim did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Trimmed {
     /// How many results were left out.
     pub results: usize,
+    /// How many calls had long text in their arguments left out.
+    pub arguments: usize,
     /// How many bytes that saved.
     pub bytes: usize,
+}
+
+/// Replaces every long string in a call's JSON arguments, at any depth.
+fn mask_long_strings(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text)
+            if text.len() >= MIN_LEFT_OUT_BYTES && !text.starts_with(ARGUMENT_LEFT_OUT) =>
+        {
+            *text = format!(
+                "{ARGUMENT_LEFT_OUT}{} characters, already sent]",
+                text.chars().count()
+            );
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(mask_long_strings),
+        serde_json::Value::Object(map) => map.values_mut().for_each(mask_long_strings),
+        _ => {}
+    }
+}
+
+/// The arguments of a call with their long strings left out, when that makes them shorter. Arguments that are not JSON are left alone,
+/// and the result is always valid JSON, so the provider still accepts the call.
+fn shorten_arguments(arguments: &str) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    mask_long_strings(&mut value);
+    let shortened = serde_json::to_string(&value).ok()?;
+    (shortened.len() < arguments.len()).then_some(shortened)
 }
 
 /// The bytes a message adds to a request: its text, and the name and arguments of every call it carries.
@@ -109,6 +141,7 @@ fn trim_to(
     let older = results.len().saturating_sub(KEEP_RECENT_RESULTS);
     let mut done = Trimmed {
         results: 0,
+        arguments: 0,
         bytes: 0,
     };
     for &index in &results[..older] {
@@ -138,7 +171,66 @@ fn trim_to(
         done.results += 1;
         done.bytes += saved;
     }
-    (done.results > 0).then_some(done)
+    if total > target {
+        shorten_old_arguments(
+            messages,
+            own_turns_from,
+            &results[..older],
+            unseen_from,
+            (total, target),
+            &mut done,
+        );
+    }
+    (done.results > 0 || done.arguments > 0).then_some(done)
+}
+
+/// Second pass, for what results cannot fix: the model's own long arguments (a file it wrote, a long note) stay in every later request,
+/// and a run that writes a lot has a transcript mostly made of them. Only calls whose results the model has already read, and that are
+/// not among the newest, are shortened; the call, its name and its place stay, so each result still answers a call that is still there.
+fn shorten_old_arguments(
+    messages: &mut [ChatMessage],
+    own_turns_from: usize,
+    old_results: &[usize],
+    unseen_from: usize,
+    (mut total, target): (usize, usize),
+    done: &mut Trimmed,
+) {
+    let answered: std::collections::BTreeSet<String> = old_results
+        .iter()
+        .filter(|&&index| index < unseen_from)
+        .filter_map(|&index| messages[index].tool_call_id().map(str::to_owned))
+        .collect();
+    for (index, message) in messages.iter_mut().enumerate().skip(own_turns_from) {
+        if total <= target {
+            break;
+        }
+        if message.role() != Role::Assistant || index >= unseen_from {
+            continue;
+        }
+        let before = size(message);
+        let mut changed = false;
+        let calls: Vec<jarvis_models::ToolCall> = message
+            .tool_calls()
+            .iter()
+            .map(|call| {
+                if answered.contains(call.id())
+                    && let Some(shortened) = shorten_arguments(call.arguments())
+                {
+                    changed = true;
+                    return jarvis_models::ToolCall::new(call.id(), call.name(), shortened);
+                }
+                call.clone()
+            })
+            .collect();
+        if !changed {
+            continue;
+        }
+        *message = ChatMessage::assistant_tool_calls(message.text(), calls);
+        let saved = before.saturating_sub(size(message));
+        total = total.saturating_sub(saved);
+        done.arguments += 1;
+        done.bytes += saved;
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +436,149 @@ mod tests {
         assert!(
             kept[0].text().starts_with(LEFT_OUT),
             "an old one is left out"
+        );
+    }
+
+    /// A call that wrote `chars` characters, answered by a short result: what a research run that saves its findings does.
+    fn write_exchange(messages: &mut Vec<ChatMessage>, step: usize, chars: usize) {
+        let id = format!("w_{step}");
+        let arguments =
+            serde_json::json!({ "path": format!("out/{step}.txt"), "content": "c".repeat(chars) })
+                .to_string();
+        messages.push(ChatMessage::assistant_tool_calls(
+            String::new(),
+            vec![ToolCall::new(&id, "jarvis.files.write", arguments)],
+        ));
+        messages.push(ChatMessage::tool(&id, "written"));
+    }
+
+    fn arguments_of(message: &ChatMessage) -> String {
+        message
+            .tool_calls()
+            .first()
+            .map(|call| call.arguments().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// **When the bulk is what the model wrote, not what it read, the long text in its old calls is left out and the calls stay valid.**
+    ///
+    /// Found in the owner's own runs: a research sub-agent that saved its findings made 219 model calls and its request grew to 176,000
+    /// tokens, because results were the only thing the trim could shorten and its results were two words.
+    #[test]
+    fn long_text_in_old_calls_is_left_out_when_results_cannot_help() {
+        let mut messages = vec![ChatMessage::user("go")];
+        for step in 0..40 {
+            write_exchange(&mut messages, step, 9_000);
+        }
+        assert!(total(&messages) > SOFT_BUDGET_BYTES);
+        let done = trim_old_results(&mut messages, 1)
+            .unwrap_or_else(|| panic!("an over-budget transcript is trimmed"));
+        assert_eq!((done.results, done.arguments > 0), (0, true));
+        assert!(
+            total(&messages) <= LOW_WATER_BYTES,
+            "{} bytes",
+            total(&messages)
+        );
+
+        let calls: Vec<&ChatMessage> = messages
+            .iter()
+            .filter(|message| message.role() == Role::Assistant)
+            .collect();
+        // The oldest is shortened, and is still JSON with its other arguments and the name of its tool.
+        let oldest: serde_json::Value = serde_json::from_str(&arguments_of(calls[0]))
+            .unwrap_or_else(|error| panic!("a shortened call is still JSON: {error}"));
+        assert_eq!(oldest["path"], "out/0.txt");
+        assert!(
+            oldest["content"].as_str().is_some_and(
+                |text| text.starts_with(ARGUMENT_LEFT_OUT) && text.contains("9000 characters")
+            ),
+            "{oldest}"
+        );
+        assert_eq!(calls[0].tool_calls()[0].name(), "jarvis.files.write");
+        // The newest ones are whole.
+        let newest = calls.len() - 1;
+        for call in &calls[newest - KEEP_RECENT_RESULTS + 1..] {
+            assert!(arguments_of(call).len() > 9_000, "a recent call is whole");
+        }
+        // Every result still answers a call that is still there.
+        for pair in messages[1..].chunks(2) {
+            assert_eq!(
+                pair[1].tool_call_id(),
+                pair[0].tool_calls().first().map(ToolCall::id)
+            );
+        }
+    }
+
+    /// **Results go first: arguments are only shortened when that was not enough**, and a second look does nothing.
+    #[test]
+    fn arguments_are_the_second_resort_and_a_second_trim_does_nothing() {
+        let mut messages = transcript(30, 11_000);
+        let calls_before: Vec<String> = messages.iter().map(arguments_of).collect();
+        let done = trim_old_results(&mut messages, 2)
+            .unwrap_or_else(|| panic!("an over-budget transcript is trimmed"));
+        assert!(
+            done.results > 0 && done.arguments == 0,
+            "results alone were enough"
+        );
+        assert_eq!(
+            calls_before,
+            messages.iter().map(arguments_of).collect::<Vec<_>>()
+        );
+
+        let mut writes = vec![ChatMessage::user("go")];
+        for step in 0..40 {
+            write_exchange(&mut writes, step, 9_000);
+        }
+        assert!(trim_old_results(&mut writes, 1).is_some());
+        let after_first = writes.clone();
+        assert_eq!(trim_old_results(&mut writes, 1), None);
+        assert_eq!(writes, after_first);
+    }
+
+    /// **A call the model has not yet seen the result of, and arguments that are not JSON, are never changed.**
+    #[test]
+    fn unanswered_calls_and_non_json_arguments_are_kept() {
+        let mut messages = vec![ChatMessage::user("go")];
+        for step in 0..40 {
+            write_exchange(&mut messages, step, 9_000);
+        }
+        // The newest turn: three writes at once, results not yet read by the model.
+        let calls: Vec<ToolCall> = (0..3)
+            .map(|index| {
+                ToolCall::new(
+                    format!("n_{index}"),
+                    "jarvis.files.write",
+                    serde_json::json!({ "content": "n".repeat(9_000) }).to_string(),
+                )
+            })
+            .collect();
+        messages.push(ChatMessage::assistant_tool_calls(String::new(), calls));
+        for index in 0..3 {
+            messages.push(ChatMessage::tool(format!("n_{index}"), "written"));
+        }
+        let newest_before: Vec<String> = messages[messages.len() - 4..]
+            .iter()
+            .map(arguments_of)
+            .collect();
+        trim_old_results(&mut messages, 1);
+        let newest_after: Vec<String> = messages[messages.len() - 4..]
+            .iter()
+            .map(arguments_of)
+            .collect();
+        assert_eq!(
+            newest_before, newest_after,
+            "what the model has not answered stays whole"
+        );
+
+        assert_eq!(shorten_arguments(&"not json ".repeat(500)), None);
+        assert_eq!(shorten_arguments(r#"{"a":"short"}"#), None);
+        let nested =
+            serde_json::json!({ "rows": [{ "note": "r".repeat(2_000) }, { "note": "ok" }] })
+                .to_string();
+        let shortened = shorten_arguments(&nested).unwrap_or_default();
+        assert!(
+            shortened.contains(ARGUMENT_LEFT_OUT) && shortened.contains(r#""note":"ok""#),
+            "{shortened}"
         );
     }
 }

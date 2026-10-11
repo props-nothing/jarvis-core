@@ -1,0 +1,46 @@
+# Long tasks (`ADR-0194`, `ADR-0199`): does a run that writes a lot stay inside its context and still write what it should?
+#
+#   jarvis eval run evals/long-task.toml --repeat 3
+#
+# A long run keeps its working context small by leaving out the bulk of its oldest tool results and, when that is not enough, the long
+# text in its own oldest calls. The risk in the second is a model that reads "[left out of the working context: ...]" in its own earlier
+# call and copies that into a new write. These cases write 26 files of about 10 KB each, which is enough to trigger the trim, then read the
+# LAST files back (written after the trim, so the ones that would show the copy) and answer with their final lines.
+#
+# Every attempt works in a NEW folder named from the clock, so a model cannot pass by finding files an earlier attempt left (a first
+# version of this suite could, and a model took the shortcut: one write and a read-back in 22 seconds).
+#
+# THIS SUITE WRITES FILES. It needs a granted folder (`daemon.tool_workspace_roots`) and creates one folder per attempt named
+# `_eval-long-<date and time>` inside it, about 260 KB each, yours to delete afterwards. It sends and changes nothing else. A case takes
+# two to four minutes and about half a million input tokens (most of them cached by the provider), so use `--repeat` deliberately.
+# Read the seconds and tokens in the report too: a "pass" in 20 seconds did not write 26 files by hand.
+#
+# `max_input_tokens` is the whole run's, not a call's: it is a ceiling that a run whose request kept growing would break.
+
+name = "long-task"
+description = "Writing many large files in one run: the context stays bounded and the last files are right."
+
+[[case]]
+id = "writes-26-files-and-reads-the-last-back"
+prompt = "Take the current date and time from the clock line you were given and make a folder name like _eval-long-202610112135 (year, month, day, hour, minute; 24-hour). In that NEW folder inside the granted folder, create 26 files named part-01.txt up to part-26.txt, one write each. File part-NN.txt must contain exactly 120 lines; line k (k from 1 to 120) is: 'NN-kkk the quick brown fox jumps over the lazy dog and keeps running through the field' where NN is the file number and kkk is k padded to three digits. Do not summarise, abbreviate or skip lines. Do the work yourself: do not delegate to sub-agents. When all 26 are written, read part-26.txt and part-25.txt back and reply with exactly two lines: the last line of part-26.txt, then the last line of part-25.txt."
+[case.expect]
+tools_used = ["files.write", "files.read"]
+tools_not_used = ["agent.delegate"]
+contains = [
+  "26-120 the quick brown fox jumps over the lazy dog and keeps running through the field",
+  "25-120 the quick brown fox jumps over the lazy dog and keeps running through the field",
+]
+not_contains = ["left out", "already sent"]
+max_input_tokens = 1500000
+max_seconds = 900
+
+[[case]]
+id = "writes-26-files-one-per-turn"
+prompt = "Take the current date and time from the clock line you were given and make a folder name like _eval-long-202610112135 (year, month, day, hour, minute; 24-hour). In that NEW folder inside the granted folder, create 26 files named part-01.txt up to part-26.txt. Make exactly one tool call per turn: write one file, wait for its result, then write the next, never several at once. File part-NN.txt must contain exactly 120 lines; line k (k from 1 to 120) is: 'NN-kkk the quick brown fox jumps over the lazy dog and keeps running through the field' where NN is the file number and kkk is k padded to three digits. Do not summarise, abbreviate or skip lines. Do the work yourself: do not delegate to sub-agents. When all 26 are written, read part-26.txt back and reply with exactly its last line."
+[case.expect]
+tools_used = ["files.write", "files.read"]
+tools_not_used = ["agent.delegate"]
+contains = ["26-120 the quick brown fox jumps over the lazy dog and keeps running through the field"]
+not_contains = ["left out", "already sent"]
+max_input_tokens = 3000000
+max_seconds = 1500

@@ -2046,8 +2046,8 @@ async fn note_context_trimmed(
         RunEventKind::ActivityUpdated,
         Some("context trimmed"),
         &format!(
-            r#"{{"phase":"context_trimmed","results":{},"bytes":{}}}"#,
-            trimmed.results, trimmed.bytes
+            r#"{{"phase":"context_trimmed","results":{},"arguments":{},"bytes":{}}}"#,
+            trimmed.results, trimmed.arguments, trimmed.bytes
         ),
         correlation_id,
     )

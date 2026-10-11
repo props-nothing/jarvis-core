@@ -215,3 +215,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0196](0196-sub-agents-and-background-runs-can-use-their-own-model.md) | Sub-agents and background runs can use their own model | Accepted |
 | [0197](0197-rarely-used-built-in-tools-are-offered-on-request.md) | Rarely used built-in tools are offered on request | Accepted |
 | [0198](0198-tool-search-ignores-word-endings-and-asks-for-english-and-held-back-tools-are-counted-apart.md) | Tool search ignores word endings and asks for English, held-back tools are counted apart, and found tools come last | Accepted |
+| [0199](0199-a-long-run-also-leaves-out-the-text-it-wrote-in-old-calls.md) | A long run also leaves out the text it wrote in old calls | Accepted |
