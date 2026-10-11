@@ -34,7 +34,7 @@ Measured against the four hallmarks of a real J.A.R.V.I.S.:
 2b. ~~**Connect apps**~~ **built** (`ADR-0170`): one switch and one key let Claude Code, Cursor, VS Code or a script use JARVIS, including starting a run with `jarvis.agent.delegate`; approvals stay with the owner.
 3. ~~**A browser**~~ **built as a one-click ability** (`P11-001c`, `ADR-0169`): JavaScript pages and acting on the web; a measured hostile-page eval is still owed (`P11-003`).
 4. ~~**Skills the model proposes and the owner approves**~~ delivered (`P11-004`, `ADR-0183`): it learns the owner's procedures.
-5. **Telegram** (`P11-005`): reachable from a phone with no tunnel.
+5. **Telegram** (`P11-005`): built (`ADR-0184`), configured in Settings, reachable from a phone with no tunnel; run on the owner's phone; answers are formatted (`ADR-0186`).
 6. ~~**Time-zone schedules**~~ delivered (`P6-003`, `ADR-0182`): "every weekday at 08:00 Europe/Amsterdam". **Triggers** (`P6-012`) remain: initiative on events.
 7. **Model routing** (`P11-006`), compared with `jarvis eval`.
 8. **Coding agents over ACP** (`P7`): delegate to Claude, Codex, Gemini, Copilot and others in a worktree, reviewed before anything merges.
@@ -209,3 +209,5 @@ Deliver only when demanded by evidence:
 **Outcome:** the assistant can do more each month without a rewrite and without a longer setup.
 
 Deliver, in order ([ADR-0167](docs/adr/0167-capability-and-reach-come-from-open-protocols-before-bespoke-code.md), `TODO.md` `P11`): MCP made real and manageable, tool discovery so a large catalog costs no tokens until needed, a browser (Playwright MCP), skills the model proposes and the owner approves, Telegram, model routing, the first five minutes of setup, a spend guard inside the run. Each is only done after a live run on the owner's own setup.
+
+Then the **capability wishlist** ([docs/product/capability-wishlist.md](docs/product/capability-wishlist.md), `TODO.md` `P11-010` to `P11-022`), in this order: JARVIS writes documents (xlsx, docx, pdf, pptx, charts); images shown inline and generated; authenticated browsing; a runtime without Docker and long-running processes; retrieval over the owner's own files; a vault for secrets; calendar free/busy and contact merge; inbound webhooks; monitoring with alerts; Slack, WhatsApp and SMS; maps and invoicing through MCP; skill discovery that works; a self-maintained wishlist and an eval trend export.

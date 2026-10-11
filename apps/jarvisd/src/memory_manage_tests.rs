@@ -124,3 +124,49 @@ async fn correcting_replaces_the_claim_with_the_corrected_text() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(stored.content, "The user prefers light roast coffee");
 }
+
+/// **A correction that is too long for one memory is refused in plain words, before anything is changed.**
+///
+/// The audit saw a correction refused with "a search key must be 1 to 32 words" and read it as a limit on the quotation.
+#[tokio::test]
+async fn a_correction_longer_than_one_short_fact_is_refused_in_plain_words() {
+    let (_scratch, database, tool) = fixture().await;
+    let id = remember(&database, "The user prefers dark roast coffee").await;
+    let long = (0..40)
+        .map(|index| format!("word{index}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let refused = tool
+        .correct(&json!({ "memory_id": id, "claim": "dark roast coffee", "corrected": long }))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("a 40-word correction was accepted"));
+    let said = format!("{refused:?}");
+    assert!(
+        said.contains("40 different words") && said.contains("at most 32"),
+        "{said}"
+    );
+    assert!(said.contains("project note"), "{said}");
+    // Nothing changed: the old memory is still there.
+    let service = MemoryService::new(Arc::clone(&database));
+    assert!(
+        service
+            .read(&id)
+            .await
+            .is_ok_and(|memory| memory.content.contains("dark roast"))
+    );
+    // Thirty-two different words is the limit and is accepted; repeats do not count twice.
+    let exactly = (0..32)
+        .map(|index| format!("w{index}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        + " w1 W2 w3.";
+    assert!(
+        tool.correct(
+            &json!({ "memory_id": id, "claim": "dark roast coffee", "corrected": exactly })
+        )
+        .await
+        .is_ok(),
+        "32 different words must be accepted"
+    );
+}

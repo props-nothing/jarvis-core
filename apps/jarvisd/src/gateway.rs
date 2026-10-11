@@ -90,6 +90,8 @@ pub struct GatewayState {
     mcp: Arc<crate::mcp_admin::McpSnapshot>,
     /// The key for other apps that connect to JARVIS, when the daemon has one to manage (`ADR-0170`).
     mcp_access: Option<Arc<crate::mcp_access::McpAccess>>,
+    /// The Telegram chat, when the daemon serves one (ADR-0184).
+    telegram: Option<Arc<crate::telegram::TelegramBridge>>,
 }
 
 impl GatewayState {
@@ -110,7 +112,21 @@ impl GatewayState {
             google: None,
             mcp: Arc::new(crate::mcp_admin::McpSnapshot::default()),
             mcp_access: None,
+            telegram: None,
         }
+    }
+
+    /// Attaches the Telegram chat, which turns its routes on.
+    #[must_use]
+    pub fn with_telegram(mut self, bridge: Arc<crate::telegram::TelegramBridge>) -> Self {
+        self.telegram = Some(bridge);
+        self
+    }
+
+    /// Returns the Telegram chat, when the daemon has one.
+    #[must_use]
+    pub(crate) fn telegram(&self) -> Option<&Arc<crate::telegram::TelegramBridge>> {
+        self.telegram.as_ref()
     }
 
     /// Attaches the access key for other apps, which turns its routes on.
@@ -383,6 +399,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/skills/{id}/enable", post(enable_skill))
         .merge(crate::mcp_admin::routes())
         .merge(crate::mcp_access::routes())
+        .merge(crate::telegram::routes())
         .merge(crate::google_service::routes())
         .merge(crate::contacts_service::routes())
         .merge(crate::digest_service::routes())
@@ -871,7 +888,7 @@ async fn continue_parked_run(state: &GatewayState, run_id: &str, call_id: &str) 
 ///
 /// The approval is read first so an unknown identifier is a `404` before any write path runs. Then the
 /// decision is recorded against the stored row that the owner is answering.
-async fn decide_approval(
+pub(crate) async fn decide_approval(
     State(state): State<GatewayState>,
     Path(id): Path<String>,
     Json(body): Json<ApprovalDecisionBody>,
@@ -1029,13 +1046,31 @@ async fn continue_declined_run(state: &GatewayState, run_id: &str, approval_id: 
 /// seeded identity rather than from a request, for the reason the decision route gives: a client-supplied
 /// workspace is a claim, not proof of access.
 async fn list_approvals(State(state): State<GatewayState>) -> Response {
+    match pending_approvals(&state).await {
+        Ok(approvals) => {
+            let reply = jarvis_protocol::ApprovalListReply {
+                total: approvals.len(),
+                approvals,
+            };
+            (StatusCode::OK, Json(reply)).into_response()
+        }
+        Err(response) => response,
+    }
+}
+
+/// The approvals waiting for the owner, calls from other apps first. The console, the CLI and Telegram all read this one list.
+// The error is the response itself, as every handler here returns it.
+#[allow(clippy::result_large_err)]
+pub(crate) async fn pending_approvals(
+    state: &GatewayState,
+) -> Result<Vec<jarvis_protocol::PendingApprovalReply>, Response> {
     let now = jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock);
     let Ok(identity) = jarvis_storage::load_local_identity(state.database()).await else {
-        return error_response(
+        return Err(error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::Internal,
             "the local database is not available",
-        );
+        ));
     };
     let pending = match jarvis_storage::read_workspace_pending_approvals(
         state.database(),
@@ -1047,11 +1082,11 @@ async fn list_approvals(State(state): State<GatewayState>) -> Response {
         Ok(pending) => pending,
         Err(error) => {
             tracing::warn!(%error, "the pending approvals could not be read");
-            return error_response(
+            return Err(error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 ErrorCode::Internal,
                 "the local database is not available",
-            );
+            ));
         }
     };
 
@@ -1101,11 +1136,7 @@ async fn list_approvals(State(state): State<GatewayState>) -> Response {
     if let Some(access) = state.mcp_access() {
         approvals.splice(0..0, access.approvals().list());
     }
-    let reply = jarvis_protocol::ApprovalListReply {
-        total: approvals.len(),
-        approvals,
-    };
-    (StatusCode::OK, Json(reply)).into_response()
+    Ok(approvals)
 }
 
 /// Renders an executed call's result as JSON.

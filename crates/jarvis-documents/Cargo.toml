@@ -1,13 +1,16 @@
 [package]
 name = "jarvis-documents"
-description = "Plain text out of PDF, Word and spreadsheet files, bounded and panic-safe"
+description = "Plain text out of PDF, Word and spreadsheet files, bounded and panic-safe; and new spreadsheets, CSV and Word files from structured content"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+docx-rs.workspace = true
 lopdf.workspace = true
+rust_xlsxwriter.workspace = true
+serde_json.workspace = true
 roxmltree.workspace = true
 thiserror.workspace = true
 zip.workspace = true

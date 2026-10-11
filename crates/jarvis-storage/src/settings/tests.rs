@@ -247,6 +247,7 @@ fn every_setting_has_a_tab_and_says_what_unset_means() {
                 "files",
                 "permissions",
                 "google",
+                "telegram",
                 "advanced"
             ]
             .contains(&view.group),

@@ -165,6 +165,16 @@ const SETTINGS: &[Setting] = &[
     },
     Setting {
         table: "daemon",
+        field: "telegram_token_ref",
+        kind: Kind::File,
+        help: "file holding the Telegram bot token (set the token itself with `jarvis keys set telegram`)",
+        group: "telegram",
+        default: None,
+        unset_means: "Off: JARVIS has no Telegram chat. Create a bot with @BotFather, paste its token here, then send the bot a message and enter the code it replies with.",
+        example: "",
+    },
+    Setting {
+        table: "daemon",
         field: "tool_workspace_roots",
         kind: Kind::Folders,
         help: "folders the assistant may read and write (replaces the list)",
@@ -731,6 +741,8 @@ pub enum SecretKind {
     Google,
     /// The key of the different provider the fallback model is asked at.
     Fallback,
+    /// The Telegram bot token.
+    Telegram,
 }
 
 impl SecretKind {
@@ -746,7 +758,8 @@ impl SecretKind {
             "search" => Ok(Self::Search),
             "google" => Ok(Self::Google),
             "fallback" => Ok(Self::Fallback),
-            _ => Err("name the key: model, voice, search, google or fallback".to_owned()),
+            "telegram" => Ok(Self::Telegram),
+            _ => Err("name the key: model, voice, search, google, fallback or telegram".to_owned()),
         }
     }
 
@@ -757,6 +770,7 @@ impl SecretKind {
             Self::Search => "search_api_key_ref",
             Self::Google => "google_client_secret_ref",
             Self::Fallback => "executor_fallback_api_key_ref",
+            Self::Telegram => "telegram_token_ref",
         }
     }
 
@@ -767,6 +781,7 @@ impl SecretKind {
             Self::Search => "search.key",
             Self::Google => "google.key",
             Self::Fallback => "fallback.key",
+            Self::Telegram => "telegram.key",
         }
     }
 
@@ -779,6 +794,7 @@ impl SecretKind {
             Self::Search => "OLLAMA_API_KEY",
             Self::Google => "GOOGLE_CLIENT_SECRET",
             Self::Fallback => "JARVIS_FALLBACK_API_KEY",
+            Self::Telegram => "JARVIS_TELEGRAM_TOKEN",
         }
     }
 }
@@ -867,6 +883,7 @@ pub fn remove_secret(paths: &AppPaths, kind: SecretKind) -> Result<(), String> {
             SecretKind::Search => &["search_api_key_ref"],
             SecretKind::Google => &["google_client_secret_ref"],
             SecretKind::Fallback => &["executor_fallback_api_key_ref"],
+            SecretKind::Telegram => &["telegram_token_ref"],
             _ => &["speech_api_key_ref", "speech_voice_id", "speech_model"],
         };
         for field in dependent {

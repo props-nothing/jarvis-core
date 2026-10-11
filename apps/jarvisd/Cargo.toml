@@ -11,6 +11,8 @@ publish.workspace = true
 # composition root and forbids Axum in `jarvis-core`, `jarvis-application`, and
 # `jarvis-storage`. DTOs stay in `jarvis-protocol`.
 axum = { workspace = true }
+# Six random digits for the Telegram pairing code.
+getrandom.workspace = true
 jarvis-application.workspace = true
 # Google sign-in reuses the connector crate's PKCE, loopback and state-validation types (ADR-0149).
 jarvis-connectors.workspace = true

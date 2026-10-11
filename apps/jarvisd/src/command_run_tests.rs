@@ -164,6 +164,43 @@ fn a_link_out_of_the_granted_folder_is_refused() {
     assert!(reason.contains("outside"), "{reason}");
 }
 
+/// **A Node crash while exiting, after complete output, is explained instead of left to read as a failure.**
+#[test]
+fn a_node_exit_crash_after_complete_output_carries_a_note() {
+    let ends = |text: &str| Ends {
+        head: text.as_bytes().to_vec(),
+        tail: Vec::new(),
+        omitted: 0,
+    };
+    let crash = ends(
+        "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 94",
+    );
+    let output = ends("results");
+    assert!(exit_note(Some(WINDOWS_FAIL_FAST), &output, &crash).is_some());
+    // Every part of the signature is needed: another exit code, a different crash, or no output at all gets no reassurance.
+    assert!(exit_note(Some(1), &output, &crash).is_none());
+    assert!(exit_note(Some(WINDOWS_FAIL_FAST), &output, &ends("stack overflow")).is_none());
+    assert!(exit_note(Some(WINDOWS_FAIL_FAST), &Ends::default(), &crash).is_none());
+    assert!(exit_note(None, &output, &crash).is_none());
+    let body = report(
+        Some(WINDOWS_FAIL_FAST),
+        false,
+        &output,
+        &crash,
+        false,
+        Duration::from_secs(1),
+        UtcTimestamp::now(&jarvis_core::SystemClock),
+    );
+    let said = body
+        .output()
+        .map(|output| output.content().to_owned())
+        .unwrap_or_default();
+    assert!(
+        said.contains("\"note\"") && said.contains("known Windows libuv assertion"),
+        "{said}"
+    );
+}
+
 /// **The child inherits what a toolchain needs and nothing that carries a secret.**
 #[test]
 fn the_environment_is_an_allowlist() {
@@ -171,6 +208,8 @@ fn the_environment_is_an_allowlist() {
         ("Path", "C:\\bin"),
         ("PATHEXT", ".EXE"),
         ("HOME", "/home/me"),
+        ("COMPUTERNAME", "DESKTOP-X"),
+        ("UserDomain", "DESKTOP-X"),
         ("JARVIS_MODEL_KEY", "k-1"),
         ("JARVIS_VOICE_KEY", "k-2"),
         ("ELEVENLABS_API_KEY", "k-3"),
@@ -189,6 +228,16 @@ fn the_environment_is_an_allowlist() {
         "PATH is found under one name"
     );
     assert_eq!(environment.get("HOME"), Some(&OsString::from("/home/me")));
+    // Windows programs such as `shutdown.exe` fail with error 203 without the machine and domain names (the owner's audit, cycle 6).
+    assert_eq!(
+        environment.get("COMPUTERNAME"),
+        Some(&OsString::from("DESKTOP-X"))
+    );
+    assert!(
+        environment
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("USERDOMAIN"))
+    );
     assert_eq!(environment.get("CI"), Some(&OsString::from("1")));
     for secret in [
         "JARVIS_MODEL_KEY",

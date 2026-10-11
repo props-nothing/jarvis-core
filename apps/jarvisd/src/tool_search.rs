@@ -254,7 +254,96 @@ pub fn search_body(waiting: &BTreeMap<String, Vec<Entry>>, query: &str) -> Value
     })
 }
 
-/// The adapter behind `jarvis.tools.search`.
+/// The most already-offered tools a search names.
+const MAX_ALREADY_OFFERED: usize = 8;
+
+/// Words that say nothing about which tool is meant.
+const NOISE: &[&str] = &[
+    "the", "and", "for", "with", "tool", "tools", "use", "want", "need", "can", "all", "any",
+    "from", "that", "this", "how", "please",
+];
+
+/// The tools the model **already has** that fit a query: native tools and small servers, which are always offered and so are never
+/// among the held-back groups. A search for "gmail calendar contacts" used to answer "nothing matched" and send the model hunting for
+/// tools it was already holding; this names them. Deterministic: id words count 3, description words 1.
+#[must_use]
+pub fn already_offered(
+    entries: &[Entry],
+    waiting: &BTreeMap<String, Vec<Entry>>,
+    query: &str,
+) -> Vec<Entry> {
+    let words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.chars().count() > 1)
+        .map(str::to_lowercase)
+        .filter(|word| !NOISE.contains(&word.as_str()))
+        .collect();
+    let held: BTreeSet<&str> = waiting
+        .values()
+        .flatten()
+        .map(|entry| entry.id.as_str())
+        .collect();
+    let mut scored: Vec<(usize, &Entry)> = entries
+        .iter()
+        .filter(|entry| !held.contains(entry.id.as_str()) && entry.id != SEARCH_TOOL)
+        .filter_map(|entry| {
+            let id = entry.id.to_lowercase();
+            let description = entry.description.to_lowercase();
+            let score: usize = words
+                .iter()
+                .map(|word| {
+                    usize::from(id.contains(word.as_str())) * 3
+                        + usize::from(description.contains(word.as_str()))
+                })
+                .sum();
+            (score > 0).then_some((score, entry))
+        })
+        .collect();
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored
+        .into_iter()
+        .take(MAX_ALREADY_OFFERED)
+        .map(|(_, entry)| entry.clone())
+        .collect()
+}
+
+/// A search over everything: the held-back groups as before, plus the matching tools that are already offered.
+#[must_use]
+pub fn search_everything(
+    entries: &[Entry],
+    waiting: &BTreeMap<String, Vec<Entry>>,
+    query: &str,
+) -> Value {
+    let mut body = search_body(waiting, query);
+    let offered = already_offered(entries, waiting, query);
+    if offered.is_empty() {
+        return body;
+    }
+    let listed: Vec<Value> = offered
+        .iter()
+        .map(|entry| {
+            let description: String = entry
+                .description
+                .chars()
+                .take(MAX_DESCRIPTION_CHARS)
+                .collect();
+            json!({ "id": entry.id, "description": description })
+        })
+        .collect();
+    let found_nothing_held = body["found_groups"].as_array().is_none_or(Vec::is_empty);
+    if let Some(object) = body.as_object_mut() {
+        object.insert("already_available".to_owned(), Value::Array(listed));
+        if found_nothing_held {
+            object.insert(
+                "note".to_owned(),
+                json!("These tools already match and are available to call now (no need to search for them again); nothing else was held back that matched."),
+            );
+        }
+    }
+    body
+}
+
+/// The adapter behind ``jarvis.tools.search``.
 pub struct ToolSearchTool {
     /// Set once the pipeline exists, because the pipeline holds this adapter. A `Weak`, so the two do not keep each other alive.
     pipeline: OnceLock<Weak<ToolPipeline>>,
@@ -372,8 +461,9 @@ impl ToolExecutor for ToolSearchTool {
             .get()
             .and_then(Weak::upgrade)
             .ok_or_else(|| refused("the tool list is not available"))?;
-        let waiting = deferred_groups(&entries_of(&pipeline));
-        let body = search_body(&waiting, query);
+        let entries = entries_of(&pipeline);
+        let waiting = deferred_groups(&entries);
+        let body = search_everything(&entries, &waiting, query);
         let evidence = ProviderEvidence::new("tools:search").ok();
         let record = evidence
             .as_ref()
@@ -486,6 +576,60 @@ mod tests {
             body["note"]
                 .as_str()
                 .is_some_and(|note| note.contains("browser"))
+        );
+    }
+
+    /// **A search for tools the model already holds names them, instead of saying nothing matched.**
+    #[test]
+    fn a_search_names_the_native_tools_already_offered() {
+        let mut entries = catalog();
+        entries.push(entry("jarvis.gmail.search", "Searches the owner's Gmail"));
+        entries.push(entry("jarvis.gmail.send", "Sends an email"));
+        entries.push(entry("jarvis.calendar.events", "Lists calendar events"));
+        entries.push(entry("jarvis.contacts.search", "Finds contacts"));
+        entries.push(entry(SEARCH_TOOL, "Finds more tools"));
+        let waiting = deferred_groups(&entries);
+        let body = search_everything(&entries, &waiting, "gmail calendar contacts");
+        let ids: Vec<&str> = body["already_available"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{body}"))
+            .iter()
+            .filter_map(|tool| tool["id"].as_str())
+            .collect();
+        for wanted in [
+            "jarvis.gmail.search",
+            "jarvis.gmail.send",
+            "jarvis.calendar.events",
+            "jarvis.contacts.search",
+        ] {
+            assert!(ids.contains(&wanted), "{wanted} missing from {ids:?}");
+        }
+        assert!(
+            !ids.iter().any(|id| id.starts_with("mcp.browser")),
+            "a held-back tool is not already available"
+        );
+        assert!(!ids.contains(&SEARCH_TOOL));
+        assert_eq!(body["found_groups"], json!([]));
+        assert!(
+            body["note"]
+                .as_str()
+                .is_some_and(|note| note.contains("already match")),
+            "{body}"
+        );
+        // A query that finds a held-back group still opens it, and also lists what is already offered.
+        let both = search_everything(&entries, &waiting, "click a link and search gmail");
+        assert_eq!(both["found_groups"], json!(["browser"]));
+        assert!(
+            both["already_available"]
+                .as_array()
+                .is_some_and(|list| !list.is_empty())
+        );
+        // Noise words alone match nothing, and a query about nothing leaves the old answer untouched.
+        assert!(already_offered(&entries, &waiting, "the tool for all").is_empty());
+        assert!(
+            search_everything(&entries, &waiting, "xyzzy plugh")
+                .get("already_available")
+                .is_none()
         );
     }
 

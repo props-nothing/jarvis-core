@@ -225,6 +225,10 @@ async fn announce(state: &GatewayState, run: &jarvis_storage::StoredRun, task: &
         "A scheduled task did not finish."
     };
     let shown = answer.unwrap_or_else(|| format!("This scheduled task did not finish: {task}"));
+    // The phone gets it whether or not a console is open: the owner is probably not at the computer.
+    if let Some(telegram) = state.telegram() {
+        telegram.tell(&shown).await;
+    }
     tell_owner(state, &shown, pushed, 3).await;
 }
 /// Runs one scheduler pass at `now`.

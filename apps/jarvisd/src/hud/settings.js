@@ -20,6 +20,7 @@ window.JarvisSettings = function (context) {
       ["connect", "Connect apps", "Let your other AI apps (Claude Code, Cursor, VS Code, your own scripts) hand JARVIS a task. They connect with a key only you have."],
       ["permissions", "Permissions", "For each tool: let the rules decide, always ask, run without asking, or switch it off."],
       ["google", "Google", "Sign in with your Google account so JARVIS can read your mail and calendar. Reading is on by default. Sending mail and adding events need the option below and ask you every time; drafts are saved without asking."],
+      ["telegram", "Telegram", "Talk to JARVIS from your phone. It answers in a Telegram chat only you can use, and asks you there when it needs your approval."],
       ["advanced", "Advanced", "Ports and other technical settings. The defaults are right for almost everyone. Letting other apps use JARVIS is under Connect apps."]
     ];
     var sview = { reply: null, tools: [], tab: "brain" };
@@ -520,8 +521,112 @@ window.JarvisSettings = function (context) {
       }
       loadGoogle();
     }
-    // ---- MCP servers: list what each one became, test one before adding it, add, remove (P11-001) -------------------------
-    // A command is typed on one line and split here into a program and its arguments (quotes keep a path with spaces together).
+    // ---- Telegram: a bot token, a first message to the bot, and the code it answers with --------------------------------------
+    // No restart: the daemon reads the token fresh, so the status below turns by itself as each step is done.
+    var telegramPoll = 0;
+    function telegramPanel(body) {
+      var keyState = sview.reply && sview.reply.keys && sview.reply.keys.telegram ? sview.reply.keys.telegram.state : "unknown";
+      var help = el("div", "card");
+      help.appendChild(el("h4", "", "Setup, once"));
+      var steps = el("ol");
+      ["In Telegram, open @BotFather and send /newbot. Pick a name; it gives you a token.",
+       "Paste the token below and press Save token.",
+       "Open your new bot in Telegram and send it any message. It replies with a six digit code.",
+       "Enter the code here. From then on only your chat is answered; everyone else is ignored."].forEach(function (text) {
+        steps.appendChild(el("li", "", text));
+      });
+      help.appendChild(steps);
+      help.appendChild(el("p", "lead", "Messages go through Telegram's servers, so treat this chat like any cloud chat. Nothing needs to be opened on your network."));
+      body.appendChild(help);
+      var row = el("div", "set-row");
+      var name = el("span", "name", "Bot token");
+      name.appendChild(el("span", "badge " + (keyState === "set" ? "on" : "off"), keyState));
+      var field = el("input");
+      field.type = "password";
+      field.autocomplete = "off";
+      field.placeholder = keyState === "set" ? "set; paste a new token to replace it (this unpairs the chat)" : "123456:ABC-DEF...";
+      var acts = el("div", "acts");
+      var save = el("button", "", "Save token");
+      save.addEventListener("click", function () {
+        var value = field.value;
+        field.value = "";
+        if (!value.trim()) { settingsNote("Paste the token first.", true); return; }
+        putJson("/settings/keys/telegram", "PUT", { key: value }).then(function () {
+          settingsNote("Token saved. Now send your bot a message in Telegram.");
+          loadSettings();
+        }, function (error) { settingsNote(explain(error, "That token was refused."), true); });
+      });
+      acts.appendChild(save);
+      row.appendChild(name);
+      row.appendChild(field);
+      row.appendChild(acts);
+      row.appendChild(el("span", "help", "Stored in a private file on this machine and never shown again."));
+      body.appendChild(row);
+      var card = el("div", "card");
+      card.appendChild(el("h4", "", "Status"));
+      var line = el("p", "lead", "Checking...");
+      var more = el("div", "acts");
+      card.appendChild(line);
+      card.appendChild(more);
+      body.appendChild(card);
+      function paint(status) {
+        more.replaceChildren();
+        var bot = status.bot ? "@" + status.bot : "your bot";
+        if (status.state === "paired") {
+          line.textContent = "Paired with " + (status.paired_as || "your Telegram account") + " through " + bot + ". Write to the bot as you would here; approvals arrive as buttons.";
+          var out = el("button", "danger", "Disconnect this chat");
+          out.addEventListener("click", function () {
+            out.disabled = true;
+            putJson("/telegram/unpair", "POST").then(function () { settingsNote("Chat disconnected."); poll(); },
+              function (error) { settingsNote(explain(error, "Could not disconnect."), true); out.disabled = false; });
+          });
+          more.appendChild(out);
+        } else if (status.state === "waiting_for_code") {
+          line.textContent = "Your bot sent a six digit code to Telegram. Enter it to finish.";
+          var code = el("input");
+          code.type = "text";
+          code.inputMode = "numeric";
+          code.maxLength = 6;
+          code.placeholder = "123456";
+          var go = el("button", "yes", "Pair");
+          function pair() {
+            go.disabled = true;
+            putJson("/telegram/pair", "POST", { code: code.value }).then(function (reply) {
+              settingsNote("Paired with " + reply.paired_as + ".");
+              poll();
+            }, function (error) { settingsNote(explain(error, "That code was refused."), true); go.disabled = false; });
+          }
+          go.addEventListener("click", pair);
+          code.addEventListener("keydown", function (event) { if (event.key === "Enter") pair(); });
+          more.appendChild(code);
+          more.appendChild(go);
+        } else if (status.state === "waiting_for_message") {
+          line.textContent = "Connected to " + bot + ". Now send it a message in Telegram; it replies with a code.";
+        } else if (status.state === "error") {
+          line.textContent = status.problem || "Telegram is not working.";
+        } else {
+          line.textContent = keyState === "set" ? "Starting..." : "Not connected. Paste the bot token above.";
+        }
+        if (keyState === "set" && status.state !== "paired") {
+          var remove = el("button", "", "Remove the bot");
+          remove.addEventListener("click", function () {
+            putJson("/settings/keys/telegram", "DELETE").then(function () { settingsNote("Telegram removed."); loadSettings(); },
+              function (error) { settingsNote(explain(error, "Could not remove it."), true); });
+          });
+          more.appendChild(remove);
+        }
+      }
+      function poll() {
+        api("/telegram").then(paint, function () { line.textContent = "Telegram is not available on this daemon."; });
+      }
+      clearInterval(telegramPoll);
+      poll();
+      telegramPoll = setInterval(function () {
+        if ($("settings").hidden || sview.tab !== "telegram") { clearInterval(telegramPoll); return; }
+        poll();
+      }, 2000);
+    }
+    // ---- MCP servers: list what each one became, test one before adding it, add, remove (P11-001) -------------------------    // A command is typed on one line and split here into a program and its arguments (quotes keep a path with spaces together).
     // The daemon resolves the program and checks the whole entry before it writes anything; a change applies on restart.
     function splitCommand(text) {
       var parts = [], current = "", quote = "", started = false;
@@ -829,6 +934,8 @@ window.JarvisSettings = function (context) {
         permissionsPanel(body);
       } else if (sview.tab === "google") {
         googlePanel(body);
+      } else if (sview.tab === "telegram") {
+        telegramPanel(body);
       } else {
         inGroup("advanced").filter(function (s) { return s.key !== "daemon.mcp_serve_port"; }).forEach(function (s) { body.appendChild(settingRow(s)); });
         programsPanel(body);

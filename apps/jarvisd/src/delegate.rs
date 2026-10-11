@@ -58,6 +58,8 @@ pub const DELEGATE_TOOL: &str = "jarvis.agent.delegate";
 
 /// Reads a sub-agent's state and answer.
 pub const RESULT_TOOL: &str = "jarvis.agent.result";
+/// Lists the sub-agents, running and finished.
+pub const LIST_TOOL: &str = "jarvis.agent.list";
 
 /// The scope both tools need. Held by the daemon's own surface, withheld from a sub-agent by the executor.
 pub const AGENT_SCOPE: &str = "agent.delegate";
@@ -90,6 +92,10 @@ const TIMEOUT_SECONDS: u32 = 120;
 
 /// Characters of a sub-agent's answer returned, which JSON escaping at most doubles.
 const MAX_ANSWER_CHARS: usize = 3000;
+/// The most sub-agents `jarvis.agent.list` names.
+const MAX_LISTED_SUBAGENTS: usize = 20;
+/// The most sub-agents that may be unsettled at once, working or parked for an approval.
+pub const MAX_UNSETTLED_SUBAGENTS: usize = 16;
 
 const _: () = assert!(
     2 * (MAX_ANSWER_CHARS + 100) + 1000 <= MAX_MODEL_FACING_RESULT_CHARS,
@@ -141,6 +147,13 @@ const DELEGATE_INPUT: &str = r#"{
   }
 }"#;
 
+const LIST_INPUT: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}"#;
+
 const RESULT_INPUT: &str = r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
@@ -163,7 +176,7 @@ const OUTPUT: &str = r#"{
   "properties": {
     "outcome": {
       "type": "string",
-      "enum": ["completed", "failed", "cancelled", "running", "started", "waiting_for_approval", "refused"]
+      "enum": ["completed", "failed", "cancelled", "running", "started", "waiting_for_approval", "refused", "listed"]
     },
     "run_id": { "type": "string" },
     "answer": { "type": ["string", "null"], "description": "The sub-agent's answer, fenced as untrusted data." },
@@ -228,7 +241,16 @@ impl AgentTool {
             ToolEffect::ReadOnly,
             0,
         )?;
-        Ok(vec![delegate, result])
+        let list = Self::definition(
+            LIST_TOOL,
+            "List sub-agents",
+            "Lists the sub-agents of this workspace that are running or recently finished, with their run ids, state and the start of their task. \
+             Use it when jarvis.agent.delegate says too many are running, to find and collect them with jarvis.agent.result.",
+            LIST_INPUT,
+            ToolEffect::ReadOnly,
+            0,
+        )?;
+        Ok(vec![delegate, result, list])
     }
 
     fn definition(
@@ -280,7 +302,7 @@ impl ToolExecutor for AgentTool {
         request: &ToolExecutionRequest,
     ) -> Result<ToolCallResult, AdapterError> {
         let tool = request.tool().to_string();
-        if tool != DELEGATE_TOOL && tool != RESULT_TOOL {
+        if tool != DELEGATE_TOOL && tool != RESULT_TOOL && tool != LIST_TOOL {
             return Err(AdapterError::NotImplemented { tool });
         }
         let now = UtcTimestamp::now(&SystemClock);
@@ -292,6 +314,8 @@ impl ToolExecutor for AgentTool {
         let body = if tool == DELEGATE_TOOL {
             self.delegate(request.call_id(), request.arguments())
                 .await?
+        } else if tool == LIST_TOOL {
+            self.list().await?
         } else {
             self.result(request.arguments()).await?
         };
@@ -323,12 +347,22 @@ impl AgentTool {
             .map(|identity| identity.workspace_id().to_owned())
             .map_err(|_| refused("the local identity is not available"))?;
         let active = self.active_subagents(&workspace).await?;
+        let unsettled = self.unsettled_subagents(&workspace).await?;
+        if unsettled >= MAX_UNSETTLED_SUBAGENTS {
+            return Ok(json!({
+                "outcome": "refused",
+                "run_id": "",
+                "detail": format!(
+                    "{unsettled} sub-agents have not finished (some wait for the user's approval); see them with jarvis.agent.list, collect what is done with jarvis.agent.result and ask the user to answer the pending approvals"
+                ),
+            }));
+        }
         if active >= MAX_ACTIVE_SUBAGENTS {
             return Ok(json!({
                 "outcome": "refused",
                 "run_id": "",
                 "detail": format!(
-                    "{active} sub-agents are already running, which is the most at once; collect one with jarvis.agent.result first"
+                    "{active} sub-agents are already running, which is the most at once; see them with jarvis.agent.list and collect one with jarvis.agent.result first"
                 ),
             }));
         }
@@ -402,15 +436,85 @@ impl AgentTool {
             .await
     }
 
-    /// Counts sub-agents of the workspace that have not settled.
-    async fn active_subagents(&self, workspace: &str) -> Result<usize, AdapterError> {
+    /// The sub-agents of the workspace that have not settled, newest first.
+    async fn active_runs(&self, workspace: &str) -> Result<Vec<StoredRun>, AdapterError> {
         let recent = jarvis_storage::read_recent_runs(&self.database, workspace, 50)
             .await
             .map_err(|_| refused("the recent runs could not be read"))?;
         Ok(recent
-            .iter()
+            .into_iter()
             .filter(|run| !run.state().is_terminal() && is_delegated_objective(run.objective()))
+            .collect())
+    }
+
+    /// Counts the sub-agents that are **working**. One parked for the owner's approval holds no compute, so it does not hold a slot: before
+    /// this, four sub-agents waiting on approvals nobody had answered blocked every new delegation for hours.
+    async fn active_subagents(&self, workspace: &str) -> Result<usize, AdapterError> {
+        Ok(self
+            .active_runs(workspace)
+            .await?
+            .iter()
+            .filter(|run| run.state() != jarvis_core::RunState::AwaitingApproval)
             .count())
+    }
+
+    /// Counts every sub-agent that has not settled, parked ones included.
+    async fn unsettled_subagents(&self, workspace: &str) -> Result<usize, AdapterError> {
+        Ok(self.active_runs(workspace).await?.len())
+    }
+
+    /// `jarvis.agent.list`: every recent sub-agent with its state and the start of its task. The slots are global to the workspace and
+    /// were invisible: a model told "4 are running" had no way to find which, so a scheduled run could be blocked for hours by
+    /// sub-agents it could not see (the owner's capability audit, cycle 7).
+    async fn list(&self) -> Result<Value, AdapterError> {
+        let workspace = jarvis_storage::load_local_identity(&self.database)
+            .await
+            .map(|identity| identity.workspace_id().to_owned())
+            .map_err(|_| refused("the local identity is not available"))?;
+        let recent = jarvis_storage::read_recent_runs(&self.database, &workspace, 50)
+            .await
+            .map_err(|_| refused("the recent runs could not be read"))?;
+        let mut agents = Vec::new();
+        let mut running = 0_usize;
+        for run in recent
+            .iter()
+            .filter(|run| is_delegated_objective(run.objective()))
+            .take(MAX_LISTED_SUBAGENTS)
+        {
+            let state = if run.state() == jarvis_core::RunState::AwaitingApproval {
+                "waiting_for_approval"
+            } else if !run.state().is_terminal() {
+                running += 1;
+                "running"
+            } else {
+                match run.terminal_outcome() {
+                    Some(RunOutcome::Succeeded) => "completed",
+                    Some(RunOutcome::Cancelled) => "cancelled",
+                    _ => "failed",
+                }
+            };
+            let task: String = run
+                .objective()
+                .strip_prefix(DELEGATED_NOTICE)
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect();
+            agents.push(json!({
+                "run_id": run.id(),
+                "state": state,
+                "started_at": run.started_at().to_string(),
+                // Written by a model, possibly from a page it read: shown as data.
+                "task": IsolatedText::new(&task).ok().map(|text| text.render()),
+            }));
+        }
+        Ok(json!({
+            "outcome": "listed",
+            "run_id": "",
+            "running": running,
+            "limit": MAX_ACTIVE_SUBAGENTS,
+            "agents": agents,
+        }))
     }
 
     /// Waits up to `limit` for the run to settle or park, and describes where it is.
@@ -505,7 +609,7 @@ mod tests {
     #[test]
     fn both_definitions_are_accepted_and_share_one_scope() {
         let definitions = AgentTool::definitions().unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(definitions.len(), 2);
+        assert_eq!(definitions.len(), 3);
         for definition in &definitions {
             assert!(
                 definition.id().to_string().starts_with(AGENT_TOOL_PREFIX),

@@ -157,6 +157,7 @@ pub async fn list(State(state): State<GatewayState>) -> Response {
             "search": key_json(&context.paths, SecretKind::Search),
             "google": key_json(&context.paths, SecretKind::Google),
             "fallback": key_json(&context.paths, SecretKind::Fallback),
+            "telegram": key_json(&context.paths, SecretKind::Telegram),
                 },
             });
             (StatusCode::OK, Json(body)).into_response()
@@ -396,6 +397,12 @@ pub async fn set_key(
     };
     match settings::set_secret(&context.paths, kind, &body.key) {
         Ok(_) => {
+            // A different bot is a different chat: the old pairing means nothing to it.
+            if kind == SecretKind::Telegram
+                && let Some(bridge) = state.telegram()
+            {
+                bridge.unpair();
+            }
             tracing::info!(key = %which, "a key was set from the settings screen");
             let body = json!({ "saved": true, "restart_to_apply": true, "key": key_json(&context.paths, kind) });
             (StatusCode::OK, Json(body)).into_response()
@@ -418,6 +425,16 @@ pub async fn remove_key(
         Err(message) => return refused(&message),
     };
     match settings::remove_secret(&context.paths, kind) {
+        Ok(()) if kind == SecretKind::Telegram => {
+            if let Some(bridge) = state.telegram() {
+                bridge.unpair();
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "saved": true, "restart_to_apply": false })),
+            )
+                .into_response()
+        }
         Ok(()) => (
             StatusCode::OK,
             Json(json!({ "saved": true, "restart_to_apply": true })),

@@ -13,6 +13,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use roxmltree::{Document, Node, ParsingOptions};
 use thiserror::Error;
 
+mod write;
+pub use write::{WriteError, write_csv, write_docx, write_xlsx};
+
 /// The largest input accepted, in bytes.
 pub const MAX_INPUT_BYTES: usize = 10 * 1024 * 1024;
 /// The most text one extraction produces, in characters. Longer documents are cut and say so.

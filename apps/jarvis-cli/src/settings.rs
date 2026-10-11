@@ -125,7 +125,7 @@ fn show(paths: &AppPaths, json: bool) -> Result<(), String> {
 
 fn kind_of(word: Option<&String>) -> Result<SecretKind, String> {
     word.map_or_else(
-        || Err("name the key: model, voice, search, google or fallback".to_owned()),
+        || Err("name the key: model, voice, search, google, fallback or telegram".to_owned()),
         |word| SecretKind::parse(word),
     )
 }
@@ -187,6 +187,10 @@ pub async fn keys(
             Ok(SecretKind::Voice) => test_voice(paths, credential).await,
             Ok(SecretKind::Search) => test_search(paths).await,
             Ok(SecretKind::Fallback) => test_fallback(paths).await,
+            Ok(SecretKind::Telegram) => Err(
+                "the Telegram token is checked by pairing: open the console, Settings, Telegram"
+                    .to_owned(),
+            ),
             Ok(SecretKind::Google) => Err(
                 "the Google secret is checked by signing in: open the console, Settings, Google"
                     .to_owned(),
@@ -205,10 +209,11 @@ fn status(paths: &AppPaths, json: bool) -> Result<(), String> {
     let search = settings::key_state(paths, SecretKind::Search)?;
     let google = settings::key_state(paths, SecretKind::Google)?;
     let fallback = settings::key_state(paths, SecretKind::Fallback)?;
+    let telegram = settings::key_state(paths, SecretKind::Telegram)?;
     if json {
         println!(
             "{}",
-            serde_json::json!({ "model": model.state, "voice": voice.state, "search": search.state, "google": google.state, "fallback": fallback.state })
+            serde_json::json!({ "model": model.state, "voice": voice.state, "search": search.state, "google": google.state, "fallback": fallback.state, "telegram": telegram.state })
         );
         return Ok(());
     }
@@ -218,6 +223,7 @@ fn status(paths: &AppPaths, json: bool) -> Result<(), String> {
         ("search", search),
         ("google", google),
         ("fallback", fallback),
+        ("telegram", telegram),
     ] {
         println!(
             "{name:<8} {:<13} {}",

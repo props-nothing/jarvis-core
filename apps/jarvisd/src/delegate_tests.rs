@@ -272,3 +272,122 @@ async fn a_parked_sub_agent_is_reported_as_waiting_for_the_user() {
         "reading a sub-agent must not move it"
     );
 }
+
+/// **`list` names the sub-agents that hold the slots, with their ids and state, and shows nothing of an ordinary run.**
+///
+/// The audit (cycle 7): four invisible sub-agents blocked every new delegation and nothing could say which they were.
+#[tokio::test]
+async fn list_names_the_sub_agents_holding_the_slots_and_nothing_else() {
+    let fixture = fixture().await;
+    let _private = start(&fixture, "an ordinary private run").await;
+    let waiting = start(
+        &fixture,
+        &format!("{DELEGATED_NOTICE}research the first company"),
+    )
+    .await;
+    let second = start(
+        &fixture,
+        &format!("{DELEGATED_NOTICE}research the second company"),
+    )
+    .await;
+    let parent = start(&fixture, "what is running").await;
+    let model = parent_model(vec![
+        Turn::tool_call("c1", LIST_TOOL, "{}"),
+        Turn::answer("Two are going."),
+    ]);
+    drive_parent(&fixture, &model, &parent.run_id).await;
+    let results = tool_results(&model);
+    assert!(results[0].contains(r#""outcome":"listed""#), "{results:?}");
+    assert!(results[0].contains(&waiting.run_id), "{results:?}");
+    assert!(results[0].contains(&second.run_id), "{results:?}");
+    assert!(
+        results[0].contains("research the first company"),
+        "{results:?}"
+    );
+    // The task is data a model wrote: fenced. An ordinary run is not listed, and its words never appear.
+    assert!(results[0].contains(jarvis_core::FENCE_OPEN), "{results:?}");
+    assert!(!results[0].contains("private"), "{results:?}");
+    assert!(!results[0].contains(&parent.run_id), "{results:?}");
+    assert!(results[0].contains(r#""limit":4"#), "{results:?}");
+}
+
+/// **A sub-agent parked for an approval holds no slot, so it cannot block new work; a pile of them is still capped.**
+#[tokio::test]
+async fn parked_sub_agents_do_not_hold_the_working_slots() {
+    let fixture = fixture().await;
+    let mut parked = Vec::new();
+    for index in 0..MAX_ACTIVE_SUBAGENTS {
+        let child = start(&fixture, &format!("{DELEGATED_NOTICE}held {index}")).await;
+        let mut run = jarvis_storage::find_run(&fixture.database, &child.run_id)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        for next in [
+            jarvis_core::RunState::ContextBuilding,
+            jarvis_core::RunState::Planning,
+            jarvis_core::RunState::AwaitingApproval,
+        ] {
+            run = jarvis_storage::transition_run(
+                &fixture.database,
+                run.id(),
+                run.expectation(),
+                &jarvis_core::RunTransition::new(next, next.required_outcome(), None)
+                    .unwrap_or_else(|error| panic!("{error}")),
+                jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        }
+        parked.push(child.run_id);
+    }
+    let parent = start(&fixture, "delegate despite four waiting").await;
+    let model = parent_model(vec![
+        Turn::tool_call(
+            "c1",
+            DELEGATE_TOOL,
+            r#"{"task":"a fifth","background":true}"#,
+        ),
+        Turn::answer("started"),
+    ]);
+    drive_parent(&fixture, &model, &parent.run_id).await;
+    let results = tool_results(&model);
+    assert!(
+        results[0].contains(r#""outcome":"started""#),
+        "four parked sub-agents blocked a new one: {results:?}"
+    );
+    // The list still shows the parked ones, as waiting.
+    let listing = start(&fixture, "list them").await;
+    let model = parent_model(vec![
+        Turn::tool_call("c1", LIST_TOOL, "{}"),
+        Turn::answer("ok"),
+    ]);
+    drive_parent(&fixture, &model, &listing.run_id).await;
+    let listed = tool_results(&model);
+    assert_eq!(
+        listed[0].matches("waiting_for_approval").count(),
+        MAX_ACTIVE_SUBAGENTS,
+        "{listed:?}"
+    );
+    assert!(parked.iter().all(|id| listed[0].contains(id)));
+}
+
+/// **A refused delegation says where to look.**
+#[tokio::test]
+async fn a_full_house_points_at_the_list() {
+    let fixture = fixture().await;
+    for index in 0..MAX_ACTIVE_SUBAGENTS {
+        start(&fixture, &format!("{DELEGATED_NOTICE}task {index}")).await;
+    }
+    let parent = start(&fixture, "one more").await;
+    let model = parent_model(vec![
+        Turn::tool_call(
+            "c1",
+            DELEGATE_TOOL,
+            r#"{"task":"a fifth","background":true}"#,
+        ),
+        Turn::answer("blocked"),
+    ]);
+    drive_parent(&fixture, &model, &parent.run_id).await;
+    let results = tool_results(&model);
+    assert!(results[0].contains(r#""outcome":"refused""#), "{results:?}");
+    assert!(results[0].contains("jarvis.agent.list"), "{results:?}");
+}

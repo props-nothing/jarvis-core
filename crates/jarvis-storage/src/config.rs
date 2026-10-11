@@ -240,6 +240,9 @@ pub struct DaemonConfig {
     /// File holding the web search provider's key (an absolute path). Without it there is no web search tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     search_api_key_ref: Option<PathBuf>,
+    /// File holding the Telegram bot token (an absolute path), which turns on the Telegram chat (`ADR-0184`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    telegram_token_ref: Option<PathBuf>,
     /// The Google OAuth client id (a Desktop-app client the owner created), which turns on Google sign-in. Not a secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     google_client_id: Option<String>,
@@ -382,6 +385,12 @@ impl DaemonConfig {
         self.search_api_key_ref.as_deref()
     }
 
+    /// The file holding the Telegram bot token, if Telegram is set up.
+    #[must_use]
+    pub fn telegram_token_ref(&self) -> Option<&Path> {
+        self.telegram_token_ref.as_deref()
+    }
+
     /// Whether scheduled results are shown as desktop notifications when no console is open (on unless turned off).
     #[must_use]
     pub fn notifications_enabled(&self) -> bool {
@@ -461,6 +470,7 @@ impl Default for DaemonConfig {
             push_topic: None,
             push_server: None,
             search_api_key_ref: None,
+            telegram_token_ref: None,
             google_client_id: None,
             google_client_secret_ref: None,
             google_actions: None,
@@ -775,6 +785,11 @@ impl Config {
             && !path.is_absolute()
         {
             return Err(ConfigError::InvalidSearchKey);
+        }
+        if let Some(path) = &self.daemon.telegram_token_ref
+            && !path.is_absolute()
+        {
+            return Err(ConfigError::InvalidTelegramKey);
         }
         self.validate_google()?;
         self.validate_push()?;
@@ -1202,6 +1217,9 @@ pub enum ConfigError {
     /// The web search key path was not absolute.
     #[error("daemon.search_api_key_ref must be an absolute path")]
     InvalidSearchKey,
+    /// The Telegram token path was not absolute.
+    #[error("daemon.telegram_token_ref must be an absolute path")]
+    InvalidTelegramKey,
     /// The speech settings were unusable: a relative key path, or a voice or model with no key.
     #[error(
         "daemon.speech_api_key_ref must be an absolute path, and daemon.speech_voice_id and daemon.speech_model \
@@ -1392,6 +1410,7 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "push_topic",
                 "push_server",
                 "search_api_key_ref",
+                "telegram_token_ref",
                 "google_client_id",
                 "google_client_secret_ref",
                 "google_actions",

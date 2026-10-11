@@ -47,7 +47,7 @@ const CORRECT_INPUT: &str = r#"{
   "properties": {
     "memory_id": { "type": "string", "minLength": 36, "maxLength": 36, "description": "The memory_id jarvis.memory.search gave." },
     "claim": { "type": "string", "minLength": 1, "maxLength": 300, "description": "A quotation from the memory being corrected, at least 8 characters (or all of it if shorter). The owner reads this to know which memory; the tool refuses if it is not in that memory." },
-    "corrected": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "The corrected claim, complete: it replaces the old one." }
+    "corrected": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "The corrected claim, complete: it replaces the old one. A memory is one short fact: at most 32 different words (case and punctuation ignored). Longer than that is refused; keep the one fact and put the rest in a project note." }
   }
 }"#;
 
@@ -192,6 +192,7 @@ impl MemoryManageTool {
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .ok_or_else(|| refused("the corrected claim is required"))?;
+        check_claim_length(corrected)?;
         let (id, version) = self.verified_version(arguments).await?;
         let reply = self
             .service
@@ -207,6 +208,31 @@ impl MemoryManageTool {
             .map_err(|error| service_refusal(&error))?;
         Ok(json!({ "corrected": id, "replaced_by": reply.memory_id }))
     }
+}
+
+/// A memory is one short fact: its de-duplication key holds at most [`jarvis_core::MAX_SEARCH_KEY_WORDS`] different words. A longer one
+/// used to be refused with "a search key must be 1 to 32 words", which tells a model nothing (the owner's audit found a correction
+/// refused for this and could not tell why). Said in plain words, and before the owner is asked anything.
+fn check_claim_length(claim: &str) -> Result<(), AdapterError> {
+    let mut words: Vec<String> = Vec::new();
+    for word in claim.split_whitespace() {
+        let normalised: String = word
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect();
+        if !normalised.is_empty() && !words.contains(&normalised) {
+            words.push(normalised);
+        }
+    }
+    if words.len() > jarvis_core::MAX_SEARCH_KEY_WORDS {
+        return Err(refused(&format!(
+            "the corrected claim has {} different words and a memory holds at most {}: keep it to one short fact, and put the rest in a project note",
+            words.len(),
+            jarvis_core::MAX_SEARCH_KEY_WORDS
+        )));
+    }
+    Ok(())
 }
 
 fn text<'a>(arguments: &'a Value, name: &str) -> Option<&'a str> {

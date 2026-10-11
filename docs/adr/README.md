@@ -200,3 +200,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0181](0181-a-daemon-that-cannot-start-says-why-and-connect-apps-takes-a-free-port.md) | A daemon that cannot start says why, and Connect apps takes a free port | Accepted |
 | [0182](0182-a-schedule-can-mean-a-time-of-day-in-a-named-time-zone.md) | A schedule can mean a time of day in a named time zone | Accepted |
 | [0183](0183-the-model-proposes-skills-and-the-owner-approves-with-one-click.md) | The model proposes skills, the owner approves them with one click | Accepted |
+| [0184](0184-telegram-is-a-chat-with-the-same-jarvis-set-up-in-settings.md) | Telegram is a chat with the same JARVIS, set up in Settings | Accepted |
+| [0185](0185-jarvis-writes-spreadsheets-csv-and-word-documents.md) | JARVIS writes spreadsheets, CSV and Word documents | Accepted |
+| [0186](0186-telegram-answers-are-formatted-not-raw-markdown.md) | Telegram answers are formatted, not raw Markdown | Accepted |
+| [0187](0187-fixes-from-the-owners-capability-audit.md) | Fixes from the owner's capability audit | Accepted |

@@ -309,20 +309,31 @@ impl ToolExecutor for McpToolAdapter {
 /// checking for a refusal that would leave it with no honest outcome to report.
 fn bounded_reason(text: &str, remote: &str, fallback: &str) -> String {
     let prefix = format!("mcp:{remote}: ");
-    if prefix.chars().count() >= jarvis_core::MAX_OUTCOME_DETAIL_CHARS {
+    // The recorder counts **bytes** (512) and refuses any control character, so the bound is in bytes and a server's line breaks
+    // become spaces. Playwright's errors are several lines; without this the record could not be built and a refused call was
+    // reported as `unknown` with no reason at all (found by the owner's capability audit, 2026-10-11).
+    if prefix.len() >= jarvis_core::MAX_OUTCOME_DETAIL_CHARS {
         // A tool name so long that the prefix alone fills the bound. Truncating the prefix would hide
         // which tool the reason is about, so the last resort is a reason with no tool in it — still
         // actionable, and still within the bound.
         return "mcp: the refusal reason exceeded the recordable length".to_owned();
     }
-    let budget = jarvis_core::MAX_OUTCOME_DETAIL_CHARS - prefix.chars().count();
-    let trimmed = text.trim();
-    let body: String = if trimmed.is_empty() {
-        fallback.to_owned()
+    let budget = jarvis_core::MAX_OUTCOME_DETAIL_CHARS - prefix.len();
+    let flattened = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flattened: String = flattened.chars().filter(|c| !c.is_control()).collect();
+    let source = if flattened.is_empty() {
+        fallback
     } else {
-        trimmed.chars().take(budget).collect()
+        flattened.as_str()
     };
-    format!("{prefix}{}", body.chars().take(budget).collect::<String>())
+    let mut body = String::new();
+    for character in source.chars() {
+        if body.len() + character.len_utf8() > budget {
+            break;
+        }
+        body.push(character);
+    }
+    format!("{prefix}{body}")
 }
 
 /// Reports a call that completed but whose outcome could not be described.
@@ -427,6 +438,33 @@ mod tests {
         // An empty reason falls back rather than producing "mcp:search: ".
         let empty = bounded_reason("   ", "search", "the tool reported a failure");
         assert!(empty.ends_with("the tool reported a failure"), "{empty}");
+    }
+
+    /// **A multi-line, multi-byte error from a server is still recorded as the failure it is, with its words.**
+    ///
+    /// The audit's `browser_file_upload` came back as `unknown`: the server's error had line breaks, which the recorder refuses, so the
+    /// record could not be built and the reason was lost.
+    #[test]
+    fn a_multi_line_multi_byte_reason_is_recordable_and_keeps_its_words() {
+        let text = "### Error\nTypeError: cannot set files\n\tat \u{201c}upload\u{201d} \u{2014} caf\u{e9}\r\n### Modal state\n- [File chooser]: can be handled by browser_file_upload";
+        let reason = bounded_reason(text, "browser_file_upload", "fallback");
+        assert!(!reason.chars().any(char::is_control), "{reason:?}");
+        assert!(reason.contains("TypeError: cannot set files"), "{reason}");
+        assert!(reason.contains("Modal state"), "{reason}");
+        assert!(ToolOutcomeRecord::failed(reason).is_ok());
+        // Many multi-byte characters: the bound is bytes, so the text is cut earlier but is still recordable.
+        let heavy = bounded_reason(&"\u{20ac}".repeat(400), "tool", "fallback");
+        assert!(
+            heavy.len() <= jarvis_core::MAX_OUTCOME_DETAIL_CHARS,
+            "{}",
+            heavy.len()
+        );
+        assert!(ToolOutcomeRecord::failed(heavy).is_ok());
+        // Nothing but control characters falls back to the caller's sentence.
+        assert!(
+            bounded_reason("\u{7}\n\t", "t", "the tool reported a failure")
+                .ends_with("the tool reported a failure")
+        );
     }
 
     /// **A reason this module builds must be one the recorder accepts.** This is the property that lets

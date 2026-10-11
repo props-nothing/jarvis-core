@@ -13,6 +13,7 @@ mod delegate;
 mod digest_service;
 mod dispatch;
 mod document_tool;
+mod document_write_tool;
 mod entity_service;
 mod executor;
 mod gateway;
@@ -53,6 +54,8 @@ mod skill_tool;
 mod speech_service;
 mod sse;
 mod stop;
+mod telegram;
+mod telegram_format;
 mod tool_activity;
 mod tool_actor;
 mod tool_pipeline;
@@ -236,6 +239,13 @@ enum DaemonError {
         /// Which part was rejected, named by the variant.
         #[source]
         source: crate::delegate::DelegateToolError,
+    },
+    /// The document-writing tool could not state its own contract.
+    #[error("the document-writing tool could not be defined")]
+    WriteDocumentTool {
+        /// Which part was rejected, named by the variant.
+        #[source]
+        source: crate::document_write_tool::WriteDocumentToolError,
     },
     /// The skill-proposal tool could not state its own contract.
     #[error("the skill-proposal tool could not be defined")]
@@ -1078,7 +1088,16 @@ fn push_document_tool(
             document_tool::DocumentTool::definition()
                 .map_err(|source| DaemonError::DocumentTool { source })?,
         ],
-        Arc::new(document_tool::DocumentTool::new(roots)) as Arc<dyn jarvis_tools::ToolExecutor>,
+        Arc::new(document_tool::DocumentTool::new(Arc::clone(&roots)))
+            as Arc<dyn jarvis_tools::ToolExecutor>,
+    ));
+    additional.push((
+        vec![
+            document_write_tool::WriteDocumentTool::definition()
+                .map_err(|source| DaemonError::WriteDocumentTool { source })?,
+        ],
+        Arc::new(document_write_tool::WriteDocumentTool::new(roots))
+            as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
     Ok(())
 }
@@ -1570,6 +1589,8 @@ struct HttpTransport {
     /// The scheduler, when the daemon drives runs. It shares the transport's lifetime: a daemon that is shutting
     /// down must not start a run, and a scheduler outliving its listener would fire into a daemon nobody can reach.
     scheduler: Option<tokio::task::JoinHandle<()>>,
+    /// The Telegram chat's loop. It sleeps until a token is saved in Settings, so it runs whenever runs are driven.
+    telegram: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl HttpTransport {
@@ -1617,15 +1638,20 @@ impl HttpTransport {
             Ok(google) => state = state.with_google(google),
             Err(error) => tracing::warn!(%error, "Google sign-in is not available"),
         }
+        let telegram = Arc::new(telegram::TelegramBridge::new(settings.paths().clone()));
         state = state
             .with_settings(settings)
             .with_mcp(mcp_snapshot)
-            .with_mcp_access(mcp_access);
+            .with_mcp_access(mcp_access)
+            .with_telegram(Arc::clone(&telegram));
         // Scheduled tasks fire through the same state the routes use, so a scheduled run is an ordinary run. Only
         // when runs are driven at all: a scheduler over a daemon with no executor would start runs nothing runs.
         let scheduler = state
             .drives_runs()
             .then(|| schedule_service::spawn(state.clone()));
+        let telegram = state
+            .drives_runs()
+            .then(|| tokio::spawn(telegram.run(state.clone())));
         if state.drives_runs() && !interrupted.is_empty() {
             let resumed = state.clone();
             tokio::spawn(async move {
@@ -1652,6 +1678,7 @@ impl HttpTransport {
                 shutdown,
                 handle,
                 scheduler,
+                telegram,
             },
             stopped,
         ))
@@ -1671,6 +1698,9 @@ impl HttpTransport {
         // The scheduler first: nothing new may start while the listener drains.
         if let Some(scheduler) = &self.scheduler {
             scheduler.abort();
+        }
+        if let Some(telegram) = &self.telegram {
+            telegram.abort();
         }
         let _ = self.shutdown.send(());
         if !drain(self.handle, SHUTDOWN_GRACE).await {

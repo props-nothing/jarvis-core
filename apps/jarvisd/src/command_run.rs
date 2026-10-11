@@ -118,6 +118,10 @@ const INHERITED: &[&str] = &[
     "COMMONPROGRAMFILES",
     "USER",
     "USERNAME",
+    // Windows programs that ask the system who they are running as (`shutdown.exe` among them) fail with error 203 without these.
+    // Neither is a secret. Found by the owner's capability audit, 2026-10-11.
+    "COMPUTERNAME",
+    "USERDOMAIN",
     "LOGNAME",
     "SHELL",
     "LANG",
@@ -210,7 +214,8 @@ const OUTPUT_SCHEMA: &str = r#"{
     "stdout": { "type": ["string", "null"], "description": "Standard output (start and end), fenced as untrusted data." },
     "stderr": { "type": ["string", "null"], "description": "Standard error (start and end), fenced as untrusted data." },
     "truncated": { "type": "boolean", "description": "Part of the output was left out." },
-    "seconds": { "type": "number" }
+    "seconds": { "type": "number" },
+    "note": { "type": "string", "description": "Present when the exit status is known not to mean what it usually means." }
   }
 }"#;
 
@@ -800,6 +805,29 @@ fn fenced(ends: &Ends) -> (Option<String>, bool) {
     )
 }
 
+/// Windows status `0xC0000409` as the signed exit code a process reports.
+const WINDOWS_FAIL_FAST: i32 = -1_073_740_791;
+
+/// A plain-words note for a failure that is not the program's work failing.
+///
+/// Node on Windows can hit a libuv assertion while it exits (`src\win\async.c`, `UV_HANDLE_CLOSING`) after the program has already
+/// printed everything. The `skills` CLI does so whenever telemetry is switched off, which JARVIS does for every command
+/// (`DO_NOT_TRACK`, a privacy default kept on purpose). The exit code then reads as a failure although the output is complete, which
+/// is how the owner's capability audit scored `npx skills find` a failure for three cycles. Said only when the signature is exact
+/// and there is output to trust.
+fn exit_note(exit_code: Option<i32>, stdout: &Ends, stderr: &Ends) -> Option<&'static str> {
+    if exit_code != Some(WINDOWS_FAIL_FAST) || (stdout.head.is_empty() && stdout.tail.is_empty()) {
+        return None;
+    }
+    let mut seen = stderr.head.clone();
+    seen.extend_from_slice(&stderr.tail);
+    let seen = String::from_utf8_lossy(&seen);
+    (seen.contains("UV_HANDLE_CLOSING") && seen.contains("async.c")).then_some(
+        "The program finished its work and printed its output, then Node crashed while exiting (a known Windows libuv assertion, not an error \
+         in the program's result). Treat the output as complete; the exit code is not meaningful here.",
+    )
+}
+
 /// Builds the result of a command that ran, or was stopped at its limit.
 fn report(
     exit_code: Option<i32>,
@@ -824,15 +852,18 @@ fn report(
             ),
         )
     };
-    let body = json!({
+    let mut body = json!({
         "outcome": outcome,
         "exit_code": exit_code,
         "stdout": out,
         "stderr": err,
         "truncated": truncated,
         "seconds": (elapsed.as_secs_f64() * 10.0).round() / 10.0,
-    })
-    .to_string();
+    });
+    if let Some(note) = exit_note(exit_code, stdout, stderr) {
+        body["note"] = json!(note);
+    }
+    let body = body.to_string();
     // Confirmed in every case: the command ran and its end was observed. A non-zero exit is an answer about the *program*,
     // which the model reads from `exit_code`, not a failure of the tool.
     let evidence = ProviderEvidence::new(evidence).ok();
