@@ -1989,7 +1989,9 @@
     ["Web", /^jarvis\.web\./, "94,227,255"], ["Files", /^jarvis\.files\./, "107,226,160"], ["Memory", /^jarvis\.memory\./, "176,150,255"],
     ["Sub-agents", /^jarvis\.agent\./, "255,120,214"], ["Commands & code", /^jarvis\.(command|code)\./, "255,138,92"],
     ["Mail & calendar", /^jarvis\.(gmail|calendar)\./, "255,180,84"], ["Schedule", /^jarvis\.schedule\./, "120,240,214"],
-    ["Projects", /^jarvis\.project\./, "150,200,255"], ["Contacts", /^jarvis\.contacts\./, "255,214,120"], ["Skills", /^jarvis\.skill\./, "200,255,150"]
+    ["Projects", /^jarvis\.project\./, "150,200,255"], ["Contacts", /^jarvis\.contacts\./, "255,214,120"], ["Skills", /^jarvis\.skill\./, "200,255,150"],
+    ["Phone", /^jarvis\.voice\./, "255,130,130"], ["Browser", /^mcp\.browser\./, "130,190,255"], ["Documentation", /^mcp\.docs\./, "190,235,150"],
+    ["Other programs", /^mcp\./, "200,180,220"]
   ];
   function families(tools) {
     var groups = FAMILIES.map(function (family) { return { name: family[0], rgb: family[2], tools: [] }; });

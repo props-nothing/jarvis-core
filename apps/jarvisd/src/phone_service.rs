@@ -279,7 +279,7 @@ impl PhoneService {
             .and_then(|path| std::fs::read_to_string(path).ok())
             .map(|text| text.trim().to_owned())
             .filter(|text| !text.is_empty())
-            .ok_or("Phone calls need the ElevenLabs key: add it under Settings, Voice.")?;
+            .ok_or("Phone calls need the ElevenLabs key: add it under Settings, Voice & search.")?;
         let agent_id = daemon
             .phone_agent_id()
             .ok_or("Phone calls need the ElevenLabs agent id: add it under Settings, Phone.")?;

@@ -8,7 +8,7 @@ JARVIS can ring your phone when it needs you ("call me if the deploy fails"), an
 2. In the agent, add JARVIS as an **MCP server**: the address and key are in **Settings, Connect apps**. For tool approval choose *Always Ask* or *Fine-Grained* so the agent asks you out loud before it acts.
 3. Give the agent a prompt that says who it is and that it is on the phone. A start (no custom `{{variables}}`, see below):
    > You are JARVIS, the owner's AI assistant, speaking on the phone. Say that you are an AI. Keep answers short and spoken: no lists, no markdown. If you opened the call, the first thing you said was the reason. Use your tools to help; ask before anything that changes something.
-4. In JARVIS open **Settings, Voice** and save your ElevenLabs key. It must be allowed to use the agents platform, not only speech.
+4. In JARVIS open **Settings, Voice & search** and save your ElevenLabs key. It must be allowed to use the agents platform, not only speech.
 5. Open **Settings, Phone**. Fill in the **agent id**, the **phone number id** (the page lists your numbers and their ids once the key is set) and **your own number** in international format (`+31612345678`). JARVIS rings only the numbers you list; separate several with commas.
 6. Press **Call me now**. Your phone rings; answer it.
 

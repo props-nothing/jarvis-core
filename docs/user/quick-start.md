@@ -73,9 +73,8 @@ jarvis restart                   # apply
 
 Each change is checked by the same rules the daemon starts with and refused, leaving the file untouched, if it would not
 start (for example a voice id without a voice key). Changing one setting changes only that one: your folders, trust list and
-voice stay as they were. The same settings, and the keys, are in the console: press **Settings** in the header. It has seven tabs (Brain, Web search, Voice, Folders & code,
-Permissions, Google, Advanced); each setting shows its default or why it is off. Brain picks a provider and a model from a list, tests it, and sets the fallback. Keys are password fields and are never shown again;
-**Restart to apply** restarts JARVIS with what you saved. [settings.md](settings.md) explains every setting and why a few are off by
+voice stay as they were. The same settings, and the keys, are in the console: press **Settings** in the header. A side list groups the tabs (Brain, Voice & search, Folders & code, Permissions; Google, Telegram, Phone; Connect apps; Alerts, Advanced); each setting says what it does in one line, with the rest under **More**, and on/off settings are switches. Brain picks a provider and a model from a list, tests it, and sets the fallback. Keys are password fields and are never shown again;
+**Restart to apply** restarts JARVIS with what you saved, and the footer says which changes are still waiting for it. [settings.md](settings.md) explains every setting and why a few are off by
 default.
 
 ## Using it

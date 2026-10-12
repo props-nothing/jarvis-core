@@ -95,13 +95,17 @@
   </div>
 </div>
 <div id="settings" class="overlay" hidden>
-  <div class="sheet frame" role="dialog" aria-label="Settings">
+  <div class="sheet wide frame" role="dialog" aria-label="Settings">
     <h2>Settings</h2>
-    <div id="settings-tabs" class="tabs" role="tablist"></div>
-    <div id="settings-note" role="status"></div>
-    <div id="settings-body"></div>
+    <div class="settings-layout">
+      <nav id="settings-tabs" class="sidenav" role="tablist" aria-orientation="vertical"></nav>
+      <div class="settings-main">
+        <div id="settings-note" role="status"></div>
+        <div id="settings-body"></div>
+      </div>
+    </div>
     <div class="foot">
-      <span class="dim" id="settings-hint">Changes apply after a restart.</span>
+      <span class="dim" id="settings-hint">Nothing is waiting for a restart.</span>
       <button id="settings-restart" title="Stops JARVIS and starts it again with the saved settings">Restart to apply</button>
       <button id="settings-close">Close</button>
     </div>
