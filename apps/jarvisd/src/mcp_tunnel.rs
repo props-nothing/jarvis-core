@@ -678,6 +678,18 @@ fn hex_of(bytes: &[u8]) -> String {
 fn digest_matches(bytes: &[u8], expected: &str) -> bool {
     hex_of(&Sha256::digest(bytes)) == expected
 }
+/// A sentence for a failed download that names the status when there is one and never repeats an address or the library's own wording.
+fn download_problem(error: &reqwest::Error) -> String {
+    match error.status() {
+        Some(status) => format!(
+            "GitHub answered with status {} when JARVIS tried to download Cloudflare's program; try again in a few minutes",
+            status.as_u16()
+        ),
+        None => "Cloudflare's program could not be downloaded from GitHub; check your internet connection"
+            .to_owned(),
+    }
+}
+
 async fn download(build: &Build, target: &Path) -> Result<(), String> {
     let address = format!(
         "https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED_VERSION}/{}",
@@ -692,12 +704,11 @@ async fn download(build: &Build, target: &Path) -> Result<(), String> {
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|error| {
-            format!("the download failed ({error}); check your internet connection")
-        })?;
-    let bytes = response.bytes().await.map_err(|error| {
-        format!("the download failed ({error}); check your internet connection")
-    })?;
+        .map_err(|error| download_problem(&error))?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| download_problem(&error))?;
     if bytes.len() > DOWNLOAD_LIMIT_BYTES {
         return Err("the download was larger than expected, so it was thrown away".to_owned());
     }

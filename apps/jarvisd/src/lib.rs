@@ -25,6 +25,7 @@ mod health;
 mod hud;
 mod image_store;
 mod inbound_approvals;
+mod key_test;
 mod mail_mime;
 mod mcp_abilities;
 mod mcp_access;

@@ -102,6 +102,13 @@ window.JarvisSettings = function (context) {
           go.addEventListener("click", function () { goTab(item.tab); });
           what.appendChild(go);
         }
+        if (item.action) {
+          what.appendChild(document.createTextNode(" "));
+          var act = el("button", "link", item.action.label);
+          act.type = "button";
+          act.addEventListener("click", function () { act.disabled = true; item.action.run(function () { act.disabled = false; }); });
+          what.appendChild(act);
+        }
         line.appendChild(what);
         list.appendChild(line);
       });
@@ -170,7 +177,8 @@ window.JarvisSettings = function (context) {
       "daemon.google_actions": "Send mail & add events", "policy.trust": "Runs without asking",
       "daemon.quiet_hours": "Quiet hours", "daemon.resume_interrupted": "Resume cut-off tasks", "daemon.push_topic": "Push topic (ntfy)", "daemon.push_server": "Push server (ntfy)",
       "daemon.phone_agent_id": "Agent id", "daemon.phone_number_id": "Phone number id", "daemon.phone_owner_numbers": "My numbers",
-      "daemon.phone_approves": "My yes on the phone counts", "daemon.phone_opening_line": "JARVIS writes the opening line", "daemon.phone_call_anyone": "JARVIS may call other people", "daemon.phone_screen_callers": "Answer only my own numbers"
+      "daemon.phone_approves": "My yes on the phone counts", "daemon.phone_opening_line": "JARVIS writes the opening line", "daemon.phone_call_anyone": "JARVIS may call other people", "daemon.phone_screen_callers": "Answer only my own numbers",
+      "daemon.phone_calls_per_hour": "Calls per hour", "daemon.phone_calls_per_day": "Calls per day"
     };
     // A one-line statement of what an on/off switch does, shown instead of the long explanation (which is one click away under More).
     var SHORT = {
@@ -302,6 +310,20 @@ window.JarvisSettings = function (context) {
           function (error) { settingsNote(explain(error, "That key was refused."), true); });
       });
       acts.appendChild(save);
+      var result = el("span", "help", "");
+      // A key that is saved can be checked against its provider at once, without waiting for the restart that applies it.
+      if ((which === "voice" || which === "search") && state === "set") {
+        var check = el("button", "", "Test");
+        check.addEventListener("click", function () {
+          check.disabled = true; result.className = "help"; result.textContent = "Asking the provider...";
+          putJson("/settings/keys/" + which + "/test", "POST").then(function (reply) {
+            check.disabled = false;
+            result.className = "help " + (reply.ok ? "good" : "bad");
+            result.textContent = reply.message;
+          }, function (error) { check.disabled = false; result.className = "help bad"; result.textContent = explain(error, "The test could not be run."); });
+        });
+        acts.appendChild(check);
+      }
       if ((which === "voice" || which === "search" || which === "fallback") && state === "set") {
         var remove = el("button", "", "Remove");
         remove.addEventListener("click", function () {
@@ -316,11 +338,12 @@ window.JarvisSettings = function (context) {
       var helps = {
         model: "Stored in a private file on this machine and never shown again. Local Ollama needs no real key.",
         google: "The client secret of your Google OAuth Desktop client. Stored in a private file and never shown again.",
-        voice: "An ElevenLabs API key, from your ElevenLabs account. It also lets the Phone tab place calls, so give it access to the agents platform as well as speech. Stored in a private file and never shown again; what JARVIS says is sent to ElevenLabs to be spoken.",
+        voice: "An ElevenLabs API key, from your ElevenLabs account. It also lets the Phone tab place calls, so give it access to the agents platform as well as speech. Stored in a private file and never shown again; what JARVIS says is sent to ElevenLabs to be spoken. Press Test to check it.",
         fallback: "The key of the different provider you gave above for the fallback model. Stored in a private file and never shown again; when the main model is limited, what the run is saying is sent to that provider. Check it with `jarvis keys test fallback`.",
-        search: "An Ollama API key; a free account at ollama.com can make one. It turns on web search; what JARVIS searches for is sent to ollama.com. The key is stored in a private file and never shown again. Check it with `jarvis keys test search`."
+        search: "An Ollama API key; a free account at ollama.com can make one. It turns on web search; what JARVIS searches for is sent to ollama.com. The key is stored in a private file and never shown again. Press Test to check it."
       };
       row.appendChild(helpNode(helps[which] || ""));
+      row.appendChild(result);
       return row;
     }
     // Two settings that only make sense together are saved together.
@@ -941,12 +964,17 @@ window.JarvisSettings = function (context) {
       body.appendChild(section("Calls to JARVIS", "What happens when someone rings the number you imported."));
       var screen = byKey("daemon.phone_screen_callers");
       if (screen) body.appendChild(rowFor(screen, null, true));
+      body.appendChild(section("How many calls", "A guard against a mistaken or manipulated model ringing a phone over and over. Calls to other people have their own, lower limits."));
+      ["daemon.phone_calls_per_hour", "daemon.phone_calls_per_day"].forEach(function (key) {
+        var setting = byKey(key);
+        if (setting) body.appendChild(settingRow(setting, null, true));
+      });
       var ready = settingIsSet("daemon.phone_agent_id") && settingIsSet("daemon.phone_number_id") && settingIsSet("daemon.phone_owner_numbers");
       body.appendChild(section("Setup"));
       body.appendChild(stepsCard("Setup, once (about 15 minutes)", [
         "At elevenlabs.io, create an agent and import a phone number (a Twilio number or a SIP trunk) for it. Assign the agent to the number.",
         "In Connect apps, switch on Let other apps use JARVIS and From the internet. For a phone number use your own Cloudflare tunnel there: the free temporary address changes on every restart and the agent loses its tools.",
-        "In ElevenLabs, add a custom MCP server: Server URL is the internet address from Connect apps, Secret token is your key. Attach it to the agent and set tool approval to ask you for acting tools.",
+        "In ElevenLabs the agent needs JARVIS's tools. Press Connect them now in the Status box above: JARVIS adds an MCP server for the internet address, signing in with your key, and attaches it to the agent. It asks the caller before each tool, and never touches the agent's other servers.",
         "Put your ElevenLabs key in Voice & search. It needs access to the agents platform, not only speech.",
         "Press Use this number below (it fills in the agent and the number), and add your own number under Calls to you.",
         "Press Call me now. To ring JARVIS, call the number you imported; the agent answers and uses JARVIS's tools."
@@ -957,6 +985,25 @@ window.JarvisSettings = function (context) {
       callsCard.appendChild(calls);
       body.appendChild(callsCard);
       var access = null;
+      var tools = null;
+      // Adds JARVIS's tools to the ElevenLabs agent (or sends the current key again), then asks the provider how things stand.
+      function connectTools(refresh, finished) {
+        settingsNote(refresh ? "Sending the key to ElevenLabs..." : "Connecting JARVIS's tools to the agent...");
+        putJson("/phone/tools/connect", "POST", { refresh_key: refresh }).then(function (done) {
+          settingsNote(done.created ? "Done: JARVIS's tools are now connected to the agent." : done.rekeyed ? "Done: the server at ElevenLabs has the current key." : done.attached_now ? "Done: the agent now uses JARVIS's tools." : "Already connected; nothing needed changing.");
+          finished(); poll(true);
+        }, function (error) { settingsNote(explain(error, "That could not be done."), true); finished(); });
+      }
+      // Removes the unused temporary addresses of earlier runs from the ElevenLabs account, after the owner has seen their names.
+      function removeUnused(finished) {
+        var names = (tools && tools.unused_names) || [];
+        if (!window.confirm("Delete " + tools.unused_temporary + " unused temporary tool server" + (tools.unused_temporary === 1 ? "" : "s") + " from your ElevenLabs account?\n\n" + names.join("\n") + (tools.unused_temporary > names.length ? "\n...and more" : "") + "\n\nNo agent uses them. JARVIS only deletes servers on a temporary trycloudflare.com address that nothing uses.")) { finished(); return; }
+        settingsNote("Deleting the unused temporary addresses...");
+        putJson("/phone/tools/unused", "DELETE").then(function (done) {
+          settingsNote("Deleted " + done.removed + " unused temporary address" + (done.removed === 1 ? "" : "es") + ".");
+          finished(); poll(true);
+        }, function (error) { settingsNote(explain(error, "That could not be done."), true); finished(); });
+      }
       // What is true of each step, from the saved settings and, once they have answered, the internet address.
       function drawChecks() {
         var items = [
@@ -976,11 +1023,32 @@ window.JarvisSettings = function (context) {
           });
         }
         checks.replaceChildren();
+        if (tools && tools.address) {
+          var joined = !!(tools.registered && tools.attached);
+          items.push({
+            done: joined,
+            text: joined ? "JARVIS's tools are connected to the agent at ElevenLabs."
+              : tools.problem ? "ElevenLabs would not show its tool servers: " + tools.problem
+              : tools.registered ? "The tools server exists at ElevenLabs but this agent does not use it yet."
+              : "JARVIS's tools are not connected to the agent at ElevenLabs yet.",
+            action: tools.problem ? null : joined ? { label: "Send the current key again", run: function (finished) { connectTools(true, finished); } }
+              : { label: "Connect them now", run: function (finished) { connectTools(false, finished); } }
+          });
+          if (tools.unused_temporary > 0) {
+            items.push({
+              done: false,
+              text: tools.unused_temporary + " old temporary address" + (tools.unused_temporary === 1 ? " is" : "es are") + " still listed in your ElevenLabs account and no agent uses " + (tools.unused_temporary === 1 ? "it" : "them") + ". They are harmless; you can tidy them away.",
+              action: { label: "Delete them", run: removeUnused }
+            });
+          }
+        }
         checks.appendChild(checklist(items));
       }
       api("/mcp/access").then(function (info) { access = info; drawChecks(); }, function () { drawChecks(); });
       drawChecks();
       function paint(status) {
+        tools = status.tools || null;
+        drawChecks();
         more.replaceChildren();
         numbers.replaceChildren();
         calls.replaceChildren();
@@ -1080,17 +1148,20 @@ window.JarvisSettings = function (context) {
       head.appendChild(el("span", "badge " + (server.state === "connected" ? "on" : "off"), stateText));
       card.appendChild(head);
       var how = server.kind === "http" ? server.endpoint : (server.command || []).join(" ");
-      card.appendChild(el("p", "help", how));
+      card.appendChild(el("code", "", how));
       if (server.state === "unreachable") card.appendChild(el("p", "help bad", server.reason || "It did not answer."));
       if (server.state === "connected") {
         var tools = server.tools || [];
         card.appendChild(el("p", "lead", tools.length + " tool" + (tools.length === 1 ? "" : "s") + ", "
           + (server.posture === "read-only" ? "run without asking (you marked it read-only)." : "each call asks you first.")
           + (server.era ? " Speaks the " + server.era + " protocol." : "")));
+        var shown = el("details");
+        shown.appendChild(el("summary", "", "Show the tools"));
         var list = el("ul", "help");
         tools.slice(0, 8).forEach(function (tool) { list.appendChild(el("li", "", tool.id + (tool.description ? ": " + tool.description : ""))); });
         if (tools.length > 8) list.appendChild(el("li", "", "and " + (tools.length - 8) + " more (see Permissions)."));
-        card.appendChild(list);
+        shown.appendChild(list);
+        card.appendChild(shown);
         (server.excluded || []).slice(0, 5).forEach(function (left) { card.appendChild(el("p", "help bad", "Left out: " + left.tool + ": " + left.reason)); });
       }
       var acts = el("div", "acts");
@@ -1117,15 +1188,39 @@ window.JarvisSettings = function (context) {
     }
     function mcpAddForm(reload) {
       var card = el("div", "card");
-      card.appendChild(el("h4", "", "Add a tool program"));
-      card.appendChild(el("p", "help", "Type the command that starts it, for example: npx -y @modelcontextprotocol/server-filesystem C:\\Users\\you\\Documents. For a remote server, type its https address instead."));
-      var name = el("input"); name.placeholder = "A short name, for example files"; name.autocomplete = "off";
-      var command = el("input"); command.placeholder = "Command or https address"; command.autocomplete = "off";
+      card.appendChild(el("h4", "", "Add a program"));
+      var name = el("input"); name.type = "text"; name.placeholder = "A short name, for example files"; name.autocomplete = "off"; name.spellcheck = false;
+      var command = el("input"); command.type = "text"; command.placeholder = "The command that starts it, or a web address"; command.autocomplete = "off"; command.spellcheck = false;
+      var nameRow = el("div", "set-row");
+      nameRow.appendChild(el("span", "name", "Name"));
+      nameRow.appendChild(name);
+      nameRow.appendChild(el("span"));
+      var commandRow = el("div", "set-row");
+      commandRow.appendChild(el("span", "name", "Command or address"));
+      commandRow.appendChild(command);
+      var example = el("button", "", "Example");
+      example.type = "button";
+      example.title = "Fill in a sample command";
+      example.addEventListener("click", function () {
+        if (!name.value.trim()) name.value = "files";
+        command.value = "npx -y @modelcontextprotocol/server-filesystem C:\\Users\\you\\Documents";
+        command.focus();
+      });
+      var exampleBox = el("div", "acts"); exampleBox.appendChild(example);
+      commandRow.appendChild(exampleBox);
+      commandRow.appendChild(el("span", "help", "A program on this computer is started with its command, for example npx -y followed by a package name. A remote server is its web address, starting with https."));
       var only = el("input"); only.type = "checkbox";
-      var label = el("label", "help", " It only reads: let its tools run without asking.");
-      label.insertBefore(only, label.firstChild);
+      var readRow = el("div", "set-row toggle");
+      readRow.appendChild(el("span", "name", "It only reads"));
+      var wrap = el("label", "switch");
+      var track = el("span", "track");
+      var state = el("span", "state", "No");
+      wrap.appendChild(only); wrap.appendChild(track); wrap.appendChild(state);
+      only.addEventListener("change", function () { state.textContent = only.checked ? "Yes" : "No"; });
+      readRow.appendChild(wrap);
+      readRow.appendChild(el("span"));
+      readRow.appendChild(el("span", "help", "Yes lets its tools run without asking. Only say yes for a program that cannot change anything. By default every call asks you first."));
       var out = el("p", "help", "");
-      var acts = el("div", "acts");
       var test = el("button", "", "Test");
       var add = el("button", "yes", "Add");
       function body() {
@@ -1147,13 +1242,18 @@ window.JarvisSettings = function (context) {
       add.addEventListener("click", function () {
         add.disabled = true;
         putJson("/mcp/servers", "POST", body()).then(function () {
-          settingsNote("Server added. Restart to apply."); needsRestart("Tool program added"); name.value = ""; command.value = ""; only.checked = false; add.disabled = false; reload();
+          settingsNote("Program added. Restart to apply."); needsRestart("Tool program added"); name.value = ""; command.value = ""; only.checked = false; state.textContent = "No"; add.disabled = false; reload();
         }, function (error) { add.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That was refused."); });
       });
-      acts.appendChild(test); acts.appendChild(add);
-      [name, command, label, acts, out].forEach(function (node) { card.appendChild(node); });
+      var actionRow = el("div", "set-row");
+      actionRow.appendChild(el("span"));
+      var buttons = el("div", "acts"); buttons.appendChild(test); buttons.appendChild(add);
+      actionRow.appendChild(buttons);
+      actionRow.appendChild(el("span"));
+      [nameRow, commandRow, readRow, actionRow].forEach(function (node) { card.appendChild(node); });
+      card.appendChild(out);
       return card;
-    }
+    }    // Connect apps: let other AI apps (Claude Code, Cursor, VS Code, a script) hand JARVIS a task. One switch, one key, copy-paste lines.
     // Programs a developer adds by hand. The browser and documentation lookup are ordinary tools that come with JARVIS (they are
     // listed and controlled under Permissions like every other tool), so this is the only MCP-specific screen, and it lives in Advanced.
     function programsPanel(body) {
@@ -1164,13 +1264,15 @@ window.JarvisSettings = function (context) {
           holder.replaceChildren();
           var builtIn = (reply.abilities || []).map(function (a) { return a.id; });
           var custom = (reply.servers || []).filter(function (server) { return builtIn.indexOf(server.name) < 0; });
-          var more = el("details");
-          more.appendChild(el("summary", "", "Add your own tool program (for developers)"));
-          more.appendChild(el("p", "help", "JARVIS can use any program that speaks MCP. Adding one runs that program as you, so only add programs you trust. Its tools ask before every call. A change applies after a restart."));
-          custom.forEach(function (server) { more.appendChild(mcpServerCard(server, reload)); });
-          more.appendChild(mcpAddForm(reload));
-          if (custom.length || reply.restart_needed) more.open = true;
-          holder.appendChild(more);
+          var intro = el("div", "card");
+          intro.appendChild(el("p", "lead", "JARVIS can use any program that speaks MCP, the Model Context Protocol. The browser and documentation lookup already come with JARVIS and are under Permissions; add your own here."));
+          intro.appendChild(el("p", "help warn", "Adding a program runs it as you, so only add programs you trust. A change applies after a restart."));
+          holder.appendChild(intro);
+          if (custom.length) {
+            holder.appendChild(el("div", "secthead", "Your programs"));
+            custom.forEach(function (server) { holder.appendChild(mcpServerCard(server, reload)); });
+          }
+          holder.appendChild(mcpAddForm(reload));
           if (reply.restart_needed) {
             var banner = el("div", "card");
             banner.appendChild(el("p", "lead", "A restart switches your changes on."));
@@ -1480,7 +1582,7 @@ window.JarvisSettings = function (context) {
         var claimed = ["daemon.mcp_serve_port", "daemon.notifications", "daemon.push_topic", "daemon.push_server", "daemon.quiet_hours"];
         body.appendChild(section("JARVIS itself"));
         inGroup("advanced").filter(function (s) { return claimed.indexOf(s.key) < 0; }).forEach(function (s) { body.appendChild(rowFor(s)); });
-        body.appendChild(section("For developers", "Tool programs add abilities from other programs on this computer. Letting other apps use JARVIS is under Connect apps."));
+        body.appendChild(section("For developers", "Letting other apps use JARVIS is under Connect apps."));
         programsPanel(body);
       }
       body.scrollTop = scrolled;
@@ -1497,6 +1599,45 @@ window.JarvisSettings = function (context) {
       loadSettings();
     }
     function closeSettings() { $("settings").hidden = true; }
+    // Things that have stopped working while nobody is looking at Settings: the internet address, the phone door, Telegram. Each is
+    // asked from the daemon's own status routes (no provider is called), and only a real problem is shown, with a way to the tab that fixes it.
+    var attention = $("attention");
+    function paintAttention(items) {
+      attention.replaceChildren();
+      attention.hidden = !items.length;
+      items.forEach(function (item) {
+        var line = el("div", "attline");
+        line.appendChild(el("span", "", item.text));
+        var fix = el("button", "link", "Open " + item.label);
+        fix.type = "button";
+        fix.addEventListener("click", function () { openSettings(); goTab(item.tab); });
+        line.appendChild(fix);
+        attention.appendChild(line);
+      });
+    }
+    function checkAttention() {
+      var items = [];
+      var none = function () {};
+      Promise.all([
+        api("/mcp/access").then(function (info) {
+          var pub = info.public || {};
+          if (pub.wanted && pub.status && pub.status.state === "problem") {
+            items.push({ tab: "connect", label: "Connect apps", text: "The internet address is not working: " + (pub.status.reason || "it could not start") + "." });
+          }
+        }, none),
+        api("/phone").then(function (phone) {
+          var door = phone.door || {};
+          if (door.on && door.state === "problem") {
+            items.push({ tab: "phone", label: "Phone", text: "The phone door is not working (" + (door.problem || "unknown reason") + "), so calls to JARVIS may get no answer." });
+          }
+        }, none),
+        api("/telegram").then(function (telegram) {
+          if (telegram.state === "error") items.push({ tab: "telegram", label: "Telegram", text: telegram.problem || "Telegram is not working." });
+        }, none)
+      ]).then(function () { paintAttention(items); });
+    }
+    setTimeout(checkAttention, 2500);
+    setInterval(checkAttention, 20000);
     $("open-settings").addEventListener("click", openSettings);
     $("settings-close").addEventListener("click", closeSettings);
     $("settings").addEventListener("click", function (event) { if (event.target === $("settings")) closeSettings(); });

@@ -47,6 +47,11 @@ button.danger:hover { border-color: var(--red); color: var(--red); background: r
 
 #message { padding: 0 24px; color: var(--amber); font: 12px var(--mono); }
 #message:not(:empty) { padding: 8px 24px; }
+.attention { padding: 6px 24px; border-bottom: 1px solid rgba(255, 180, 84, 0.35); background: rgba(255, 180, 84, 0.08); font: 12px var(--mono); color: var(--amber); }
+.attention[hidden] { display: none; }
+.attention .attline { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 2px 0; }
+.attention .attline > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.attention button.link { color: var(--cyan); }
 
 
 /* the framed panel: hairline border with bright corner brackets */
@@ -196,7 +201,7 @@ pre code { background: none; border: none; padding: 0; }
 .settings-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .settings-main #settings-body { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; }
 .settings-main .lead.tablead { margin: 0 0 12px; }
-.secthead { margin: 16px 0 4px; font: 600 11px var(--mono); letter-spacing: 0.22em; text-transform: uppercase; color: var(--cyan); display: flex; align-items: center; gap: 8px; }
+.secthead { margin: 22px 0 4px; font: 600 11px var(--mono); letter-spacing: 0.22em; text-transform: uppercase; color: var(--cyan); display: flex; align-items: center; gap: 8px; }
 .secthead::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .secthead:first-child { margin-top: 0; }
 .secthint { margin: 0 0 6px; font-size: 12px; color: var(--dim); line-height: 1.45; }
@@ -241,6 +246,12 @@ button.link:hover { color: #fff; background: transparent; }
 #settings-body .card > p.help, #settings-body .card details > p.help { margin: 6px 0 2px; font-size: 12px; font-weight: 400; color: var(--dim); line-height: 1.45; }
 .checklist li, .checklist .what { font-weight: 400; }
 .numberrow code { min-width: 9em; }
+.help.warn { color: var(--amber); }
+.help.good { color: var(--green); }
+#settings-body .card > code { display: block; margin: 4px 0 6px; overflow-wrap: anywhere; }
+#settings-body .card > .set-row:first-of-type { border-top: 0; }
+#settings-body .card > p.help.bad { color: var(--amber); }
+#settings-body .card .set-row .help { font-weight: 400; }
 .numberrow { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 3px 0; }
 @media (max-width: 760px) {
   .settings-layout { flex-direction: column; gap: 8px; }

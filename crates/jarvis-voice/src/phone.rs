@@ -123,6 +123,21 @@ pub struct AgentSetup {
     pub prompt_override_allowed: bool,
 }
 
+/// One MCP server of the account's workspace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct McpServer {
+    /// The provider's id for it.
+    pub id: String,
+    /// The name the owner gave it.
+    pub name: String,
+    /// The address it connects to.
+    pub url: String,
+    /// Whether it has a way to sign in (a secret or a saved connection), without saying what.
+    pub signs_in: bool,
+    /// The agents that use it.
+    pub agent_ids: Vec<String>,
+}
+
 /// A call the provider accepted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlacedCall {
@@ -637,6 +652,178 @@ impl ElevenLabsPhone {
             .header("xi-api-key", &self.key.0)
     }
 
+    /// The MCP servers the workspace has, with the agents each is attached to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the provider cannot be reached, refuses the key, or answers something unexpected.
+    pub async fn mcp_servers(&self) -> Result<Vec<McpServer>, PhoneError> {
+        let answer = self.get("/v1/convai/mcp-servers").await?;
+        let items = answer
+            .get("mcp_servers")
+            .and_then(Value::as_array)
+            .ok_or(PhoneError::BadAnswer)?;
+        Ok(items.iter().filter_map(read_mcp_server).collect())
+    }
+
+    /// The MCP servers the configured agent uses.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the agent cannot be read.
+    pub async fn agent_mcp_server_ids(&self) -> Result<Vec<String>, PhoneError> {
+        let answer = self
+            .get(&format!("/v1/convai/agents/{}", self.agent_id))
+            .await?;
+        Ok(answer
+            .get("conversation_config")
+            .and_then(|config| {
+                config
+                    .get("agent")?
+                    .get("prompt")?
+                    .get("mcp_server_ids")?
+                    .as_array()
+            })
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Stores `value` as a workspace secret named `name` and returns its id. The value is never repeated in an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the provider refuses it.
+    pub async fn create_secret(&self, name: &str, value: &str) -> Result<String, PhoneError> {
+        let body = json!({ "type": "new", "name": name, "value": value });
+        let answer = self
+            .send(self.post("/v1/convai/secrets").json(&body))
+            .await
+            .map_err(|error| scrubbed(error, value))?;
+        answer
+            .get("secret_id")
+            .and_then(Value::as_str)
+            .filter(|id| plain(id))
+            .map(str::to_owned)
+            .ok_or(PhoneError::BadAnswer)
+    }
+
+    /// Adds an MCP server that signs in with the workspace secret `secret_id`, over the streamable HTTP transport, and returns its id.
+    ///
+    /// With `ask_each_time` the agent asks the caller before every tool call; without it the agent runs the tools it is offered and
+    /// JARVIS's own approval rules are the only gate. The address cannot be changed later (the provider's update call has no such field).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhoneError::Settings`] for an address that is not `https` or a name that is empty or too long, and another
+    /// [`PhoneError`] when the provider refuses it.
+    pub async fn create_mcp_server(
+        &self,
+        name: &str,
+        url: &str,
+        secret_id: &str,
+        ask_each_time: bool,
+    ) -> Result<String, PhoneError> {
+        if !url.starts_with("https://")
+            || url.len() > 300
+            || !url.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(PhoneError::Settings("the tools address must be https"));
+        }
+        if name.trim().is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control)
+        {
+            return Err(PhoneError::Settings("the server name is empty or too long"));
+        }
+        if !plain(secret_id) {
+            return Err(PhoneError::Settings("the secret id is not usable"));
+        }
+        let body = json!({ "config": {
+            "url": url,
+            "name": name,
+            "transport": "STREAMABLE_HTTP",
+            "approval_policy": if ask_each_time { "require_approval_all" } else { "auto_approve_all" },
+            "secret_token": { "secret_id": secret_id },
+            "description": "JARVIS's tools",
+            "response_timeout_secs": 30
+        } });
+        let answer = self
+            .send(self.post("/v1/convai/mcp-servers").json(&body))
+            .await?;
+        answer
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| plain(id))
+            .map(str::to_owned)
+            .ok_or(PhoneError::BadAnswer)
+    }
+
+    /// Makes an existing MCP server sign in with another workspace secret, for when the access key was replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the provider refuses it.
+    pub async fn set_mcp_server_secret(
+        &self,
+        server_id: &str,
+        secret_id: &str,
+    ) -> Result<(), PhoneError> {
+        if !plain(server_id) || !plain(secret_id) {
+            return Err(PhoneError::Settings("an id is not usable"));
+        }
+        let body = json!({ "secret_token": { "secret_id": secret_id } });
+        self.send(
+            self.patch(&format!("/v1/convai/mcp-servers/{server_id}"))
+                .json(&body),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Removes an MCP server from the workspace. The provider answers with no particular body, so none is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhoneError::Settings`] for an id that is not a plain identifier, and another [`PhoneError`] when the provider refuses.
+    pub async fn delete_mcp_server(&self, server_id: &str) -> Result<(), PhoneError> {
+        if !plain(server_id) {
+            return Err(PhoneError::Settings("an id is not usable"));
+        }
+        self.send(
+            self.client
+                .delete(format!(
+                    "{}/v1/convai/mcp-servers/{server_id}",
+                    self.base_url
+                ))
+                .header("xi-api-key", &self.key.0),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Sets the MCP servers the configured agent uses. The list **replaces** the agent's, so a caller adds to what
+    /// [`Self::agent_mcp_server_ids`] returned and never sends a shorter one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhoneError::Settings`] for an id that is not a plain identifier, and another [`PhoneError`] when the provider
+    /// refuses the change.
+    pub async fn set_agent_mcp_servers(&self, ids: &[String]) -> Result<(), PhoneError> {
+        if ids.iter().any(|id| !plain(id)) {
+            return Err(PhoneError::Settings("an id is not usable"));
+        }
+        let body =
+            json!({ "conversation_config": { "agent": { "prompt": { "mcp_server_ids": ids } } } });
+        self.send(
+            self.patch(&format!("/v1/convai/agents/{}", self.agent_id))
+                .json(&body),
+        )
+        .await
+        .map(|_| ())
+    }
+
     fn post(&self, path: &str) -> reqwest::RequestBuilder {
         self.client
             .post(format!("{}{path}", self.base_url))
@@ -674,6 +861,9 @@ impl ElevenLabsPhone {
                 400 | 422 => PhoneError::Invalid(self.invalid_reason(&bytes)),
                 other => PhoneError::Provider(other),
             });
+        }
+        if bytes.is_empty() {
+            return Ok(Value::Null);
         }
         serde_json::from_slice(&bytes).map_err(|_| PhoneError::BadAnswer)
     }
@@ -721,6 +911,52 @@ fn bounded(text: &str, limit: usize) -> String {
         let mut cut: String = cleaned.chars().take(limit).collect();
         cut.push('\u{2026}');
         cut
+    }
+}
+
+fn read_mcp_server(item: &Value) -> Option<McpServer> {
+    let id = item.get("id")?.as_str()?;
+    if !plain(id) {
+        return None;
+    }
+    let config = item.get("config")?;
+    let present = |field: &str| config.get(field).is_some_and(|value| !value.is_null());
+    Some(McpServer {
+        id: id.to_owned(),
+        name: bounded(
+            config
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            80,
+        ),
+        // A server whose address is hidden (a workspace secret) reads as an empty address, which matches nothing.
+        url: config
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        signs_in: present("secret_token") || present("auth_connection"),
+        agent_ids: item
+            .get("dependent_agents")
+            .and_then(Value::as_array)
+            .map(|agents| {
+                agents
+                    .iter()
+                    .filter_map(|agent| agent.get("id").and_then(Value::as_str).map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+/// An error with a secret value removed from the provider's reason, for a request that carried the secret.
+fn scrubbed(error: PhoneError, secret: &str) -> PhoneError {
+    match error {
+        PhoneError::Invalid(words) if !secret.is_empty() => {
+            PhoneError::Invalid(words.replace(secret, "[secret]"))
+        }
+        other => other,
     }
 }
 

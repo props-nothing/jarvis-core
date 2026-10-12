@@ -432,7 +432,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/skills/{id}/dismiss", post(dismiss_skill))
         .route("/skills/{id}/disable", post(disable_skill))
         .route("/skills/{id}/enable", post(enable_skill))
-        .merge(crate::mcp_admin::routes())
+        .merge(crate::mcp_admin::routes().merge(crate::key_test::routes()))
         .merge(crate::mcp_access::routes())
         .merge(crate::telegram::routes().merge(crate::phone_service::routes()))
         .merge(crate::image_store::routes())
@@ -2565,6 +2565,8 @@ mod tests {
             ("DELETE", "/api/v1/settings/speech_model"),
             ("PUT", "/api/v1/settings/keys/voice"),
             ("DELETE", "/api/v1/settings/keys/voice"),
+            ("POST", "/api/v1/settings/keys/voice/test"),
+            ("POST", "/api/v1/settings/keys/search/test"),
             ("POST", "/api/v1/restart"),
         ] {
             let response = app
@@ -2584,6 +2586,39 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
                 "{method} {path}"
             );
+        }
+    }
+
+    /// **A key test with nothing saved, or for a key that is tested elsewhere, is a plain refusal** that makes no request to a provider.
+    #[tokio::test]
+    async fn a_key_test_without_a_saved_key_or_for_another_kind_is_refused() {
+        let (app, presented, _profile, _paths) = test_router_with_settings().await;
+        for (which, expected) in [
+            ("voice", "no voice key is saved"),
+            ("search", "no search key is saved"),
+            ("google", "checked elsewhere"),
+            ("telegram", "checked elsewhere"),
+            ("model", "checked elsewhere"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/v1/settings/keys/{which}/test"),
+                    &presented,
+                    "{}",
+                ))
+                .await
+                .unwrap_or_else(|error| panic!("router call: {error}"));
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{which}"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap_or_else(|error| panic!("body: {error}"));
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(text.contains(expected), "{which}: {text}");
         }
     }
 

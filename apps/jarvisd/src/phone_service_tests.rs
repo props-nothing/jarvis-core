@@ -16,6 +16,8 @@ use super::*;
 
 const KEY: &str = "sk_test_phone_0123456789";
 const OWNER: &str = "+31612345678";
+/// The default limits, which a profile that sets none uses.
+const MAX_CALLS_PER_HOUR: u32 = jarvis_storage::DEFAULT_PHONE_CALLS_PER_HOUR;
 
 /// What the stand-in remembers and how it answers.
 pub(crate) struct Fake {
@@ -34,6 +36,13 @@ pub(crate) struct Fake {
     /// Whether the agent lets a call bring its own prompt, and whether reading the agent fails.
     prompt_allowed: AtomicBool,
     agent_down: AtomicBool,
+    /// The workspace's MCP servers as the provider lists them, the agent's server ids, and the secrets and servers created through it.
+    mcp_servers: Mutex<Vec<Value>>,
+    agent_mcp_ids: Mutex<Vec<String>>,
+    secrets_created: Mutex<Vec<Value>>,
+    servers_created: Mutex<Vec<Value>>,
+    servers_deleted: Mutex<Vec<String>>,
+    mcp_down: AtomicBool,
 }
 
 impl Fake {
@@ -51,7 +60,33 @@ impl Fake {
             patch_fails: AtomicBool::new(false),
             prompt_allowed: AtomicBool::new(true),
             agent_down: AtomicBool::new(false),
+            mcp_servers: Mutex::new(Vec::new()),
+            agent_mcp_ids: Mutex::new(Vec::new()),
+            secrets_created: Mutex::new(Vec::new()),
+            servers_created: Mutex::new(Vec::new()),
+            servers_deleted: Mutex::new(Vec::new()),
+            mcp_down: AtomicBool::new(false),
         })
+    }
+
+    /// The workspace already has an MCP server at `url`, used by `agents`.
+    fn has_server(&self, id: &str, url: &str, agents: &[&str]) {
+        self.mcp_servers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(json!({
+                "id": id,
+                "config": { "name": "JARVIS", "url": url, "secret_token": null, "auth_connection": { "auth_connection_id": "auth_1" } },
+                "dependent_agents": agents.iter().map(|agent| json!({ "id": agent })).collect::<Vec<_>>()
+            }));
+    }
+
+    fn agent_uses(&self, ids: &[&str]) {
+        *self
+            .agent_mcp_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            ids.iter().map(|id| (*id).to_owned()).collect();
     }
 
     /// Someone is (or was) on the line: `number` is who the provider says the other party is.
@@ -175,6 +210,17 @@ async fn provider(fake: Arc<Fake>) -> String {
         {
             fake.prompt_allowed.store(true, Ordering::SeqCst);
         }
+        if let Some(ids) =
+            body["conversation_config"]["agent"]["prompt"]["mcp_server_ids"].as_array()
+        {
+            *fake
+                .agent_mcp_ids
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = ids
+                .iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect();
+        }
         fake.patches
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -186,17 +232,69 @@ async fn provider(fake: Arc<Fake>) -> String {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         let allowed = fake.prompt_allowed.load(Ordering::SeqCst);
+        let mcp_ids = fake
+            .agent_mcp_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         Json(json!({
-            "conversation_config": { "agent": { "prompt": { "prompt": "You are JARVIS, a phone assistant." } } },
+            "conversation_config": { "agent": { "prompt": { "prompt": "You are JARVIS, a phone assistant.", "mcp_server_ids": mcp_ids } } },
             "platform_settings": { "overrides": { "conversation_config_override": {
                 "agent": { "first_message": true, "prompt": { "prompt": allowed } }
             } } }
         }))
         .into_response()
     }
+    async fn servers(AxumState(fake): AxumState<Arc<Fake>>) -> Response {
+        if fake.mcp_down.load(Ordering::SeqCst) {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let listed = fake
+            .mcp_servers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Json(json!({ "mcp_servers": listed })).into_response()
+    }
+    async fn make_server(
+        AxumState(fake): AxumState<Arc<Fake>>,
+        Json(body): Json<Value>,
+    ) -> Response {
+        fake.servers_created
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(body.clone());
+        Json(json!({ "id": "srv_new", "config": body["config"] })).into_response()
+    }
+    async fn make_secret(
+        AxumState(fake): AxumState<Arc<Fake>>,
+        Json(body): Json<Value>,
+    ) -> Response {
+        fake.secrets_created
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(body);
+        Json(json!({ "type": "stored", "secret_id": "sec_new", "name": "n" })).into_response()
+    }
+    async fn drop_server(
+        AxumState(fake): AxumState<Arc<Fake>>,
+        UrlPath(id): UrlPath<String>,
+    ) -> Response {
+        fake.servers_deleted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(id);
+        StatusCode::OK.into_response()
+    }
     let app = Router::new()
         .route("/v1/convai/settings", patch(change))
         .route("/v1/convai/agents/{id}", get(agent).patch(change))
+        .route("/v1/convai/mcp-servers", get(servers).post(make_server))
+        .route(
+            "/v1/convai/mcp-servers/{id}",
+            patch(change).delete(drop_server),
+        )
+        .route("/v1/convai/secrets", post(make_secret))
         .route("/v1/convai/phone-numbers", get(numbers))
         .route("/v1/convai/twilio/outbound-call", post(place))
         .route("/v1/convai/conversations", get(list))
@@ -509,6 +607,38 @@ async fn the_phone_is_not_rung_more_than_three_times_an_hour() {
     let words = refusal(rig.phone.start_call("one more", false, None).await);
     assert!(words.contains("3 times"), "{words}");
     assert_eq!(rig.fake.placed().len(), 3);
+}
+
+/// **The owner's limits are the ones enforced**, read fresh on each call: a lower hourly limit stops the second call, a higher one allows more
+/// than the default, and the daily limit holds even when the hourly one would allow another.
+#[tokio::test]
+async fn the_limits_the_owner_chose_are_the_ones_that_hold() {
+    let low = ready("phone_calls_per_hour = 1").await;
+    low.phone
+        .start_call("first", false, None)
+        .await
+        .unwrap_or_else(|error| panic!("first: {error:?}"));
+    low.fake.set_status("done");
+    let words = refusal(low.phone.start_call("second", false, None).await);
+    assert!(
+        words.contains("1 times") && words.contains("Settings"),
+        "{words}"
+    );
+    assert_eq!(low.fake.placed().len(), 1);
+
+    let high = ready("phone_calls_per_hour = 5\nphone_calls_per_day = 5").await;
+    for index in 0..5 {
+        high.phone
+            .start_call(&format!("call {index}"), false, None)
+            .await
+            .unwrap_or_else(|error| panic!("call {index}: {error:?}"));
+        high.fake.set_status("done");
+    }
+    refusal(high.phone.start_call("sixth", false, None).await);
+    assert_eq!(high.fake.placed().len(), 5);
+    let status = high.phone.status(false).await;
+    assert_eq!(status["limits"]["per_hour"], 5);
+    assert_eq!(status["limits"]["per_day"], 5);
 }
 
 #[tokio::test]
@@ -1368,4 +1498,248 @@ async fn a_call_to_someone_else_needs_its_brief_and_a_call_to_the_owner_goes_ahe
             .get("agent")
             .is_none_or(|agent| agent.get("prompt").is_none())
     );
+}
+
+const ACCESS_KEY: &str = "the-jarvis-access-key-0123456789";
+
+fn address_is_up(rig: &Rig) {
+    rig.tunnel.set_for_test(crate::mcp_tunnel::Tunnel::On {
+        url: "https://jarvis.example.com".to_owned(),
+    });
+}
+
+/// **Connecting the tools makes a server that signs in with a stored secret and attaches it, keeping the agent's other servers.**
+#[tokio::test]
+async fn the_tools_are_connected_with_a_secret_and_the_agents_other_servers_are_kept() {
+    let rig = ready("").await;
+    address_is_up(&rig);
+    rig.fake.agent_uses(&["srv_other"]);
+    let done = rig
+        .phone
+        .connect_tools(ACCESS_KEY, true, false)
+        .await
+        .unwrap_or_else(|error| panic!("connect: {error}"));
+    assert_eq!(done["created"], true);
+    assert_eq!(done["attached_now"], true);
+    assert_eq!(done["address"], "https://jarvis.example.com/mcp");
+
+    let secrets = rig
+        .fake
+        .secrets_created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(secrets.len(), 1);
+    assert_eq!(secrets[0]["value"], ACCESS_KEY);
+    let created = rig
+        .fake
+        .servers_created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(created.len(), 1);
+    let config = &created[0]["config"];
+    assert_eq!(config["url"], "https://jarvis.example.com/mcp");
+    assert_eq!(config["secret_token"]["secret_id"], "sec_new");
+    assert_eq!(config["approval_policy"], "require_approval_all");
+    assert!(!created[0].to_string().contains(ACCESS_KEY));
+    assert_eq!(
+        *rig.fake
+            .agent_mcp_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec!["srv_other".to_owned(), "srv_new".to_owned()],
+        "the agent keeps what it had"
+    );
+    assert!(
+        !done.to_string().contains(ACCESS_KEY),
+        "the key is in no answer"
+    );
+}
+
+/// **Repeating it changes nothing**: an existing server for the same address is reused and an agent that already uses it is left alone.
+#[tokio::test]
+async fn connecting_again_reuses_the_server_and_changes_nothing_that_is_already_right() {
+    let rig = ready("").await;
+    address_is_up(&rig);
+    rig.fake
+        .has_server("srv_have", "https://jarvis.example.com/mcp", &["agent_1"]);
+    rig.fake.agent_uses(&["srv_have"]);
+    let done = rig
+        .phone
+        .connect_tools(ACCESS_KEY, true, false)
+        .await
+        .unwrap_or_else(|error| panic!("connect: {error}"));
+    assert_eq!(done["created"], false);
+    assert_eq!(done["attached_now"], false);
+    assert!(
+        rig.fake
+            .secrets_created
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+            && rig
+                .fake
+                .servers_created
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty()
+            && rig.fake.patches().is_empty(),
+        "nothing was created or changed"
+    );
+}
+
+#[tokio::test]
+async fn an_existing_server_that_the_agent_does_not_use_is_attached_and_can_be_given_the_new_key() {
+    let rig = ready("").await;
+    address_is_up(&rig);
+    rig.fake
+        .has_server("srv_have", "https://jarvis.example.com/mcp", &[]);
+    rig.fake.agent_uses(&["srv_other"]);
+    let done = rig
+        .phone
+        .connect_tools(ACCESS_KEY, true, true)
+        .await
+        .unwrap_or_else(|error| panic!("connect: {error}"));
+    assert_eq!(done["created"], false);
+    assert_eq!(done["attached_now"], true);
+    assert_eq!(done["rekeyed"], true);
+    let patches = rig.fake.patches();
+    assert!(
+        patches
+            .iter()
+            .any(|(path, body)| path.ends_with("/mcp-servers/srv_have")
+                && body["secret_token"]["secret_id"] == "sec_new"),
+        "{patches:?}"
+    );
+    assert_eq!(
+        *rig.fake
+            .agent_mcp_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec!["srv_other".to_owned(), "srv_have".to_owned()]
+    );
+}
+
+/// **Fails closed and says why**: no internet address, no key or agent, or a provider that refuses, and nothing is half made.
+#[tokio::test]
+async fn connecting_the_tools_names_what_is_missing_and_changes_nothing_when_it_cannot() {
+    let rig = ready("").await;
+    let words = rig
+        .phone
+        .connect_tools(ACCESS_KEY, true, false)
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("no address is an error"));
+    assert!(words.contains("internet address"), "{words}");
+
+    address_is_up(&rig);
+    rig.fake.mcp_down.store(true, Ordering::SeqCst);
+    let words = rig
+        .phone
+        .connect_tools(ACCESS_KEY, true, false)
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("a provider failure is an error"));
+    assert!(!words.contains(ACCESS_KEY), "{words}");
+    assert!(
+        rig.fake
+            .secrets_created
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "no secret was stored before the account could be read"
+    );
+
+    let bare = self::rig("", None).await;
+    address_is_up(&bare);
+    let words = bare
+        .phone
+        .connect_tools(ACCESS_KEY, true, false)
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("no key or agent is an error"));
+    assert!(words.contains("ElevenLabs key"), "{words}");
+}
+
+/// The check tells the owner whether the tools are connected, and counts the temporary addresses nothing uses any more.
+#[tokio::test]
+async fn the_check_reports_whether_the_tools_are_connected_and_counts_unused_temporary_addresses() {
+    let rig = ready("").await;
+    address_is_up(&rig);
+    rig.fake
+        .has_server("srv_old", "https://old-words.trycloudflare.com/mcp", &[]);
+    rig.fake.has_server(
+        "srv_in_use",
+        "https://other-words.trycloudflare.com/mcp",
+        &["agent_1"],
+    );
+    let status = rig.phone.status(true).await;
+    assert_eq!(status["tools"]["address"], "https://jarvis.example.com/mcp");
+    assert_eq!(status["tools"]["registered"], false);
+    assert_eq!(status["tools"]["attached"], false);
+    assert_eq!(status["tools"]["unused_temporary"], 1);
+
+    rig.fake
+        .has_server("srv_have", "https://jarvis.example.com/mcp", &["agent_1"]);
+    let status = rig.phone.status(true).await;
+    assert_eq!(status["tools"]["registered"], true);
+    assert_eq!(status["tools"]["attached"], true);
+
+    let without = ready("").await;
+    let status = without.phone.status(true).await;
+    assert!(status["tools"]["address"].is_null(), "{status}");
+}
+
+/// Only an unused temporary address is removed: not one an agent uses, not the current address, not one that merely has the word in
+/// its path or a longer host. Falsified by matching with `contains`.
+#[tokio::test]
+async fn cleaning_up_removes_only_unused_temporary_servers_and_nothing_that_looks_like_one() {
+    let rig = ready("").await;
+    address_is_up(&rig);
+    for (id, url, agents) in [
+        ("srv_old1", "https://one-two.trycloudflare.com/mcp", &[][..]),
+        (
+            "srv_old2",
+            "https://three-four.trycloudflare.com/mcp",
+            &[][..],
+        ),
+        (
+            "srv_used",
+            "https://five.trycloudflare.com/mcp",
+            &["agent_1"][..],
+        ),
+        ("srv_now", "https://jarvis.example.com/mcp", &[][..]),
+        (
+            "srv_path",
+            "https://evil.example/.trycloudflare.com/mcp",
+            &[][..],
+        ),
+        (
+            "srv_host",
+            "https://trycloudflare.com.evil.example/mcp",
+            &[][..],
+        ),
+        ("srv_bare", "https://trycloudflare.com/mcp", &[][..]),
+        ("srv_mine", "https://mine.example/mcp", &[][..]),
+        ("srv_plain", "http://plain.trycloudflare.com/mcp", &[][..]),
+    ] {
+        rig.fake.has_server(id, url, agents);
+    }
+    let status = rig.phone.status(true).await;
+    assert_eq!(status["tools"]["unused_temporary"], 2, "{status}");
+    let done = rig
+        .phone
+        .remove_unused_temporary_servers()
+        .await
+        .unwrap_or_else(|error| panic!("cleanup: {error}"));
+    assert_eq!(done["removed"], 2);
+    let mut deleted = rig
+        .fake
+        .servers_deleted
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    deleted.sort();
+    assert_eq!(deleted, vec!["srv_old1".to_owned(), "srv_old2".to_owned()]);
 }

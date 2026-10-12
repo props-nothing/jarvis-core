@@ -291,7 +291,22 @@ pub struct DaemonConfig {
     /// Whether an inbound call is answered only when the caller's number is one of the owner's (`ADR-0201`). Off unless the owner turned it on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     phone_screen_callers: Option<bool>,
+    /// The most calls JARVIS may place in one hour, and in one day (`ADR-0205`). Unset means the defaults; both are capped so a runaway
+    /// model cannot ring a phone without end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_calls_per_hour: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_calls_per_day: Option<u32>,
 }
+
+/// The calls JARVIS may place in an hour when the owner has not chosen, and the most the owner may allow.
+pub const DEFAULT_PHONE_CALLS_PER_HOUR: u32 = 3;
+/// The most calls an hour the owner may allow.
+pub const MAX_PHONE_CALLS_PER_HOUR: u32 = 20;
+/// The calls JARVIS may place in a day when the owner has not chosen.
+pub const DEFAULT_PHONE_CALLS_PER_DAY: u32 = 10;
+/// The most calls a day the owner may allow.
+pub const MAX_PHONE_CALLS_PER_DAY: u32 = 100;
 
 /// The words a reasoning effort may be (the same ones providers use).
 const REASONING_EFFORTS: [&str; 4] = ["none", "low", "medium", "high"];
@@ -478,6 +493,20 @@ impl DaemonConfig {
         self.phone_screen_callers.unwrap_or(false)
     }
 
+    /// The most calls JARVIS may place in an hour.
+    #[must_use]
+    pub fn phone_calls_per_hour(&self) -> u32 {
+        self.phone_calls_per_hour
+            .unwrap_or(DEFAULT_PHONE_CALLS_PER_HOUR)
+    }
+
+    /// The most calls JARVIS may place in a day.
+    #[must_use]
+    pub fn phone_calls_per_day(&self) -> u32 {
+        self.phone_calls_per_day
+            .unwrap_or(DEFAULT_PHONE_CALLS_PER_DAY)
+    }
+
     /// The file holding the web search key, if search is configured.
     #[must_use]
     pub fn search_api_key_ref(&self) -> Option<&Path> {
@@ -601,6 +630,8 @@ impl Default for DaemonConfig {
             phone_opening_line: None,
             phone_call_anyone: None,
             phone_screen_callers: None,
+            phone_calls_per_hour: None,
+            phone_calls_per_day: None,
         }
     }
 }
@@ -990,9 +1021,17 @@ impl Config {
                             && !daemon.phone_owner_numbers[..index].contains(number)
                     })
                 });
+        let limits_ok = daemon
+            .phone_calls_per_hour
+            .is_none_or(|limit| (1..=MAX_PHONE_CALLS_PER_HOUR).contains(&limit))
+            && daemon
+                .phone_calls_per_day
+                .is_none_or(|limit| (1..=MAX_PHONE_CALLS_PER_DAY).contains(&limit))
+            && daemon.phone_calls_per_hour() <= daemon.phone_calls_per_day();
         if daemon.phone_agent_id.as_ref().is_none_or(plain)
             && daemon.phone_number_id.as_ref().is_none_or(plain)
             && numbers_ok
+            && limits_ok
         {
             Ok(())
         } else {
@@ -1405,7 +1444,7 @@ pub enum ConfigError {
     /// The phone settings were unusable: an agent or number id that is not letters, digits, `-` or `_`, or a number that is not in
     /// international format.
     #[error(
-        "daemon.phone_agent_id and daemon.phone_number_id must be ElevenLabs ids (letters, digits, - or _), and daemon.phone_owner_numbers numbers in international format such as +31612345678, each written once"
+        "daemon.phone_agent_id and daemon.phone_number_id must be ElevenLabs ids (letters, digits, - or _), daemon.phone_owner_numbers numbers in international format such as +31612345678, each written once, and daemon.phone_calls_per_hour 1 to 20 and daemon.phone_calls_per_day 1 to 100 (the hourly limit no higher than the daily one)"
     )]
     InvalidPhone,
     /// The Telegram token path was not absolute.
@@ -1616,6 +1655,8 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "phone_opening_line",
                 "phone_call_anyone",
                 "phone_screen_callers",
+                "phone_calls_per_hour",
+                "phone_calls_per_day",
             ],
             &mut unknown,
         );

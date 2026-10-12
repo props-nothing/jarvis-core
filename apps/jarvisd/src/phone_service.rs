@@ -49,10 +49,23 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::gateway::{GatewayState, error_response};
 
-/// The most calls placed in one hour. A runaway loop of approved calls stops here.
-pub const MAX_CALLS_PER_HOUR: u32 = 3;
-/// The most calls placed in one day.
-pub const MAX_CALLS_PER_DAY: u32 = 10;
+/// The most servers one cleanup removes.
+const MAX_CLEANUP: usize = 25;
+
+/// Whether an MCP server is a temporary address nothing uses: an `https` address whose host is exactly under `trycloudflare.com`
+/// (not merely containing the word), and no agent that uses it.
+fn is_unused_temporary(server: &jarvis_voice::phone::McpServer) -> bool {
+    let Some(rest) = server.url.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split(['/', ':', '?', '#']).next().unwrap_or_default();
+    server.agent_ids.is_empty()
+        && host.len() > ".trycloudflare.com".len()
+        && host.ends_with(".trycloudflare.com")
+        && !host.contains('@')
+        && !rest.contains('@')
+}
+
 /// The most calls to numbers that are not the owner's in one day.
 pub const MAX_OTHER_CALLS_PER_DAY: usize = 5;
 /// The most calls to one number that is not the owner's in one day.
@@ -121,6 +134,10 @@ pub struct PhoneSetup {
     pub opening_line: bool,
     /// Whether JARVIS may ring numbers that are not the owner's.
     pub call_anyone: bool,
+    /// The most calls placed in an hour and in a day (the owner's setting, with a ceiling). A runaway loop of approved calls stops here.
+    pub calls_per_hour: u32,
+    /// The most calls placed in a day.
+    pub calls_per_day: u32,
     key: String,
     quiet: Option<jarvis_core::QuietHours>,
 }
@@ -298,6 +315,8 @@ impl PhoneService {
             approves: daemon.phone_approves(),
             opening_line: daemon.phone_opening_line(),
             call_anyone: daemon.phone_call_anyone(),
+            calls_per_hour: daemon.phone_calls_per_hour(),
+            calls_per_day: daemon.phone_calls_per_day(),
             key,
             quiet: daemon.quiet_hours(),
         })
@@ -557,9 +576,10 @@ impl PhoneService {
         let day = since(Duration::from_hours(24))
             .await
             .map_err(|_| StartError::Database)?;
-        if hour >= MAX_CALLS_PER_HOUR || day >= MAX_CALLS_PER_DAY {
+        if hour >= setup.calls_per_hour || day >= setup.calls_per_day {
             return Err(StartError::NotAllowed(format!(
-                "JARVIS has already placed calls {MAX_CALLS_PER_HOUR} times in the last hour or {MAX_CALLS_PER_DAY} times today; it will not ring again for now"
+                "JARVIS has already placed calls {} times in the last hour or {} times today; it will not ring again for now (the limits are under Settings, Phone)",
+                setup.calls_per_hour, setup.calls_per_day
             )));
         }
         Ok(())
@@ -834,6 +854,154 @@ impl PhoneService {
         Ok(())
     }
 
+    /// What Settings shows about the agent's tools: the address JARVIS is reachable at, whether the workspace has an MCP server for it, and
+    /// whether the agent uses that server. Asks the provider, so only the explicit check does it.
+    async fn tools_state(&self, setup: &PhoneSetup) -> Value {
+        let Some(address) = self.tools_address() else {
+            return json!({ "address": null });
+        };
+        let Ok(client) = self.client(setup) else {
+            return json!({ "address": address });
+        };
+        let servers = match client.mcp_servers().await {
+            Ok(servers) => servers,
+            Err(error) => {
+                return json!({ "address": address, "problem": error.to_string() });
+            }
+        };
+        let found = servers.iter().find(|server| server.url == address);
+        let unused: Vec<&jarvis_voice::phone::McpServer> = servers
+            .iter()
+            .filter(|server| is_unused_temporary(server) && server.url != address)
+            .collect();
+        json!({
+            "address": address,
+            "registered": found.is_some(),
+            "attached": found.is_some_and(|server| server.agent_ids.iter().any(|id| id == &setup.agent_id)),
+            // Temporary addresses of earlier runs that no agent uses any more: harmless, but they clutter the account.
+            "unused_temporary": unused.len(),
+            "unused_names": unused.iter().take(10).map(|server| server.name.clone()).collect::<Vec<_>>(),
+        })
+    }
+
+    /// Removes the MCP servers that were temporary addresses of earlier runs and that no agent uses. Nothing else is touched: a server
+    /// must be on a `trycloudflare.com` host, have no agent, and not be the current address; the list is read again just before.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sentence naming what is missing or what the provider said; servers already removed stay removed.
+    pub async fn remove_unused_temporary_servers(&self) -> Result<Value, String> {
+        let (client, _) = self.line_inputs().ok_or(
+            "this needs the ElevenLabs key (Voice & search) and the agent id (Phone)".to_owned(),
+        )?;
+        let current = self.tools_address();
+        let servers = client.mcp_servers().await.map_err(|e| e.to_string())?;
+        let doomed: Vec<_> = servers
+            .iter()
+            .filter(|server| is_unused_temporary(server) && Some(&server.url) != current.as_ref())
+            .take(MAX_CLEANUP)
+            .collect();
+        let mut removed = 0_u32;
+        for server in &doomed {
+            client
+                .delete_mcp_server(&server.id)
+                .await
+                .map_err(|error| format!("{error} (after removing {removed})"))?;
+            removed += 1;
+        }
+        tracing::info!(
+            removed,
+            "unused temporary tool servers were removed from the phone agent's workspace"
+        );
+        Ok(json!({ "removed": removed }))
+    }
+
+    /// The address of this daemon's tools endpoint as the provider reaches it, when the internet address is up.
+    fn tools_address(&self) -> Option<String> {
+        match self.tunnel.as_ref()?.status() {
+            crate::mcp_tunnel::Tunnel::On { url } => Some(format!(
+                "{}{}",
+                url.trim_end_matches('/'),
+                crate::mcp_access::ENDPOINT_PATH
+            )),
+            _ => None,
+        }
+    }
+
+    /// Connects JARVIS's tools to the agent: makes sure the workspace has an MCP server for the current internet address that signs in with
+    /// `key`, and that the agent uses it. Safe to repeat: an existing server for the same address is reused, and the agent's other servers are
+    /// kept. With `refresh_key` the server is given a new secret (after the access key was replaced).
+    ///
+    /// # Errors
+    ///
+    /// Returns a sentence the owner can act on: what is missing, or what the provider said (never the key).
+    pub async fn connect_tools(
+        &self,
+        key: &str,
+        ask_each_time: bool,
+        refresh_key: bool,
+    ) -> Result<Value, String> {
+        let address = self.tools_address().ok_or(
+            "the internet address is not up yet: turn it on under Connect apps first, then try again",
+        )?;
+        let (client, _) = self.line_inputs().ok_or(
+            "this needs the ElevenLabs key (Voice & search) and the agent id (Phone)".to_owned(),
+        )?;
+        let describe = |error: PhoneError| error.to_string();
+        let servers = client.mcp_servers().await.map_err(describe)?;
+        let existing = servers.iter().find(|server| server.url == address);
+        let secret_name = format!("JARVIS access key {}", now().unix_nanos() / 1_000_000_000);
+        let (server_id, created, rekeyed) = match existing {
+            Some(server) if !refresh_key => (server.id.clone(), false, false),
+            Some(server) => {
+                let secret = client
+                    .create_secret(&secret_name, key)
+                    .await
+                    .map_err(describe)?;
+                client
+                    .set_mcp_server_secret(&server.id, &secret)
+                    .await
+                    .map_err(describe)?;
+                (server.id.clone(), false, true)
+            }
+            None => {
+                let secret = client
+                    .create_secret(&secret_name, key)
+                    .await
+                    .map_err(describe)?;
+                let host = address
+                    .trim_start_matches("https://")
+                    .split('/')
+                    .next()
+                    .unwrap_or_default();
+                let id = client
+                    .create_mcp_server(&format!("JARVIS {host}"), &address, &secret, ask_each_time)
+                    .await
+                    .map_err(describe)?;
+                (id, true, false)
+            }
+        };
+        let mut ids = client.agent_mcp_server_ids().await.map_err(describe)?;
+        let attached_now = !ids.contains(&server_id);
+        if attached_now {
+            ids.push(server_id.clone());
+            client.set_agent_mcp_servers(&ids).await.map_err(describe)?;
+        }
+        tracing::info!(
+            created,
+            attached_now,
+            rekeyed,
+            "JARVIS's tools were connected to the phone agent"
+        );
+        Ok(json!({
+            "address": address,
+            "created": created,
+            "attached_now": attached_now,
+            "rekeyed": rekeyed,
+            "ask_each_time": ask_each_time,
+        }))
+    }
+
     /// What Settings shows about the inbound door.
     fn door_status(&self) -> Value {
         let on = ConfigStore::from_paths(&self.paths)
@@ -996,7 +1164,7 @@ impl PhoneService {
             "ready": setup.is_ok(),
             "missing": setup.as_ref().err(),
             "calls": calls.iter().map(describe_stored).collect::<Vec<_>>(),
-            "limits": { "per_hour": MAX_CALLS_PER_HOUR, "per_day": MAX_CALLS_PER_DAY },
+            "limits": { "per_hour": setup.as_ref().map_or(jarvis_storage::DEFAULT_PHONE_CALLS_PER_HOUR, |setup| setup.calls_per_hour), "per_day": setup.as_ref().map_or(jarvis_storage::DEFAULT_PHONE_CALLS_PER_DAY, |setup| setup.calls_per_day) },
         });
         if let Ok(setup) = &setup {
             body["numbers"] = json!(
@@ -1011,6 +1179,7 @@ impl PhoneService {
             body["door"] = self.door_status();
             if check {
                 body["check"] = self.check(setup).await;
+                body["tools"] = self.tools_state(setup).await;
             }
         }
         body
@@ -1276,7 +1445,50 @@ pub fn routes() -> axum::Router<GatewayState> {
     axum::Router::new()
         .route("/phone", get(status))
         .route("/phone/test", post(test_call))
+        .route("/phone/tools/connect", post(connect_tools))
+        .route("/phone/tools/unused", delete(remove_unused_tools))
         .route("/phone/calls", delete(clear))
+}
+
+/// The body of `POST /api/v1/phone/tools/connect`.
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+struct ConnectBody {
+    /// Whether the agent asks the caller before each tool call. On unless said otherwise.
+    ask_each_time: Option<bool>,
+    /// Give an existing server the current access key again.
+    refresh_key: bool,
+}
+
+/// `POST /api/v1/phone/tools/connect`: add JARVIS's tools to the `ElevenLabs` agent (an MCP server for the current internet address,
+/// signing in with the access key, used by the agent). The access key is sent to `ElevenLabs` as a workspace secret, which is what typing
+/// it into their page does; it is in no answer or log.
+async fn connect_tools(
+    State(state): State<GatewayState>,
+    body: Option<Json<ConnectBody>>,
+) -> Response {
+    let Some(phone) = state.phone() else {
+        return unavailable();
+    };
+    let Some(key) = state.mcp_access().and_then(|access| access.key()) else {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::Validation,
+            "switch on Connect apps first: that is what makes the access key",
+        );
+    };
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    match phone
+        .connect_tools(&key, body.ask_each_time.unwrap_or(true), body.refresh_key)
+        .await
+    {
+        Ok(done) => Json(done).into_response(),
+        Err(words) => error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::Validation,
+            &words,
+        ),
+    }
 }
 
 fn unavailable() -> Response {
@@ -1327,6 +1539,21 @@ async fn test_call(State(state): State<GatewayState>) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR,
             ErrorCode::Internal,
             "the call could not be recorded",
+        ),
+    }
+}
+
+/// `DELETE /api/v1/phone/tools/unused`: remove the temporary tool servers of earlier runs that no agent uses.
+async fn remove_unused_tools(State(state): State<GatewayState>) -> Response {
+    let Some(phone) = state.phone() else {
+        return unavailable();
+    };
+    match phone.remove_unused_temporary_servers().await {
+        Ok(done) => Json(done).into_response(),
+        Err(words) => error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::Validation,
+            &words,
         ),
     }
 }

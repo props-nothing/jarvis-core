@@ -595,3 +595,209 @@ async fn a_call_may_carry_its_own_prompt_and_the_agents_settings_can_be_read_and
         "You are JARVIS. This call: demo."
     );
 }
+
+fn sent(seen: &Seen) -> Vec<(String, Value)> {
+    seen.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|request| {
+            (
+                request.lines().next().unwrap_or_default().to_owned(),
+                serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or_default())
+                    .unwrap_or(Value::Null),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn mcp_servers_are_read_with_their_agents_and_whether_they_sign_in() {
+    let list = r#"{"mcp_servers":[
+        {"id":"srv_a","config":{"name":"Jarvis","url":"https://old.example/mcp","secret_token":null,"auth_connection":{"auth_connection_id":"auth_1"}},"dependent_agents":[{"id":"agent_1","name":"x"}]},
+        {"id":"srv_b","config":{"name":"Other","url":"https://new.example/mcp","secret_token":{"secret_id":"sec_1"},"auth_connection":null},"dependent_agents":[]},
+        {"id":"srv_c","config":{"name":"Open","url":"https://open.example/mcp","secret_token":null,"auth_connection":null}},
+        {"id":"bad id!","config":{"name":"x","url":"https://x"}}
+    ]}"#;
+    let agent =
+        r#"{"conversation_config":{"agent":{"prompt":{"mcp_server_ids":["srv_a","srv_x"]}}}}"#;
+    let (base, _) = stand_in(vec![
+        ("GET /v1/convai/mcp-servers", 200, list.to_owned()),
+        ("GET /v1/convai/agents/agent_1 ", 200, agent.to_owned()),
+    ])
+    .await;
+    let phone = adapter(&base);
+    let servers = phone
+        .mcp_servers()
+        .await
+        .unwrap_or_else(|error| panic!("servers: {error}"));
+    assert_eq!(
+        servers.len(),
+        3,
+        "an id that is not an identifier is dropped"
+    );
+    assert!(servers[0].signs_in && servers[1].signs_in && !servers[2].signs_in);
+    assert_eq!(servers[0].agent_ids, vec!["agent_1".to_owned()]);
+    assert!(servers[1].agent_ids.is_empty() && servers[2].agent_ids.is_empty());
+    assert_eq!(servers[1].url, "https://new.example/mcp");
+    assert_eq!(
+        phone
+            .agent_mcp_server_ids()
+            .await
+            .unwrap_or_else(|error| panic!("ids: {error}")),
+        vec!["srv_a".to_owned(), "srv_x".to_owned()]
+    );
+}
+
+/// The request shapes were checked against a real workspace (create a secret, create a server that uses it, delete both).
+#[tokio::test]
+async fn a_server_is_created_with_the_documented_body_and_the_secret_goes_in_the_body_only() {
+    let (base, seen) = stand_in(vec![
+        (
+            "POST /v1/convai/secrets",
+            200,
+            r#"{"type":"stored","secret_id":"sec_new","name":"n"}"#.to_owned(),
+        ),
+        (
+            "POST /v1/convai/mcp-servers",
+            200,
+            r#"{"id":"srv_new","config":{}}"#.to_owned(),
+        ),
+        (
+            "PATCH /v1/convai/mcp-servers/srv_new ",
+            200,
+            "{}".to_owned(),
+        ),
+        ("PATCH /v1/convai/agents/agent_1 ", 200, "{}".to_owned()),
+    ])
+    .await;
+    let phone = adapter(&base);
+    let secret = phone
+        .create_secret("JARVIS access key", "the-access-key-value")
+        .await
+        .unwrap_or_else(|error| panic!("secret: {error}"));
+    assert_eq!(secret, "sec_new");
+    let server = phone
+        .create_mcp_server("JARVIS", "https://jarvis.example.com/mcp", &secret, true)
+        .await
+        .unwrap_or_else(|error| panic!("server: {error}"));
+    assert_eq!(server, "srv_new");
+    phone
+        .set_mcp_server_secret(&server, "sec_other")
+        .await
+        .unwrap_or_else(|error| panic!("rekey: {error}"));
+    phone
+        .set_agent_mcp_servers(&["srv_old".to_owned(), server.clone()])
+        .await
+        .unwrap_or_else(|error| panic!("attach: {error}"));
+
+    let requests = sent(&seen);
+    let find = |start: &str| {
+        requests
+            .iter()
+            .find(|(line, _)| line.starts_with(start))
+            .map_or(Value::Null, |(_, body)| body.clone())
+    };
+    assert_eq!(find("POST /v1/convai/secrets")["type"], "new");
+    assert_eq!(
+        find("POST /v1/convai/secrets")["value"],
+        "the-access-key-value"
+    );
+    let config = &find("POST /v1/convai/mcp-servers")["config"];
+    assert_eq!(config["url"], "https://jarvis.example.com/mcp");
+    assert_eq!(config["transport"], "STREAMABLE_HTTP");
+    assert_eq!(config["approval_policy"], "require_approval_all");
+    assert_eq!(config["secret_token"]["secret_id"], "sec_new");
+    assert!(
+        !config.to_string().contains("the-access-key-value"),
+        "the server refers to the secret by id and never carries its value"
+    );
+    assert_eq!(
+        find("PATCH /v1/convai/mcp-servers/srv_new ")["secret_token"]["secret_id"],
+        "sec_other"
+    );
+    assert_eq!(
+        find("PATCH /v1/convai/agents/agent_1 ")["conversation_config"]["agent"]["prompt"]["mcp_server_ids"],
+        serde_json::json!(["srv_old", "srv_new"])
+    );
+}
+
+#[tokio::test]
+async fn a_server_that_needs_no_asking_is_set_up_as_such_and_unusable_input_makes_no_request() {
+    let (base, seen) = stand_in(vec![(
+        "POST /v1/convai/mcp-servers",
+        200,
+        r#"{"id":"srv_new"}"#.to_owned(),
+    )])
+    .await;
+    let phone = adapter(&base);
+    phone
+        .create_mcp_server("JARVIS", "https://jarvis.example.com/mcp", "sec_1", false)
+        .await
+        .unwrap_or_else(|error| panic!("server: {error}"));
+    assert_eq!(
+        sent(&seen)[0].1["config"]["approval_policy"],
+        "auto_approve_all"
+    );
+    for (name, url, secret) in [
+        ("JARVIS", "http://plain.example/mcp", "sec_1"),
+        ("JARVIS", "https://a b/mcp", "sec_1"),
+        ("", "https://jarvis.example.com/mcp", "sec_1"),
+        ("JARVIS", "https://jarvis.example.com/mcp", "bad secret!"),
+    ] {
+        let result = phone.create_mcp_server(name, url, secret, true).await;
+        assert!(
+            matches!(result, Err(PhoneError::Settings(_))),
+            "{url} {secret}"
+        );
+    }
+    assert_eq!(sent(&seen).len(), 1, "nothing unusable was sent");
+    assert!(
+        phone
+            .set_agent_mcp_servers(&["bad id!".to_owned()])
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_server_is_deleted_by_its_id_and_an_empty_answer_is_a_success() {
+    let (base, seen) = stand_in(vec![
+        ("DELETE /v1/convai/mcp-servers/srv_a ", 200, String::new()),
+        ("DELETE /v1/convai/mcp-servers/srv_b ", 404, "{}".to_owned()),
+    ])
+    .await;
+    let phone = adapter(&base);
+    phone
+        .delete_mcp_server("srv_a")
+        .await
+        .unwrap_or_else(|error| panic!("delete: {error}"));
+    assert!(phone.delete_mcp_server("srv_b").await.is_err());
+    assert!(matches!(
+        phone.delete_mcp_server("../x").await,
+        Err(PhoneError::Settings(_))
+    ));
+    assert_eq!(
+        sent(&seen).len(),
+        2,
+        "an id that is not an identifier is never put in a path"
+    );
+}
+
+/// Falsified by leaving `scrubbed` out: the provider can echo the value it was sent in its reason for refusing.
+#[tokio::test]
+async fn a_refused_secret_never_has_its_value_in_the_error() {
+    let (base, _) = stand_in(vec![(
+        "POST /v1/convai/secrets",
+        422,
+        r#"{"detail":[{"msg":"value the-access-key-value is not allowed"}]}"#.to_owned(),
+    )])
+    .await;
+    let error = adapter(&base)
+        .create_secret("JARVIS access key", "the-access-key-value")
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("a refusal is an error"));
+    let text = error.to_string();
+    assert!(!text.contains("the-access-key-value"), "{text}");
+    assert!(text.contains("[secret]"), "{text}");
+}

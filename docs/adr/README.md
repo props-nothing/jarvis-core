@@ -220,3 +220,5 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0201](0201-jarvis-may-ring-other-people-and-only-the-owner-may-use-jarvis-by-phone.md) | JARVIS may ring other people, and only the owner may use JARVIS by phone | Accepted |
 | [0202](0202-the-owner-may-give-jarvis-a-named-cloudflare-tunnel-for-an-address-that-never-changes.md) | The owner may give JARVIS a named Cloudflare tunnel for an address that never changes | Accepted |
 | [0203](0203-the-settings-dialog-is-a-grouped-side-list-with-switches-short-help-and-a-restart-footer.md) | The settings dialog is a grouped side list with switches, short help and a restart footer | Accepted |
+| [0204](0204-jarvis-can-connect-its-own-tools-to-the-phone-agent-test-a-key-and-say-when-something-has-stopped-working.md) | JARVIS can connect its own tools to the phone agent, test a key, and say when something has stopped working | Accepted |
+| [0205](0205-the-owner-sets-the-call-limits-and-can-delete-unused-temporary-tool-servers.md) | The owner sets the call limits and can delete unused temporary tool servers | Accepted |

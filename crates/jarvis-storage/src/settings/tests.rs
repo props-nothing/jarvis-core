@@ -340,6 +340,48 @@ fn phone_numbers_are_saved_in_one_canonical_form_and_a_bad_setting_leaves_the_fi
     assert!(loaded.config().daemon().phone_screen_callers());
 }
 
+/// **The call limits have a floor, a ceiling and an order**, so a mistyped value can neither switch calls off by accident nor lift the guard
+/// against a model that rings a phone without end. A refused change writes nothing.
+#[test]
+fn the_call_limits_default_to_three_and_ten_and_cannot_be_set_to_nothing_or_past_the_ceiling() {
+    let (_scratch, paths) = Scratch::new();
+    let read = || {
+        ConfigStore::from_paths(&paths)
+            .load()
+            .unwrap_or_else(|error| panic!("{error}"))
+    };
+    assert_eq!(read().config().daemon().phone_calls_per_hour(), 3);
+    assert_eq!(read().config().daemon().phone_calls_per_day(), 10);
+
+    set(&paths, "phone_calls_per_hour", &words("5")).unwrap_or_else(|error| panic!("{error}"));
+    set(&paths, "phone_calls_per_day", &words("20")).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(read().config().daemon().phone_calls_per_hour(), 5);
+    assert_eq!(read().config().daemon().phone_calls_per_day(), 20);
+
+    let snapshot = text(&paths);
+    for (field, bad) in [
+        ("phone_calls_per_hour", "0"),
+        ("phone_calls_per_hour", "21"),
+        ("phone_calls_per_hour", "-1"),
+        ("phone_calls_per_hour", "many"),
+        ("phone_calls_per_day", "0"),
+        ("phone_calls_per_day", "101"),
+        ("phone_calls_per_day", "4"),
+    ] {
+        assert!(
+            set(&paths, field, &words(bad)).is_err(),
+            "{field} = {bad} must be refused"
+        );
+    }
+    assert_eq!(
+        text(&paths),
+        snapshot,
+        "the hourly limit may not pass the daily one, and a refusal writes nothing"
+    );
+    unset(&paths, "phone_calls_per_hour").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(read().config().daemon().phone_calls_per_hour(), 3);
+}
+
 #[test]
 fn every_setting_has_a_tab_and_says_what_unset_means() {
     let (_scratch, paths) = Scratch::new();

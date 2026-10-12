@@ -35,7 +35,8 @@ pub use approval_repository::{
     read_workspace_unreleased_approvals, record_decision,
 };
 pub use config::{
-    CURRENT_CONFIG_VERSION, Config, ConfigError, ConfigMigration, ConfigStore, DaemonConfig,
+    CURRENT_CONFIG_VERSION, Config, ConfigError, ConfigMigration, ConfigStore,
+    DEFAULT_PHONE_CALLS_PER_DAY, DEFAULT_PHONE_CALLS_PER_HOUR, DaemonConfig,
     LIVE_PROVIDER_MODEL_NAME, LoadedConfig, LoggingConfig, ProfileConfig,
     unrecognized_environment_keys,
 };
