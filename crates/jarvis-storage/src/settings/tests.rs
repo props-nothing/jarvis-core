@@ -319,6 +319,25 @@ fn phone_numbers_are_saved_in_one_canonical_form_and_a_bad_setting_leaves_the_fi
     );
     assert!(loaded.config().daemon().phone_approves());
     assert!(!loaded.config().daemon().phone_opening_line());
+    assert!(
+        !loaded.config().daemon().phone_call_anyone(),
+        "calling other people is off until the owner says so"
+    );
+    set(&paths, "phone_call_anyone", &words("on")).unwrap_or_else(|error| panic!("{error}"));
+    let loaded = ConfigStore::from_paths(&paths)
+        .load()
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(loaded.config().daemon().phone_call_anyone());
+    assert!(set(&paths, "phone_call_anyone", &words("maybe")).is_err());
+    assert!(
+        !loaded.config().daemon().phone_screen_callers(),
+        "the door is off until the owner says so"
+    );
+    set(&paths, "phone_screen_callers", &words("on")).unwrap_or_else(|error| panic!("{error}"));
+    let loaded = ConfigStore::from_paths(&paths)
+        .load()
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(loaded.config().daemon().phone_screen_callers());
 }
 
 #[test]

@@ -1015,8 +1015,68 @@ impl ToolPipeline {
             issued_at: now,
         };
 
-        self.execute_and_record(prepared, stored.tool(), &definition, correlation_id)
+        match self
+            .execute_and_record(prepared, stored.tool(), &definition, correlation_id)
             .await
+        {
+            // The owner already said yes, so a refusal from the tool now is an **answer** the run is waiting for, not a fault of the
+            // request: left as an error, the call stayed half-finished and the run stayed parked on a question nobody could answer
+            // again (the console kept saying "needs you").
+            Err(ToolPipelineError::AdapterCall(error)) => {
+                self.settle_after_adapter_error(call_id, &error).await
+            }
+            other => other,
+        }
+    }
+
+    /// Records what an approved call came to when the adapter refused it or could not say, and returns it as a result the parked run can
+    /// be continued with, so the model tells the user instead of waiting for ever.
+    ///
+    /// A refusal before anything was reached is `failed` (nothing happened). An outcome the adapter could not establish is `unknown` and
+    /// says so, so the model does not claim either result and does not try again.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter's own error when the outcome cannot be built, and [`ToolPipelineError::Storage`] when it cannot be recorded.
+    async fn settle_after_adapter_error(
+        &self,
+        call_id: &str,
+        error: &AdapterError,
+    ) -> Result<ToolPipelineOutcome, ToolPipelineError> {
+        let (record, text) = match error {
+            AdapterError::RefusedBeforeReaching { reason }
+            | AdapterError::ProviderRefused { reason } => (
+                jarvis_tools::ToolOutcomeRecord::failed(
+                    reason.chars().take(280).collect::<String>(),
+                ),
+                format!(
+                    "The owner approved this call, but the tool refused it, so nothing happened: {reason}"
+                ),
+            ),
+            AdapterError::AmbiguousAfterReaching { reason } => (
+                jarvis_tools::ToolOutcomeRecord::new(ToolOutcome::Unknown),
+                format!(
+                    "The owner approved this call and it may have gone through, but the result is unknown ({reason}). Do not try again; \
+                     tell the user it may have happened and how to check."
+                ),
+            ),
+            AdapterError::NotImplemented { .. } => (
+                jarvis_tools::ToolOutcomeRecord::failed("this tool is not available"),
+                "The owner approved this call, but the tool is not available, so nothing happened."
+                    .to_owned(),
+            ),
+        };
+        let record = record.map_err(|_| ToolPipelineError::AdapterCall(error.clone()))?;
+        let now = UtcTimestamp::now(&SystemClock);
+        record_tool_outcome(&self.database, call_id, &record, Some((&text, false)), now).await?;
+        Ok(ToolPipelineOutcome::Executed(Box::new(
+            ToolCallResult::new(
+                record,
+                None,
+                Some(jarvis_tools::BoundedOutput::from_bounded(text, false)),
+                now,
+            ),
+        )))
     }
 
     /// Returns the registry the pipeline resolves tools against.

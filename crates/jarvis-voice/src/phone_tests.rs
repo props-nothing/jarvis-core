@@ -87,6 +87,7 @@ fn request() -> CallRequest {
         to: "+31612345678".to_owned(),
         variables: vec![("jarvis_reason".to_owned(), "the build failed".to_owned())],
         first_message: None,
+        prompt: None,
     }
 }
 
@@ -265,6 +266,174 @@ async fn a_placement_that_gets_no_usable_answer_is_uncertain_and_is_never_retrie
 }
 
 #[tokio::test]
+async fn live_conversations_name_who_is_on_the_line_and_never_hide_an_unknown_one() {
+    let list = r#"{"conversations":[
+        {"conversation_id":"conv_a","status":"in-progress","direction":"inbound"},
+        {"conversation_id":"conv_b","status":"done","direction":"inbound"},
+        {"conversation_id":"conv_c","status":"initiated","direction":"outbound"},
+        {"conversation_id":"conv_d","status":"in-progress"},
+        {"conversation_id":"conv_e","status":"something-new"}
+    ],"has_more":false}"#;
+    let phone = |direction: &str, number: &str| {
+        format!(
+            r#"{{"status":"in-progress","metadata":{{"phone_call":{{"direction":"{direction}","external_number":"{number}"}}}}}}"#
+        )
+    };
+    let (base, seen) = stand_in(vec![
+        ("GET /v1/convai/conversations?", 200, list.to_owned()),
+        (
+            "GET /v1/convai/conversations/conv_a ",
+            200,
+            phone("inbound", "+31612345678"),
+        ),
+        (
+            "GET /v1/convai/conversations/conv_c ",
+            200,
+            phone("outbound", "+31687654321"),
+        ),
+        // No phone details at all: a chat in a browser, say.
+        (
+            "GET /v1/convai/conversations/conv_d ",
+            200,
+            r#"{"status":"in-progress","metadata":{}}"#.to_owned(),
+        ),
+        // The details of this one cannot be read.
+        ("GET /v1/convai/conversations/conv_e ", 500, "{}".to_owned()),
+    ])
+    .await;
+    let live = adapter(&base)
+        .live_conversations(1_700_000_000)
+        .await
+        .unwrap_or_else(|error| panic!("live: {error}"));
+    let by_id = |id: &str| live.iter().find(|call| call.conversation_id == id);
+
+    assert_eq!(
+        by_id("conv_a").and_then(|call| call.external_number.as_deref()),
+        Some("+31612345678")
+    );
+    assert_eq!(
+        by_id("conv_a").and_then(|call| call.direction.as_deref()),
+        Some("inbound")
+    );
+    assert_eq!(
+        by_id("conv_c").and_then(|call| call.external_number.as_deref()),
+        Some("+31687654321")
+    );
+    assert!(
+        by_id("conv_b").is_none(),
+        "a finished call is not on the line"
+    );
+    assert_eq!(
+        by_id("conv_d").map(|call| call.external_number.clone()),
+        Some(None)
+    );
+    assert_eq!(
+        by_id("conv_e").map(|call| call.external_number.clone()),
+        Some(None),
+        "an unreadable or unknown conversation is kept, with no number"
+    );
+    let first = seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)[0]
+        .clone();
+    assert!(
+        first.starts_with("GET /v1/convai/conversations?agent_id=agent_1&call_start_after_unix=1700000000&page_size=50 "),
+        "{first}"
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_list_is_an_error_and_never_an_empty_line() {
+    let (base, _seen) = stand_in(vec![(
+        "GET /v1/convai/conversations?",
+        500,
+        "{}".to_owned(),
+    )])
+    .await;
+    assert!(adapter(&base).live_conversations(0).await.is_err());
+    let (base, _seen) = stand_in(vec![(
+        "GET /v1/convai/conversations?",
+        200,
+        "{}".to_owned(),
+    )])
+    .await;
+    assert!(
+        matches!(
+            adapter(&base).live_conversations(0).await,
+            Err(PhoneError::BadAnswer)
+        ),
+        "an answer with no list is not an answer that nobody is calling"
+    );
+}
+
+#[tokio::test]
+async fn the_inbound_door_is_set_with_the_secret_in_the_body_and_never_in_an_error() {
+    let (base, seen) = stand_in(vec![
+        ("PATCH /v1/convai/settings", 200, "{}".to_owned()),
+        ("PATCH /v1/convai/agents/agent_1 ", 200, "{}".to_owned()),
+    ])
+    .await;
+    let phone = adapter(&base);
+    phone
+        .register_initiation_webhook("https://x.example/phone/initiate", "s3cret-value")
+        .await
+        .unwrap_or_else(|error| panic!("register: {error}"));
+    phone
+        .set_initiation_webhook_enabled(true)
+        .await
+        .unwrap_or_else(|error| panic!("enable: {error}"));
+    let seen = seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let body = |request: &str| -> Value {
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or_default())
+            .unwrap_or_else(|error| panic!("body: {error}"))
+    };
+    let hook = &body(&seen[0])["conversation_initiation_client_data_webhook"];
+    assert_eq!(hook["url"], "https://x.example/phone/initiate");
+    assert_eq!(
+        hook["request_headers"]["Authorization"],
+        "Bearer s3cret-value"
+    );
+    assert_eq!(
+        body(&seen[1])["platform_settings"]["overrides"]["enable_conversation_initiation_client_data_from_webhook"],
+        true
+    );
+
+    // A refusal that echoes the secret never reaches the caller with it.
+    let (base, _seen) = stand_in(vec![(
+        "PATCH /v1/convai/settings",
+        422,
+        r#"{"detail":[{"msg":"bad header Bearer s3cret-value"}]}"#.to_owned(),
+    )])
+    .await;
+    let error = adapter(&base)
+        .register_initiation_webhook("https://x.example/phone/initiate", "s3cret-value")
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("must fail"));
+    let shown = format!("{error} {error:?}");
+    assert!(!shown.contains("s3cret-value"), "{shown}");
+
+    for bad in ["http://x.example/a", "https://x.example/a b", ""] {
+        assert!(
+            matches!(
+                phone.register_initiation_webhook(bad, "s").await,
+                Err(PhoneError::Settings(_))
+            ),
+            "{bad:?}"
+        );
+    }
+    assert!(
+        phone
+            .register_initiation_webhook("https://x.example/a", "a b")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn statuses_are_mapped_and_a_key_the_provider_refuses_is_named_as_such() {
     for (status, expected) in [
         (401, "rejected the key"),
@@ -360,4 +529,69 @@ fn statuses_round_trip_and_only_the_open_ones_are_live() {
         Some(CallStatus::InProgress)
     );
     assert_eq!(CallStatus::from_word("ringing"), None);
+}
+
+#[tokio::test]
+async fn a_call_may_carry_its_own_prompt_and_the_agents_settings_can_be_read_and_widened() {
+    let agent = r#"{"conversation_config":{"agent":{"prompt":{"prompt":"You are JARVIS."}}},
+        "platform_settings":{"overrides":{"conversation_config_override":{"agent":{"first_message":true,"prompt":{"prompt":false}}}}}}"#;
+    let (base, seen) = stand_in(vec![
+        ("GET /v1/convai/agents/agent_1 ", 200, agent.to_owned()),
+        ("PATCH /v1/convai/agents/agent_1 ", 200, "{}".to_owned()),
+        ("GET /v1/convai/phone-numbers", 200, numbers("twilio")),
+        (
+            "POST /v1/convai/twilio/outbound-call",
+            200,
+            r#"{"success":true,"message":"ok","conversation_id":"conv_9","callSid":"CA1"}"#
+                .to_owned(),
+        ),
+    ])
+    .await;
+    let phone = adapter(&base);
+    let setup = phone
+        .agent_setup()
+        .await
+        .unwrap_or_else(|error| panic!("setup: {error}"));
+    assert_eq!(setup.prompt, "You are JARVIS.");
+    assert!(!setup.prompt_override_allowed);
+    phone
+        .allow_prompt_override()
+        .await
+        .unwrap_or_else(|error| panic!("allow: {error}"));
+
+    let mut asked = request();
+    asked.first_message = Some("Hello.".to_owned());
+    asked.prompt = Some("You are JARVIS. This call: demo.".to_owned());
+    phone
+        .place_call(&asked)
+        .await
+        .unwrap_or_else(|error| panic!("place: {error}"));
+    let seen = seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let body = |request: &str| -> Value {
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or_default())
+            .unwrap_or_else(|error| panic!("body: {error}"))
+    };
+    let patch = seen
+        .iter()
+        .find(|request| request.starts_with("PATCH "))
+        .map(|request| body(request));
+    assert_eq!(
+        patch.as_ref().map(|value| &value["platform_settings"]["overrides"]["conversation_config_override"]["agent"]["prompt"]["prompt"]),
+        Some(&Value::Bool(true))
+    );
+    let call = seen
+        .iter()
+        .find(|request| request.starts_with("POST "))
+        .map(|request| body(request))
+        .unwrap_or_default();
+    let agent_override =
+        &call["conversation_initiation_client_data"]["conversation_config_override"]["agent"];
+    assert_eq!(agent_override["first_message"], "Hello.");
+    assert_eq!(
+        agent_override["prompt"]["prompt"],
+        "You are JARVIS. This call: demo."
+    );
 }

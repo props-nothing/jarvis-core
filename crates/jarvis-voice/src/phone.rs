@@ -110,6 +110,17 @@ pub struct CallRequest {
     pub variables: Vec<(String, String)>,
     /// The first thing the agent says, when the agent allows it to be overridden. `None` leaves the agent's own.
     pub first_message: Option<String>,
+    /// The whole prompt the agent runs this call with, when the agent allows its prompt to be overridden. `None` leaves the agent's own.
+    pub prompt: Option<String>,
+}
+
+/// What the agent is set up to allow, read from the provider before a call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentSetup {
+    /// The prompt the agent runs with when nothing overrides it.
+    pub prompt: String,
+    /// Whether a call may carry its own prompt.
+    pub prompt_override_allowed: bool,
 }
 
 /// A call the provider accepted.
@@ -208,6 +219,18 @@ pub struct CallState {
     pub summary: Option<String>,
     /// The transcript so far, bounded.
     pub transcript: Vec<Line>,
+}
+
+/// One conversation the provider says is open on the agent, and who is on the other end of the line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveConversation {
+    /// The provider's conversation id.
+    pub conversation_id: String,
+    /// `inbound` or `outbound`, when the provider says.
+    pub direction: Option<String>,
+    /// The other party's number, as the provider reports it. `None` when the conversation is not a phone call or the provider did not say,
+    /// which a caller must treat as "someone unknown".
+    pub external_number: Option<String>,
 }
 
 /// Phone calls through the agents platform of `ElevenLabs`.
@@ -330,12 +353,23 @@ impl ElevenLabsPhone {
                 .map(|(name, value)| (name.clone(), Value::String(value.clone())))
                 .collect::<serde_json::Map<_, _>>(),
         });
+        let mut agent = serde_json::Map::new();
         if let Some(first) = request
             .first_message
             .as_deref()
             .filter(|text| !text.trim().is_empty())
         {
-            data["conversation_config_override"] = json!({ "agent": { "first_message": first } });
+            agent.insert("first_message".to_owned(), json!(first));
+        }
+        if let Some(prompt) = request
+            .prompt
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+        {
+            agent.insert("prompt".to_owned(), json!({ "prompt": prompt }));
+        }
+        if !agent.is_empty() {
+            data["conversation_config_override"] = json!({ "agent": agent });
         }
         let body = json!({
             "agent_id": self.agent_id,
@@ -371,6 +405,73 @@ impl ElevenLabsPhone {
                 .filter(|id| plain(id))
                 .map(str::to_owned),
         })
+    }
+
+    /// The conversations open on the agent right now (`initiated` or `in-progress`) that started at or after `since_unix_secs`, each with
+    /// the number of the other party.
+    ///
+    /// This is how JARVIS learns that someone is on the line without being told: an inbound call never passes through JARVIS. A
+    /// conversation whose details cannot be read is returned with no number, so a caller that only trusts known numbers treats it as unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the list cannot be read. The list is the evidence that nobody is on the line, so a caller must not
+    /// read a failure as "nobody".
+    pub async fn live_conversations(
+        &self,
+        since_unix_secs: u64,
+    ) -> Result<Vec<LiveConversation>, PhoneError> {
+        let answer = self
+            .get(&format!(
+                "/v1/convai/conversations?agent_id={}&call_start_after_unix={since_unix_secs}&page_size=50",
+                self.agent_id
+            ))
+            .await?;
+        let items = answer
+            .get("conversations")
+            .and_then(Value::as_array)
+            .ok_or(PhoneError::BadAnswer)?;
+        let mut live = Vec::new();
+        for item in items {
+            let open = item
+                .get("status")
+                .and_then(Value::as_str)
+                .and_then(CallStatus::from_word)
+                .is_none_or(CallStatus::is_live);
+            let Some(id) = item
+                .get("conversation_id")
+                .and_then(Value::as_str)
+                .filter(|id| plain(id))
+            else {
+                // An entry that cannot be told apart from a stranger's is one.
+                live.push(LiveConversation {
+                    conversation_id: String::new(),
+                    direction: None,
+                    external_number: None,
+                });
+                continue;
+            };
+            if !open {
+                continue;
+            }
+            let phone = self
+                .get(&format!("/v1/convai/conversations/{id}"))
+                .await
+                .ok()
+                .and_then(|detail| detail.get("metadata")?.get("phone_call").cloned());
+            live.push(LiveConversation {
+                conversation_id: id.to_owned(),
+                direction: phone
+                    .as_ref()
+                    .and_then(|call| call.get("direction")?.as_str().map(str::to_owned)),
+                external_number: phone.as_ref().and_then(|call| {
+                    call.get("external_number")?
+                        .as_str()
+                        .map(|number| bounded(number, 32))
+                }),
+            });
+        }
+        Ok(live)
     }
 
     /// What the provider knows about one call.
@@ -418,6 +519,122 @@ impl ElevenLabsPhone {
             summary,
             transcript: transcript.into_iter().skip(skip).collect(),
         })
+    }
+
+    /// What the agent runs with and whether a call may bring its own prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the agent cannot be read or the answer is not what the documentation describes.
+    pub async fn agent_setup(&self) -> Result<AgentSetup, PhoneError> {
+        let answer = self
+            .get(&format!("/v1/convai/agents/{}", self.agent_id))
+            .await?;
+        let prompt = answer
+            .get("conversation_config")
+            .and_then(|config| config.get("agent")?.get("prompt")?.get("prompt")?.as_str())
+            .ok_or(PhoneError::BadAnswer)?;
+        let allowed = answer
+            .get("platform_settings")
+            .and_then(|settings| {
+                settings
+                    .get("overrides")?
+                    .get("conversation_config_override")?
+                    .get("agent")?
+                    .get("prompt")?
+                    .get("prompt")?
+                    .as_bool()
+            })
+            .unwrap_or(false);
+        Ok(AgentSetup {
+            prompt: prompt.to_owned(),
+            prompt_override_allowed: allowed,
+        })
+    }
+
+    /// Lets a call bring its own prompt. Needed once; the agent's other override settings are left as they are.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the provider refuses the change.
+    pub async fn allow_prompt_override(&self) -> Result<(), PhoneError> {
+        let body = json!({
+            "platform_settings": { "overrides": { "conversation_config_override": {
+                "agent": { "prompt": { "prompt": true } }
+            } } }
+        });
+        self.send(
+            self.patch(&format!("/v1/convai/agents/{}", self.agent_id))
+                .json(&body),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Points the workspace's inbound-call webhook at `url`, with `secret` as the bearer credential `ElevenLabs` sends to it.
+    ///
+    /// `ElevenLabs` asks this address before an inbound call starts; an answer that is not a success stops the call from starting. The
+    /// workspace holds one such address, shared by every agent in it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhoneError::Settings`] for an address that is not `https` or a secret that would split a header, and another
+    /// [`PhoneError`] when the provider refuses the change (the secret is removed from anything the provider echoes back).
+    pub async fn register_initiation_webhook(
+        &self,
+        url: &str,
+        secret: &str,
+    ) -> Result<(), PhoneError> {
+        if !url.starts_with("https://")
+            || url.len() > 300
+            || !url.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(PhoneError::Settings("the webhook address must be https"));
+        }
+        if secret.is_empty() || !secret.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(PhoneError::Settings("the webhook secret is malformed"));
+        }
+        let body = json!({
+            "conversation_initiation_client_data_webhook": {
+                "url": url,
+                "request_headers": { "Authorization": format!("Bearer {secret}") }
+            }
+        });
+        self.send(self.patch("/v1/convai/settings").json(&body))
+            .await
+            .map(|_| ())
+            .map_err(|error| match error {
+                PhoneError::Invalid(words) => {
+                    PhoneError::Invalid(words.replace(secret, "[secret]"))
+                }
+                other => other,
+            })
+    }
+
+    /// Switches the agent's "fetch initiation data from the workspace webhook" setting on or off. On, `ElevenLabs` asks the webhook before
+    /// every inbound call and the call starts only if it answers yes; the agent's other override settings are left as they are.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PhoneError`] when the provider refuses the change.
+    pub async fn set_initiation_webhook_enabled(&self, enabled: bool) -> Result<(), PhoneError> {
+        let body = json!({
+            "platform_settings": { "overrides": {
+                "enable_conversation_initiation_client_data_from_webhook": enabled
+            } }
+        });
+        self.send(
+            self.patch(&format!("/v1/convai/agents/{}", self.agent_id))
+                .json(&body),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    fn patch(&self, path: &str) -> reqwest::RequestBuilder {
+        self.client
+            .patch(format!("{}{path}", self.base_url))
+            .header("xi-api-key", &self.key.0)
     }
 
     fn post(&self, path: &str) -> reqwest::RequestBuilder {

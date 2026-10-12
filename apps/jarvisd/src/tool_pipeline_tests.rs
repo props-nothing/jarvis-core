@@ -1068,6 +1068,87 @@ async fn an_approved_call_resumes_once_and_not_twice() {
     );
 }
 
+/// **An approved call that the tool then refuses ends as a recorded failure the run can report**, and is not left half-finished.
+///
+/// Found on 2026-10-12: the owner approved a call in the console, the tool refused it (a rate bound), and the run stayed on "needs you"
+/// for ever: the adapter's error left the call `submitted` and nothing continued the run. Falsified by letting the error escape again.
+#[tokio::test]
+async fn an_approved_call_the_tool_refuses_is_settled_as_failed_with_its_reason() {
+    let directory = TempRoot::new();
+    let roots = must(WorkspaceRoots::new([directory.path()]));
+    let adapter = Arc::new(crate::approval_fixture::ApprovalDeclaringAdapter::default());
+    let (_root, database, pipeline) = pipeline_with_extra(
+        roots,
+        vec![held_definition()],
+        Arc::clone(&adapter) as Arc<dyn jarvis_tools::ToolExecutor>,
+    )
+    .await;
+
+    let arguments = json!({ "path": "notes/todo.txt" });
+    let ToolPipelineOutcome::AwaitingApproval {
+        call_id,
+        approval_id,
+        ..
+    } = must(
+        pipeline
+            .call_tool(
+                "mcp.test.write",
+                arguments.clone(),
+                &mcp_actor(),
+                CorrelationId::new(),
+            )
+            .await,
+    )
+    else {
+        panic!("expected a hold");
+    };
+    must(
+        jarvis_storage::record_decision(
+            &database,
+            &approval_id,
+            &must(jarvis_core::ApprovalDecision::new(
+                jarvis_core::ApprovalDecisionOutcome::Approve,
+                jarvis_core::ApprovalChannel::Cli,
+                UtcTimestamp::now(&SystemClock),
+                LOCAL_USER_ID,
+            )),
+        )
+        .await,
+    );
+
+    let resumed = must(
+        pipeline
+            .resume(&call_id, arguments, &mcp_actor(), CorrelationId::new())
+            .await,
+    );
+    let ToolPipelineOutcome::Executed(result) = resumed else {
+        panic!(
+            "a refused approved call must come back as a result the run can use, got {resumed:?}"
+        );
+    };
+    assert_eq!(result.outcome(), ToolOutcome::Failed);
+    assert!(
+        result.output().is_some_and(|output| output
+            .content()
+            .contains("the approval fixture must never be reached")),
+        "the reason reaches the model: {result:?}"
+    );
+    assert_eq!(adapter.calls(), 1);
+
+    let stored = must(pipeline.call(&call_id).await);
+    assert_eq!(
+        stored.outcome(),
+        ToolOutcome::Failed,
+        "the call is not left half-finished"
+    );
+    assert!(stored.outcome().is_terminal());
+    assert!(
+        stored
+            .output()
+            .is_some_and(|text| text.contains("nothing happened")),
+        "the run reads this when it is continued"
+    );
+}
 /// **A denied — or lapsed — approval cannot be resumed, however the caller asks.**
 ///
 /// The refusal reads `authorizes_at`, which is false for a denial, a cancellation, an expiry, and an

@@ -79,7 +79,7 @@ pub use memory::{
 pub use message::{
     InvalidMessage, MAX_MESSAGE_CONTENT_BYTES, MessageRole, MessageSource, NewMessage,
 };
-pub use phone::{mask_phone_number, normalize_phone_number};
+pub use phone::{is_premium_rate, mask_phone_number, normalize_phone_number};
 pub use retrieval::{
     DEFAULT_DIVERSITY_BUDGET, DiversityBudget, DiversityReason, DroppedMemory, ExcludedMemory,
     Ineligibility, MAX_SIGNAL_WEIGHT, MemoryQuery, MemorySelection, MemorySignals,

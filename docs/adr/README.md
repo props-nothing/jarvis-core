@@ -217,3 +217,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0198](0198-tool-search-ignores-word-endings-and-asks-for-english-and-held-back-tools-are-counted-apart.md) | Tool search ignores word endings and asks for English, held-back tools are counted apart, and found tools come last | Accepted |
 | [0199](0199-a-long-run-also-leaves-out-the-text-it-wrote-in-old-calls.md) | A long run also leaves out the text it wrote in old calls | Accepted |
 | [0200](0200-jarvis-rings-the-owner-on-the-phone-and-a-yes-on-that-call-can-count-as-the-approval.md) | JARVIS rings the owner on the phone, and a yes on that call can count as the approval | Accepted |
+| [0201](0201-jarvis-may-ring-other-people-and-only-the-owner-may-use-jarvis-by-phone.md) | JARVIS may ring other people, and only the owner may use JARVIS by phone | Accepted |

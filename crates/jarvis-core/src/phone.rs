@@ -29,6 +29,23 @@ pub fn normalize_phone_number(text: &str) -> Result<String, &'static str> {
     Ok(format!("+{digits}"))
 }
 
+/// Whether a number is in a range that charges the caller per minute or per call (premium rate, mass-traffic and similar), for the
+/// countries below. **Best effort, and not a complete list**: it exists so that a model steered by hostile text cannot cheaply run up the
+/// owner's phone bill with a number it was handed, not to classify every number in the world.
+#[must_use]
+pub fn is_premium_rate(number: &str) -> bool {
+    const PREFIXES: [&str; 13] = [
+        "+31900", "+31906", "+31909", // Netherlands 0900, 0906, 0909
+        "+32900", "+32902", "+32904", // Belgium 0900, 0902, 0904
+        "+449",   // United Kingdom 09
+        "+1900",  // United States and Canada 900
+        "+49900", "+49137", // Germany 0900, 0137
+        "+33899", "+33891", // France 0899, 0891
+        "+882",   // international networks
+    ];
+    PREFIXES.iter().any(|prefix| number.starts_with(prefix))
+}
+
 /// A number with the middle hidden, for a log line, a card or a record shown on screen: `+31••••••678`.
 #[must_use]
 pub fn mask_phone_number(number: &str) -> String {
@@ -68,6 +85,27 @@ mod tests {
                 normalize_phone_number(bad).is_err(),
                 "{bad} must be refused"
             );
+        }
+    }
+
+    #[test]
+    fn premium_rate_ranges_are_recognised_and_ordinary_numbers_are_not() {
+        for premium in [
+            "+31900123456",
+            "+449091234567",
+            "+19005551234",
+            "+4990012345",
+            "+3389912345",
+        ] {
+            assert!(is_premium_rate(premium), "{premium}");
+        }
+        for ordinary in [
+            "+31612345678",
+            "+442071234567",
+            "+12025550101",
+            "+4915112345678",
+        ] {
+            assert!(!is_premium_rate(ordinary), "{ordinary}");
         }
     }
 

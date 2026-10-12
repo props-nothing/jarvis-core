@@ -285,6 +285,12 @@ pub struct DaemonConfig {
     /// "first message" override switched on at the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     phone_opening_line: Option<bool>,
+    /// Whether JARVIS may ring numbers that are not the owner's (`ADR-0201`). Off unless the owner turned it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_call_anyone: Option<bool>,
+    /// Whether an inbound call is answered only when the caller's number is one of the owner's (`ADR-0201`). Off unless the owner turned it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_screen_callers: Option<bool>,
 }
 
 /// The words a reasoning effort may be (the same ones providers use).
@@ -460,6 +466,18 @@ impl DaemonConfig {
         self.phone_opening_line.unwrap_or(false)
     }
 
+    /// Whether JARVIS may ring numbers that are not the owner's (off unless the owner turned it on).
+    #[must_use]
+    pub fn phone_call_anyone(&self) -> bool {
+        self.phone_call_anyone.unwrap_or(false)
+    }
+
+    /// Whether an inbound call is answered only for the owner's numbers (off unless the owner turned it on).
+    #[must_use]
+    pub fn phone_screen_callers(&self) -> bool {
+        self.phone_screen_callers.unwrap_or(false)
+    }
+
     /// The file holding the web search key, if search is configured.
     #[must_use]
     pub fn search_api_key_ref(&self) -> Option<&Path> {
@@ -581,6 +599,8 @@ impl Default for DaemonConfig {
             phone_owner_numbers: Vec::new(),
             phone_approves: None,
             phone_opening_line: None,
+            phone_call_anyone: None,
+            phone_screen_callers: None,
         }
     }
 }
@@ -1594,6 +1614,8 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "phone_owner_numbers",
                 "phone_approves",
                 "phone_opening_line",
+                "phone_call_anyone",
+                "phone_screen_callers",
             ],
             &mut unknown,
         );

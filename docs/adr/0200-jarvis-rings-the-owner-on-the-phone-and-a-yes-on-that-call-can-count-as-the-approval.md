@@ -1,6 +1,6 @@
 # ADR-0200: JARVIS rings the owner on the phone, and a yes on that call can count as the approval
 
-Status: Accepted (first slice of `P8-007`; amends `ADR-0180`)
+Status: Accepted (first slice of `P8-007`; amends `ADR-0180`; amended by `ADR-0201`: other people can be rung, and a guard keeps everyone but the owner away from the tools)
 Date: 2026-10-11
 
 ## Context

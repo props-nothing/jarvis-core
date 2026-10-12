@@ -604,13 +604,17 @@ async fn approval_runner(
     (runner, approvals, adapter, root)
 }
 
-/// A phone that answers the same thing every time, standing in for the live-call check.
-struct StubPhone(Option<crate::phone_service::PhoneYes>);
+/// A phone that answers the same thing every time, standing in for the live-call check and the line guard.
+struct StubPhone(Option<crate::phone_service::PhoneYes>, Option<String>);
 
 #[async_trait::async_trait]
 impl crate::phone_service::PhoneApproval for StubPhone {
     async fn approves(&self, _tool: &str, _risk: u8) -> Option<crate::phone_service::PhoneYes> {
         self.0.clone()
+    }
+
+    async fn line_guard(&self) -> Option<String> {
+        self.1.clone()
     }
 }
 
@@ -660,9 +664,12 @@ fn call_arguments() -> serde_json::Value {
 async fn a_yes_on_the_phone_runs_the_call_without_a_second_question() {
     let (runner, approvals, adapter, _root) =
         approval_runner_under(WorkspacePolicy::default()).await;
-    approvals.set_phone_approval(Arc::new(StubPhone(Some(crate::phone_service::PhoneYes {
-        call_id: "call-1".to_owned(),
-    }))));
+    approvals.set_phone_approval(Arc::new(StubPhone(
+        Some(crate::phone_service::PhoneYes {
+            call_id: "call-1".to_owned(),
+        }),
+        None,
+    )));
     let result = must(
         runner
             .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
@@ -682,7 +689,7 @@ async fn a_yes_on_the_phone_runs_the_call_without_a_second_question() {
 async fn without_a_live_call_the_question_still_waits_in_the_console() {
     let (runner, approvals, adapter, _root) =
         approval_runner_under(WorkspacePolicy::default()).await;
-    approvals.set_phone_approval(Arc::new(StubPhone(None)));
+    approvals.set_phone_approval(Arc::new(StubPhone(None, None)));
     let refused = runner
         .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
         .await
@@ -700,9 +707,12 @@ async fn a_tool_set_to_always_ask_first_ignores_a_yes_on_the_phone() {
         jarvis_tools::ApprovalPolicy::Ask,
     );
     let (runner, approvals, adapter, _root) = approval_runner_under(policy).await;
-    approvals.set_phone_approval(Arc::new(StubPhone(Some(crate::phone_service::PhoneYes {
-        call_id: "call-1".to_owned(),
-    }))));
+    approvals.set_phone_approval(Arc::new(StubPhone(
+        Some(crate::phone_service::PhoneYes {
+            call_id: "call-1".to_owned(),
+        }),
+        None,
+    )));
     let refused = runner
         .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
         .await
@@ -716,7 +726,7 @@ async fn a_tool_set_to_always_ask_first_ignores_a_yes_on_the_phone() {
 #[test]
 fn the_phone_tools_are_not_served_to_other_apps() {
     let definitions = must(crate::phone_tool::PhoneTool::definitions());
-    assert_eq!(definitions.len(), 2);
+    assert_eq!(definitions.len(), 3);
     assert!(
         super::servable_definitions(&definitions).is_empty(),
         "no phone tool may be offered to a connected app"
@@ -1036,5 +1046,107 @@ async fn the_served_surface_matches_the_registry() {
         served.len(),
         definitions.len(),
         "every registered definition must be served when none is excluded"
+    );
+}
+
+/// **A stranger on the phone line holds every tool back, however the call would otherwise have gone**: a call that needs no approval, one
+/// that the owner already said yes to on the phone, and one that would wait for the console. Falsified by removing the guard from `run`.
+#[tokio::test]
+async fn while_someone_who_is_not_the_owner_is_on_the_phone_no_tool_runs() {
+    let held = || Some("someone who is not the owner is on the phone line".to_owned());
+
+    // A call the policy would let through unasked (the owner trusts the tool by name).
+    let policy =
+        WorkspacePolicy::default().trusting(must(jarvis_tools::ToolId::new(APPROVAL_TOOL)));
+    let (runner, approvals, adapter, _root) = approval_runner_under(policy).await;
+    approvals.set_phone_approval(Arc::new(StubPhone(None, held())));
+    let refused = runner
+        .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("the guard must refuse"));
+    assert!(refused.to_string().contains("not the owner"), "{refused}");
+    assert_eq!(adapter.calls(), 0);
+    assert!(
+        approvals.list().is_empty(),
+        "nothing was put in front of the owner either"
+    );
+
+    // The owner's yes on the phone does not outrank it.
+    let (runner, approvals, adapter, _root) =
+        approval_runner_under(WorkspacePolicy::default()).await;
+    approvals.set_phone_approval(Arc::new(StubPhone(
+        Some(crate::phone_service::PhoneYes {
+            call_id: "call-1".to_owned(),
+        }),
+        held(),
+    )));
+    assert!(
+        runner
+            .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(adapter.calls(), 0);
+
+    // Control: with the line clear the same call runs.
+    let (runner, approvals, adapter, _root) =
+        approval_runner_under(WorkspacePolicy::default()).await;
+    approvals.set_phone_approval(Arc::new(StubPhone(
+        Some(crate::phone_service::PhoneYes {
+            call_id: "call-1".to_owned(),
+        }),
+        None,
+    )));
+    assert!(
+        runner
+            .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+            .await
+            .is_ok()
+    );
+    assert_eq!(adapter.calls(), 1);
+}
+
+/// **The line is looked at again when an approved call is about to run**: the owner said yes in the console, then a stranger rang.
+#[tokio::test]
+async fn a_stranger_who_calls_while_the_owner_is_deciding_still_holds_the_tool_back() {
+    struct RingsDuringTheWait(std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl crate::phone_service::PhoneApproval for RingsDuringTheWait {
+        async fn approves(&self, _tool: &str, _risk: u8) -> Option<crate::phone_service::PhoneYes> {
+            None
+        }
+
+        // Clear when the call arrives, occupied by the time the owner has answered.
+        async fn line_guard(&self) -> Option<String> {
+            (self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1)
+                .then(|| "someone who is not the owner is on the phone line".to_owned())
+        }
+    }
+
+    let (runner, approvals, adapter, _root) =
+        approval_runner(std::time::Duration::from_secs(30)).await;
+    approvals.set_phone_approval(Arc::new(RingsDuringTheWait(
+        std::sync::atomic::AtomicUsize::new(0),
+    )));
+    let task = tokio::spawn({
+        let runner = runner.clone();
+        async move {
+            runner
+                .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+                .await
+        }
+    });
+    let id = waiting_id(&approvals).await;
+    assert!(approvals.decide(&id, true).is_some());
+    let refused = must(task.await)
+        .err()
+        .unwrap_or_else(|| panic!("the late guard must refuse"));
+    assert!(refused.to_string().contains("not the owner"), "{refused}");
+    assert_eq!(
+        adapter.calls(),
+        0,
+        "the owner said yes, and it still did not run"
     );
 }

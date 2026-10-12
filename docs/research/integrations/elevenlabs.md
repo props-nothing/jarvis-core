@@ -312,3 +312,11 @@ The phone adapter and daemon tests use a stand-in that follows this contract: Tw
 | Date | Sources | Change | Who |
 | --- | --- | --- | --- |
 | 2026-10-11 | the pages above | Added the outbound call, number list and conversation read contracts for the telephony slice | GitHub Copilot |
+| 2026-10-12 | live API (docs host answered 451 for the list page; filters tested directly) | Added the live-conversation read used by the line guard (`ADR-0201`) | GitHub Copilot |
+
+### Reading who is on the line (added 2026-10-12, `ADR-0201`)
+
+- **List:** `GET /v1/convai/conversations?agent_id=…&call_start_after_unix=…&page_size=50` returns `conversations[]` (newest first) with `conversation_id`, `status`, `direction` (`inbound`/`outbound`), `conversation_initiation_source` (`twilio`) and `has_more`. Tested live: `agent_id` and `call_start_after_unix` filter as expected (a future time returns none). The official list page could not be fetched on 2026-10-12 (HTTP 451 from the docs host), so these filters are verified by use, not by the page, and should be re-checked against it.
+- **Detail:** `metadata.phone_call` carries `direction`, `external_number` (the other party), `agent_number`, `phone_number_id`, `call_result` (null while an inbound call is open), `type` (`twilio`), `call_sid`. A conversation that is not a phone call has no `phone_call`. Observed on two real inbound calls and several outbound ones.
+- **Inbound only works with the initiation webhook flag off.** The agent had `platform_settings.overrides.enable_conversation_initiation_client_data_from_webhook = true` with no webhook, and no inbound conversation existed from 2026-09-20 until the flag was switched off on 2026-10-12; the docs say a failed webhook can prevent the conversation from starting.
+- **Not found:** a way to reject or hang up a conversation from outside it (`DELETE` removes the record), and a documented value for `status` while an inbound call is still ringing.

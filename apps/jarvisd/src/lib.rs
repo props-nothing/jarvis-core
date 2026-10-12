@@ -618,10 +618,10 @@ fn compose_phone(
     database: &Arc<SqliteDatabase>,
     access: &crate::mcp_access::McpAccess,
 ) -> Arc<phone_service::PhoneService> {
-    let phone = Arc::new(phone_service::PhoneService::new(
-        paths.clone(),
-        Arc::clone(database),
-    ));
+    let phone = Arc::new(
+        phone_service::PhoneService::new(paths.clone(), Arc::clone(database))
+            .with_tunnel(Arc::clone(access.tunnel())),
+    );
     access
         .approvals()
         .set_phone_approval(Arc::clone(&phone) as Arc<dyn phone_service::PhoneApproval>);

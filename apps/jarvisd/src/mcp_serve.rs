@@ -204,6 +204,16 @@ impl RemoteMcpRunner {
         approval_id: String,
         approver_id: String,
     ) -> Result<ToolCallResult, AdapterError> {
+        // The owner may have said yes a minute ago; the line is looked at again now, at the moment the call would run.
+        if let Some(phone) = self.approvals.phone_approval()
+            && let Some(reason) = phone.line_guard().await
+        {
+            tracing::info!(
+                tool = name,
+                "an approved call from another app was held back by the phone line guard"
+            );
+            return Err(AdapterError::RefusedBeforeReaching { reason });
+        }
         let now = jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock);
         let actor = ToolActor::remote(
             self.workspace_id.clone(),
@@ -248,6 +258,18 @@ impl ServedToolRunner for RemoteMcpRunner {
         arguments: Value,
         correlation_id: CorrelationId,
     ) -> Result<ToolCallResult, AdapterError> {
+        // Before anything else: while someone who is not the owner is on the phone line (the phone agent is one of the apps that reach
+        // this endpoint, and an inbound call never passes through JARVIS), no tool is run for any app. It fails closed: a line that cannot
+        // be checked counts as not the owner's (`ADR-0201`).
+        if let Some(phone) = self.approvals.phone_approval()
+            && let Some(reason) = phone.line_guard().await
+        {
+            tracing::info!(
+                tool = name,
+                "a call from another app was held back by the phone line guard"
+            );
+            return Err(AdapterError::RefusedBeforeReaching { reason });
+        }
         let actor = ToolActor::remote(
             self.workspace_id.clone(),
             correlation_id,
@@ -488,12 +510,15 @@ impl ServingMcp {
         // accepts any `Service` whose future is `Send`, which is why the binding layer pins its associated
         // future type rather than returning a bare `impl Service`.
         // The access key is required first; a request without it never reaches the endpoint (`ADR-0170`).
-        let app = axum::Router::new()
+        let keyed = axum::Router::new()
             .fallback_service(endpoint.into_service())
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&access),
                 crate::mcp_access::require_key,
             ));
+        // The one thing answered without the key is ElevenLabs asking whether an inbound call may start; it has a secret of its own
+        // (`phone_service::door_routes`). Everything else, whatever its path, still meets the key first.
+        let app = crate::phone_service::door_routes(Arc::clone(&access)).fallback_service(keyed);
         access.set_serving_port(port);
 
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();

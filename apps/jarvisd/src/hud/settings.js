@@ -68,7 +68,7 @@ window.JarvisSettings = function (context) {
       "daemon.mcp_serve_port": "Let other apps use JARVIS (port)", "daemon.notifications": "Notifications", "daemon.google_client_id": "Client ID",
       "daemon.google_actions": "Send mail & events", "policy.trust": "Runs without asking",
       "daemon.phone_agent_id": "Agent id", "daemon.phone_number_id": "Phone number id", "daemon.phone_owner_numbers": "Numbers JARVIS may call",
-      "daemon.phone_approves": "Your yes on the phone counts", "daemon.phone_opening_line": "JARVIS writes the opening line"
+      "daemon.phone_approves": "Your yes on the phone counts", "daemon.phone_opening_line": "JARVIS writes the opening line", "daemon.phone_call_anyone": "JARVIS may call other people", "daemon.phone_screen_callers": "Answer only my own numbers"
     };
     function settingRow(setting, label, live) {
       var row = el("div", "set-row");
@@ -651,7 +651,7 @@ window.JarvisSettings = function (context) {
       body.appendChild(help);
       var keyNote = el("p", "lead", voiceKey === "set" ? "ElevenLabs key: set (Voice tab)." : "ElevenLabs key: not set. Add it in the Voice tab first.");
       body.appendChild(keyNote);
-      ["daemon.phone_agent_id", "daemon.phone_number_id", "daemon.phone_owner_numbers", "daemon.phone_approves", "daemon.phone_opening_line"].forEach(function (key) {
+      ["daemon.phone_agent_id", "daemon.phone_number_id", "daemon.phone_owner_numbers", "daemon.phone_approves", "daemon.phone_opening_line", "daemon.phone_call_anyone", "daemon.phone_screen_callers"].forEach(function (key) {
         var setting = byKey(key);
         if (setting) body.appendChild(settingRow(setting, null, true));
       });
@@ -698,6 +698,15 @@ window.JarvisSettings = function (context) {
             function (error) { settingsNote(explain(error, "Could not delete them."), true); });
         });
         more.appendChild(clear);
+        var door = status.door || {};
+        if (door.on) {
+          var doorLine = el("li", "", door.state === "guarding" ? "Inbound door: guarding. Only your own numbers are answered." :
+            door.state === "problem" ? "Inbound door: not working yet (" + (door.problem || "unknown") + "). Until it works, inbound calls may get no answer." : "Inbound door: starting...");
+          numbers.appendChild(doorLine);
+        }
+        (door.turned_away || []).forEach(function (away) {
+          numbers.appendChild(el("li", "", "Turned away: " + away.from + " at " + new Date(away.at).toLocaleString()));
+        });
         ((check && check.numbers) || []).forEach(function (number) {
           var text = (number.label || "number") + " " + number.number + " (" + number.provider + "), id " + number.id +
             (number.agent_id ? ", agent " + number.agent_id : ", no agent");

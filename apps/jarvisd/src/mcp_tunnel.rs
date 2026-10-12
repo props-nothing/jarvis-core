@@ -172,6 +172,12 @@ impl McpTunnel {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = state;
     }
 
+    /// Sets what the tunnel says it is doing, so a test can stand in for a running one.
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&self, state: Tunnel) {
+        self.set(state);
+    }
+
     /// The size of the download this machine would need, when it would need one and can make it.
     #[must_use]
     pub fn download_megabytes(&self) -> Option<u64> {
