@@ -218,3 +218,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0199](0199-a-long-run-also-leaves-out-the-text-it-wrote-in-old-calls.md) | A long run also leaves out the text it wrote in old calls | Accepted |
 | [0200](0200-jarvis-rings-the-owner-on-the-phone-and-a-yes-on-that-call-can-count-as-the-approval.md) | JARVIS rings the owner on the phone, and a yes on that call can count as the approval | Accepted |
 | [0201](0201-jarvis-may-ring-other-people-and-only-the-owner-may-use-jarvis-by-phone.md) | JARVIS may ring other people, and only the owner may use JARVIS by phone | Accepted |
+| [0202](0202-the-owner-may-give-jarvis-a-named-cloudflare-tunnel-for-an-address-that-never-changes.md) | The owner may give JARVIS a named Cloudflare tunnel for an address that never changes | Accepted |

@@ -658,6 +658,39 @@ impl ApiClient {
         .await
     }
 
+    /// Saves the owner's own Cloudflare tunnel (the hostname published for it and its token), which gives the internet address a name that stays
+    /// the same. Applies at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError`] when the daemon is unreachable or refuses the hostname or the token.
+    pub async fn mcp_access_named(
+        &self,
+        hostname: &str,
+        token: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/mcp/access/public/named",
+            &serde_json::json!({ "hostname": hostname, "token": token }),
+        )
+        .await
+    }
+
+    /// Forgets the owner's own Cloudflare tunnel, so the free temporary address is used again. Applies at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError`] when the daemon is unreachable or refuses.
+    pub async fn mcp_access_named_off(&self) -> Result<serde_json::Value, ApiError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            "/api/v1/mcp/access/public/named",
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
     /// Switches a ready-made ability on or off. Applied on the next start.
     ///
     /// # Errors

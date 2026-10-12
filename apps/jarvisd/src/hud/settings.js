@@ -869,6 +869,47 @@ window.JarvisSettings = function (context) {
       var acts = el("div", "acts"); acts.appendChild(copyButton(function () { return box.value; })); wrap.appendChild(acts);
       return { node: wrap, refresh: function () { box.value = getText(); } };
     }
+    // An address that never changes: the owner's own Cloudflare tunnel. They make it once in their Cloudflare account and paste its token and the
+    // hostname here. The token is saved privately and never shown again. With none saved, the free temporary address is used as before.
+    function stableBlock(pub, reload) {
+      var stable = pub.stable || {};
+      var box = el("div", "stable");
+      var out = el("p", "help", "");
+      if (stable.configured) {
+        box.appendChild(el("p", "help", "Stable address: your own Cloudflare tunnel at https://" + stable.host + ". Its token is saved privately and is not shown."));
+        var forget = el("button", "", "Go back to the temporary address");
+        forget.addEventListener("click", function () {
+          forget.disabled = true;
+          putJson("/mcp/access/public/named", "DELETE", {}).then(function () { reload(); },
+            function (error) { forget.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That could not be removed."); });
+        });
+        var row = el("div", "acts"); row.appendChild(forget); box.appendChild(row);
+        box.appendChild(out);
+        return box;
+      }
+      var details = el("details");
+      details.appendChild(el("summary", "", "Want an address that never changes? Use your own Cloudflare tunnel"));
+      var service = stable.service_url || "http://127.0.0.1:8766";
+      [
+        "You need a free Cloudflare account with a domain on it.",
+        "In the Cloudflare dashboard open Networking, Tunnels, Create tunnel. Name it (for example jarvis).",
+        "Add a published application route: pick a name such as jarvis.yourdomain.com, and set the Service URL to " + service + " (this is the endpoint on this computer).",
+        "Open the tunnel, choose Add a replica, and copy the install command (do not run it). Paste it below, with the name from step 3."
+      ].forEach(function (text, index) { details.appendChild(el("p", "help", (index + 1) + ". " + text)); });
+      var host = el("input"); host.type = "text"; host.placeholder = "jarvis.yourdomain.com"; host.autocomplete = "off";
+      var token = el("input"); token.type = "password"; token.placeholder = "the install command, or the token that starts with eyJ"; token.autocomplete = "off";
+      var save = el("button", "yes", "Save and connect");
+      save.addEventListener("click", function () {
+        save.disabled = true; out.className = "help"; out.textContent = "";
+        putJson("/mcp/access/public/named", "POST", { hostname: host.value, token: token.value }).then(function () { token.value = ""; reload(); },
+          function (error) { save.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That could not be saved."); });
+      });
+      var fields = el("div", "acts"); fields.appendChild(host); fields.appendChild(token); fields.appendChild(save);
+      details.appendChild(fields);
+      details.appendChild(out);
+      box.appendChild(details);
+      return box;
+    }
     // The internet address: a free Cloudflare quick tunnel that JARVIS starts and stops. Cloud agents (a phone agent, a hosted assistant) connect
     // from the provider's servers, so they cannot reach an address that only works on this computer. The key is still required on every request.
     function publicCard(info, current, reload) {
@@ -879,7 +920,8 @@ window.JarvisSettings = function (context) {
       var badge = status.state === "on" ? "on" : status.state === "problem" ? "problem" : status.state === "getting" ? "downloading" : status.state === "starting" ? "starting" : "off";
       head.appendChild(el("span", "badge " + (status.state === "on" ? "on" : "off"), badge));
       card.appendChild(head);
-      card.appendChild(el("p", "lead", "For apps that run in the cloud, such as a phone agent (ElevenLabs) or a hosted assistant. JARVIS opens a free, private-looking web address that leads to this endpoint. Every request still needs your key."));
+      card.appendChild(el("p", "lead", "For apps that run in the cloud, such as a phone agent (ElevenLabs) or a hosted assistant. JARVIS opens a private-looking web address that leads to this endpoint. Every request still needs your key."));
+      card.appendChild(stableBlock(pub, reload));
       var out = el("p", "help", "");
       var acts = el("div", "acts");
       function busy(button) { button.disabled = true; }
@@ -916,7 +958,9 @@ window.JarvisSettings = function (context) {
         card.appendChild(el("p", "help", "Server URL"));
         var row = el("div", "acts"); row.appendChild(el("code", "", pub.url)); row.appendChild(copyButton(function () { return pub.url; })); card.appendChild(row);
         card.appendChild(el("p", "help", "In ElevenLabs: Agents, Integrations, Add custom MCP server. Server URL: the address above. Secret token: your key (shown above). Then attach it to your agent. Other cloud apps take the same two values."));
-        card.appendChild(el("p", "help", "The address changes every time JARVIS starts, so paste the new one into the app after a restart. Anyone with the address and the key can ask JARVIS to work for them, so keep both private."));
+        card.appendChild(el("p", "help", pub.stable && pub.stable.configured
+          ? "This is your own Cloudflare tunnel, so the address stays the same after a restart. Anyone with the address and the key can ask JARVIS to work for them, so keep both private."
+          : "The address changes every time JARVIS starts, so paste the new one into the app after a restart (or use your own Cloudflare tunnel above for one that never changes). Anyone with the address and the key can ask JARVIS to work for them, so keep both private."));
       }
       if (status.state === "getting" || status.state === "starting") {
         setTimeout(function () { if (!$("settings").hidden && sview.tab === "connect") reload(); }, 2000);

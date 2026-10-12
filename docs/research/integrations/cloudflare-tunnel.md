@@ -79,8 +79,42 @@ Making JARVIS's inbound MCP endpoint (`ADR-0170`, `ADR-0172`) reachable from the
 
 Contract tests (done): address extraction, flag set, digest check refuses a changed file, marker, a child that prints an address and is stopped. Live (done, above). **Still owed:** a real ElevenLabs agent connecting (needs their account), macOS and Linux runs, a named tunnel.
 
+## Named tunnel (added 2026-10-12, `ADR-0202`, `P11-001g`)
+
+### Sources read
+
+| Source | URL | Accessed | Purpose |
+| --- | --- | --- | --- |
+| docs index | https://developers.cloudflare.com/tunnel/llms.txt | 2026-10-12 | discovery |
+| Get started | https://developers.cloudflare.com/tunnel/get-started/index.md | 2026-10-12 | create a remotely-managed tunnel, publish an application, run with a token; prerequisite: a domain on Cloudflare |
+| Tunnel tokens | https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/index.md (updated 2026-09-11) | 2026-10-12 | where the token is, rotation; "anyone with the token can run the tunnel" |
+| Run parameters | https://developers.cloudflare.com/tunnel/reference/run-parameters/index.md | 2026-10-12 | `--token` / `TUNNEL_TOKEN`, `--token-file`, `--no-autoupdate`, `--metrics` |
+| Origin parameters | https://developers.cloudflare.com/tunnel/reference/origin-parameters/index.md | 2026-10-12 | `httpHostHeader` is a per-route dashboard setting |
+| the pinned program | `cloudflared 2026.10.0` run on this machine | 2026-10-12 | exact flags, log lines, behaviour with a refused token |
+
+### Verified contract
+
+- A **remotely-managed tunnel** runs from its token alone: `cloudflared tunnel run --token <TOKEN>`, or the token in `TUNNEL_TOKEN` (documented; confirmed in the program's `--help`: `--token value … [%TUNNEL_TOKEN%]`). JARVIS uses the **environment variable** so the token is not in the process list. Which hostname goes to which local service is set in the **dashboard** (a published application route, Service URL `http://127.0.0.1:PORT`), not by `--url`.
+- The token is the `eyJ…` word of the install command under the tunnel's **Add a replica**. Decoded it is a JSON object `{"a": account, "t": tunnel id, "s": secret}`; JARVIS checks that shape before saving. (Shape confirmed by the program accepting a token of that shape and printing `Starting tunnel tunnelID=<t>`.)
+- The route's **HTTP Host Header** is an optional dashboard setting (`httpHostHeader`). Not relied on: JARVIS rewrites the Host itself, only after the key check (`ADR-0202`).
+- A connection is established when the log says `INF Registered tunnel connection connIndex=… ip=… location=…` (the string is in the pinned binary). A refused token logs `ERR Register tunnel error from server side error="Failed to get tunnel"` and the program **keeps retrying without exiting**; JARVIS turns that line into a Problem with a sentence.
+- Needs a free Cloudflare account with a **domain on it** (Get started, prerequisites). Cloudflare proxies the hostname; a named tunnel has no quick-tunnel limits stated on the Quick Tunnels page (200 in-flight requests, no server-sent events apply to quick tunnels).
+
+### Verified live (2026-10-12, Windows)
+
+- The pinned program with arguments `tunnel --no-autoupdate --metrics 127.0.0.1:0 run` and a **well-formed but fake** token in `TUNNEL_TOKEN`: accepted every flag, parsed the tunnel id from the token, reached Cloudflare's edge, and answered `Failed to get tunnel`, retrying (so the refusal path is real, not guessed).
+- **Not verified:** a real tunnel registering and serving the endpoint end to end, ElevenLabs connecting through it, macOS, Linux. The owner has to do the first real connection.
+
+### JARVIS mapping
+
+`apps/jarvisd/src/mcp_tunnel.rs` (`Named`, `clean_hostname`, `clean_token`, `named_arguments`, `registered`, `refusal`, `McpTunnel::set_named/clear_named/is_public_host`), `apps/jarvisd/src/mcp_access.rs` (`require_key` Host rewrite after the key, `POST/DELETE /api/v1/mcp/access/public/named`), `jarvis mcp access public named`, the Connect apps card. Files `config/cloudflare-tunnel.token` (private) and `config/cloudflare-tunnel.host`.
+
+### Not built
+
+Creating the tunnel, route and DNS record for the owner with the Cloudflare API (needs an API token with Tunnel Write, and DNS Write for the zone, per the Get started page). Cloudflare Access in front of the hostname (a service token would add a second secret ElevenLabs cannot send).
+
 ## Unresolved Questions
 
 - Whether ElevenLabs sends the secret token with or without `Bearer`. Blocks nothing (both accepted) but should be recorded after a real connection.
-- Whether quick tunnels are acceptable for a phone number that must stay up: Cloudflare says no uptime guarantee and the address changes, so a stable address (named tunnel, `P11-001g`) is needed for a permanent phone agent.
+- Whether quick tunnels are acceptable for a phone number that must stay up: Cloudflare says no uptime guarantee and the address changes, so a stable address is needed for a permanent phone agent. **Answered by `ADR-0202`** (a named tunnel on the owner's account); quick tunnels stay as the zero-setup default.
 - Server-Sent Events through a quick tunnel (documented as unsupported); ElevenLabs lists streamable HTTP as supported, which is what was tested.

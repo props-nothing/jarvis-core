@@ -2,7 +2,7 @@
 //!
 //! A cloud agent (a phone agent such as `ElevenLabs`, a hosted assistant) connects **from the provider's servers**, so an endpoint that listens on
 //! this computer only cannot be reached by it. The easiest route that needs no account, no router setting and no certificate is a Cloudflare **quick
-//! tunnel**: the free `cloudflared` program makes an outbound connection and Cloudflare gives it a public `https://…trycloudflare.com` address that
+//! tunnel**: the free `cloudflared` program makes an outbound connection and Cloudflare gives it a public `https://â€¦trycloudflare.com` address that
 //! forwards to the local port.
 //!
 //! **What JARVIS adds is only the plumbing, not trust.** The endpoint still requires the access key on every request (`mcp_access::require_key`) and
@@ -14,23 +14,37 @@
 //! downloaded file). The program runs with the same small environment an MCP server gets, and is stopped with the daemon.
 //!
 //! **Honest limits.** A quick tunnel's address **changes every time it starts**, and Cloudflare documents quick tunnels as a testing service with no
-//! uptime guarantee and no support for server-sent events. A stable address needs a named tunnel on the owner's own Cloudflare account, which is not
-//! built (`P11-001g`).
+//! uptime guarantee and no support for server-sent events.
+//!
+//! **A stable address (`ADR-0202`).** An owner with a Cloudflare account and a domain can instead give JARVIS a **named tunnel**: the tunnel token
+//! (made once in the Cloudflare dashboard) and the public hostname they published for it. JARVIS then runs `cloudflared tunnel run` with the token
+//! in the environment (never on the command line, where other programs can read it), and the address is the hostname, the same after every restart.
+//! With no token and hostname saved nothing changes: the quick tunnel above is used. The token lives in a private file of its own and is never
+//! returned by the API or written to a log. The hostname is the one name the endpoint will accept as its own `Host` once the key has been checked
+//! (`McpTunnel::is_public_host`), so the rebinding guard behind it is still the loopback one.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use base64::Engine as _;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 /// The `cloudflared` release JARVIS downloads when none is installed.
 pub const CLOUDFLARED_VERSION: &str = "2026.10.0";
 
 /// The file whose presence means the owner wants the endpoint reachable from the internet.
 const MARKER_FILE: &str = "mcp-public.on";
+
+/// The owner's named tunnel (`ADR-0202`): the token Cloudflare made, and the public hostname published for it.
+const NAMED_TOKEN_FILE: &str = "cloudflare-tunnel.token";
+const NAMED_HOST_FILE: &str = "cloudflare-tunnel.host";
+
+/// The longest token or pasted install command taken in. A real token is about 180 characters.
+const NAMED_TOKEN_LIMIT: usize = 2048;
 
 /// How long to wait before starting the tunnel again after it stopped on its own.
 const RETRY_AFTER: Duration = Duration::from_secs(10);
@@ -111,12 +125,33 @@ pub struct McpTunnel {
     directory: PathBuf,
     state: Mutex<Tunnel>,
     stop: Mutex<Option<oneshot::Sender<()>>>,
+    named: RwLock<Option<Named>>,
+    /// Counts changes to the named tunnel, so a running tunnel notices and starts again with the new one without a stop-and-start race.
+    changes: watch::Sender<u64>,
+}
+
+/// An owner's named tunnel. `Debug` is written by hand so the token can never reach a log through a derived one.
+#[derive(Clone)]
+struct Named {
+    host: String,
+    token: String,
+}
+
+impl std::fmt::Debug for Named {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Named")
+            .field("host", &self.host)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How a watched child ended.
 #[derive(Debug, Eq, PartialEq)]
 enum Ended {
     Stopped,
+    /// The named tunnel was saved or forgotten, so the child was stopped to start again with the new setting.
+    Changed,
     Exited(String),
 }
 
@@ -128,7 +163,105 @@ impl McpTunnel {
             directory: directory.to_path_buf(),
             state: Mutex::new(Tunnel::Off),
             stop: Mutex::new(None),
+            named: RwLock::new(load_named(directory)),
+            changes: watch::channel(0).0,
         })
+    }
+
+    fn named_changed(&self) {
+        self.changes.send_modify(|count| *count += 1);
+    }
+
+    /// The hostname of the owner's named tunnel, when one is saved.
+    #[must_use]
+    pub fn stable_host(&self) -> Option<String> {
+        self.named_snapshot().map(|named| named.host)
+    }
+
+    fn named_snapshot(&self) -> Option<Named> {
+        self.named
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Whether a request's `Host` header names the owner's own public hostname (and nothing else).
+    ///
+    /// Only the endpoint's key check may act on this: it lets an authenticated request that arrived through the named tunnel be seen by the
+    /// endpoint as the loopback request it really is. A port is ignored; the name must match exactly.
+    #[must_use]
+    pub fn is_public_host(&self, host_header: &str) -> bool {
+        let name = host_header
+            .rsplit_once(':')
+            .map_or(host_header, |(name, port)| {
+                if port.bytes().all(|byte| byte.is_ascii_digit()) {
+                    name
+                } else {
+                    host_header
+                }
+            });
+        self.named_snapshot()
+            .is_some_and(|named| named.host.eq_ignore_ascii_case(name))
+    }
+
+    /// Saves the owner's named tunnel: the hostname they published for it and its token (or the whole install command Cloudflare shows, from
+    /// which the token is taken). Returns the cleaned hostname. Takes effect the next time the tunnel starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sentence, never repeating the token, when either is unusable or cannot be saved.
+    pub fn set_named(&self, host: &str, token: &str) -> Result<String, String> {
+        let host = clean_hostname(host)?;
+        let token = clean_token(token)?;
+        std::fs::create_dir_all(&self.directory)
+            .map_err(|error| format!("that could not be saved: {error}"))?;
+        let path = self.directory.join(NAMED_TOKEN_FILE);
+        let temporary = path.with_extension("part");
+        std::fs::write(&temporary, &token)
+            .map_err(|error| format!("that could not be saved: {error}"))?;
+        let secured =
+            jarvis_storage::secure_private_file(jarvis_storage::PathKind::Config, &temporary)
+                .map_err(|_| "the token file could not be made private".to_owned())
+                .and_then(|()| {
+                    std::fs::rename(&temporary, &path)
+                        .map_err(|error| format!("that could not be saved: {error}"))
+                });
+        if let Err(message) = secured {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(message);
+        }
+        std::fs::write(self.directory.join(NAMED_HOST_FILE), format!("{host}\n"))
+            .map_err(|error| format!("that could not be saved: {error}"))?;
+        *self
+            .named
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Named {
+            host: host.clone(),
+            token,
+        });
+        self.named_changed();
+        Ok(host)
+    }
+
+    /// Forgets the named tunnel, so the quick tunnel is used again. Takes effect the next time the tunnel starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sentence when a file cannot be removed.
+    pub fn clear_named(&self) -> Result<(), String> {
+        *self
+            .named
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.named_changed();
+        for name in [NAMED_TOKEN_FILE, NAMED_HOST_FILE] {
+            match std::fs::remove_file(self.directory.join(name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("that could not be removed: {error}")),
+            }
+        }
+        Ok(())
     }
 
     /// Whether the owner wants the endpoint reachable from the internet.
@@ -257,23 +390,42 @@ impl McpTunnel {
                 return;
             }
         };
+        let mut changes = self.changes.subscribe();
         loop {
             self.set(Tunnel::Starting);
+            // Read again on every round, so a tunnel saved or forgotten while this one runs or retries is picked up. Marking the count as seen
+            // before reading means a change made after the read is never missed.
+            changes.borrow_and_update();
+            let named = self.named_snapshot();
             let mut command = tokio::process::Command::new(&program);
-            command.args(tunnel_arguments(port));
-            let ended = self.watch(command, &mut stop).await;
+            command.args(match &named {
+                Some(_) => named_arguments(),
+                None => tunnel_arguments(port),
+            });
+            let ended = self
+                .watch(command, &mut stop, named.as_ref(), &mut changes)
+                .await;
             match ended {
                 Ended::Stopped => {
                     self.set(Tunnel::Off);
                     return;
                 }
+                Ended::Changed => continue,
                 Ended::Exited(reason) => {
                     tracing::warn!(%reason, "the public tunnel stopped; starting it again");
+                    let reason = if named.is_some() {
+                        format!(
+                            "{reason}; check the tunnel token, that the tunnel still exists in your Cloudflare account, and your internet connection"
+                        )
+                    } else {
+                        reason
+                    };
                     self.set(Tunnel::Problem { reason });
                 }
             }
             tokio::select! {
                 () = tokio::time::sleep(RETRY_AFTER) => {}
+                _ = changes.changed() => {}
                 _ = &mut stop => {
                     self.set(Tunnel::Off);
                     return;
@@ -299,10 +451,15 @@ impl McpTunnel {
     }
 
     /// Runs one child, learning the public address from its log, until it exits or is told to stop.
+    ///
+    /// A quick tunnel prints its address; a named tunnel's address is the owner's hostname, which is reported once the program says it registered
+    /// a connection with Cloudflare (so "on" means Cloudflare can reach it, not merely that the program started).
     async fn watch(
         &self,
         mut command: tokio::process::Command,
         stop: &mut oneshot::Receiver<()>,
+        named: Option<&Named>,
+        changes: &mut watch::Receiver<u64>,
     ) -> Ended {
         command
             .env_clear()
@@ -311,6 +468,9 @@ impl McpTunnel {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        if let Some(named) = named {
+            command.env("TUNNEL_TOKEN", &named.token);
+        }
         #[cfg(windows)]
         command.creation_flags(0x0800_0000);
         let mut child = match command.spawn() {
@@ -327,11 +487,28 @@ impl McpTunnel {
                     let _ = child.kill().await;
                     return Ended::Stopped;
                 }
+                _ = changes.changed() => {
+                    let _ = child.kill().await;
+                    return Ended::Changed;
+                }
                 line = lines.next_line() => {
                     // The log is read for the address and then dropped: it is not kept or logged.
                     if let Ok(Some(line)) = line {
-                        if let Some(url) = extract_url(&line) {
+                        let address = match named {
+                            Some(named) => registered(&line).then(|| format!("https://{}", named.host)),
+                            None => extract_url(&line),
+                        };
+                        if let Some(url) = address {
                             self.set(Tunnel::On { url });
+                        } else if named.is_some()
+                            && let Some(reason) = refusal(&line)
+                            && !matches!(self.status(), Tunnel::On { .. })
+                        {
+                            self.set(Tunnel::Problem {
+                                reason: format!(
+                                    "Cloudflare did not accept the tunnel ({reason}); check the token, and that the tunnel still exists in your Cloudflare account"
+                                ),
+                            });
                         }
                     } else {
                         let status = child.wait().await;
@@ -344,6 +521,115 @@ impl McpTunnel {
             }
         }
     }
+}
+
+/// The arguments of the owner's named tunnel. The token is **not** here: it goes in the environment (`TUNNEL_TOKEN`), where other programs
+/// cannot read it from the process list. The origin (where the traffic goes) is set in the Cloudflare dashboard, not here.
+fn named_arguments() -> Vec<String> {
+    [
+        "tunnel",
+        "--no-autoupdate",
+        "--metrics",
+        "127.0.0.1:0",
+        "run",
+    ]
+    .iter()
+    .map(|argument| (*argument).to_owned())
+    .collect()
+}
+
+/// Whether a log line of `cloudflared` says a connection to Cloudflare's network was registered (text from the pinned program).
+fn registered(line: &str) -> bool {
+    line.contains("Registered tunnel connection")
+}
+
+/// What Cloudflare said when it refused to register the tunnel (a wrong or rotated token, a deleted tunnel). The program keeps retrying and never
+/// exits, so without this the owner would see "starting" forever. Only Cloudflare's own short reason is kept, never the rest of the line.
+fn refusal(line: &str) -> Option<String> {
+    if !line.contains("Register tunnel error from server side") {
+        return None;
+    }
+    let reason = line
+        .split_once("error=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(reason, _)| reason.trim())
+        .filter(|reason| !reason.is_empty() && reason.len() <= 120)
+        .unwrap_or("it was refused");
+    Some(reason.to_owned())
+}
+
+/// The hostname an owner published for the tunnel, cleaned: lowercase, no scheme, no path, a real DNS name that is not an address.
+fn clean_hostname(input: &str) -> Result<String, String> {
+    let lowered = input.trim().to_ascii_lowercase();
+    let host = lowered
+        .strip_prefix("https://")
+        .unwrap_or(&lowered)
+        .trim_end_matches('/');
+    let labels: Vec<&str> = host.split('.').collect();
+    let usable = host.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        // An address such as 127.0.0.1 is not a name: the last part of a real hostname is not all digits.
+        && labels
+            .last()
+            .is_some_and(|last| !last.bytes().all(|byte| byte.is_ascii_digit()));
+    if usable {
+        Ok(host.to_owned())
+    } else {
+        Err("that is not a hostname: give the full name you published for the tunnel in Cloudflare, such as jarvis.example.com".to_owned())
+    }
+}
+
+/// The tunnel token out of what an owner pasted: the token itself, or the install command Cloudflare shows (the token is its `eyJâ€¦` word).
+/// The token is a base64 text of a small JSON object with the account (`a`), tunnel (`t`) and secret (`s`); anything else is refused so a wrong
+/// paste is caught here and not as a tunnel that never connects.
+fn clean_token(input: &str) -> Result<String, String> {
+    let refused = || {
+        "that is not a tunnel token: in Cloudflare open the tunnel, choose Add a replica, and copy the long text that starts with eyJ".to_owned()
+    };
+    if input.len() > NAMED_TOKEN_LIMIT {
+        return Err(refused());
+    }
+    let word = input
+        .split_whitespace()
+        .rev()
+        .find(|word| word.starts_with("eyJ"))
+        .ok_or_else(refused)?;
+    let token = word.trim_matches(|c: char| matches!(c, '"' | '\''));
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(token)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(token))
+        .map_err(|_| refused())?;
+    let parts: serde_json::Value = serde_json::from_slice(&decoded).map_err(|_| refused())?;
+    let has = |key: &str| {
+        parts
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    };
+    if has("a") && has("t") && has("s") {
+        Ok(token.to_owned())
+    } else {
+        Err(refused())
+    }
+}
+
+/// Reads the saved named tunnel. Both files must be usable; a half-saved or damaged pair means no named tunnel (the quick tunnel is used).
+fn load_named(directory: &Path) -> Option<Named> {
+    let host = std::fs::read_to_string(directory.join(NAMED_HOST_FILE)).ok()?;
+    let token = std::fs::read_to_string(directory.join(NAMED_TOKEN_FILE)).ok()?;
+    Some(Named {
+        host: clean_hostname(&host).ok()?,
+        token: clean_token(&token).ok()?,
+    })
 }
 
 /// The arguments of a quick tunnel to the local endpoint.
@@ -364,7 +650,7 @@ fn tunnel_arguments(port: u16) -> Vec<String> {
     ]
 }
 
-/// Finds the `https://….trycloudflare.com` address in one line of the program's log.
+/// Finds the `https://â€¦.trycloudflare.com` address in one line of the program's log.
 fn extract_url(line: &str) -> Option<String> {
     let start = line.find("https://")?;
     let candidate: String = line[start..]
@@ -556,7 +842,12 @@ mod tests {
 
         let (stop_sender, mut stop_receiver) = oneshot::channel();
         let watcher = Arc::clone(&tunnel);
-        let task = tokio::spawn(async move { watcher.watch(command, &mut stop_receiver).await });
+        let mut changes = tunnel.changes.subscribe();
+        let task = tokio::spawn(async move {
+            watcher
+                .watch(command, &mut stop_receiver, None, &mut changes)
+                .await
+        });
         let mut seen = None;
         for _ in 0..100 {
             if let Tunnel::On { url } = tunnel.status() {
@@ -575,6 +866,383 @@ mod tests {
             .unwrap_or_else(|_| panic!("the child was not stopped"))
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(ended, Ended::Stopped);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    fn token_for_test() -> String {
+        base64::engine::general_purpose::STANDARD
+            .encode(br#"{"a":"account","t":"tunnel-id","s":"c2VjcmV0"}"#)
+    }
+
+    fn scratch_directory() -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("jarvis-tunnel-{}", jarvis_core::scratch_tag()));
+        std::fs::create_dir_all(&directory).unwrap_or_else(|e| panic!("{e}"));
+        directory
+    }
+
+    #[test]
+    fn a_hostname_is_cleaned_and_anything_that_is_not_a_name_is_refused() {
+        assert_eq!(
+            clean_hostname(" HTTPS://Jarvis.Example.com/ ").as_deref(),
+            Ok("jarvis.example.com")
+        );
+        for bad in [
+            "",
+            "localhost",
+            "127.0.0.1",
+            "1.2.3.4",
+            "*.example.com",
+            "jarvis.example.com/mcp",
+            "jarvis.example.com:8766",
+            "-a.example.com",
+            "a..example.com",
+            "jarvis example.com",
+            "http://jarvis.example.com",
+        ] {
+            assert!(clean_hostname(bad).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_token_is_taken_bare_or_from_the_pasted_install_command_and_a_wrong_paste_is_refused() {
+        let token = token_for_test();
+        assert_eq!(clean_token(&token).as_deref(), Ok(token.as_str()));
+        assert_eq!(
+            clean_token(&format!("  cloudflared.exe service install {token}\n")).as_deref(),
+            Ok(token.as_str())
+        );
+        let missing_secret =
+            base64::engine::general_purpose::STANDARD.encode(br#"{"a":"account","t":"tunnel-id"}"#);
+        let not_json = base64::engine::general_purpose::STANDARD.encode(b"plain text");
+        for bad in [
+            String::new(),
+            "not a token".to_owned(),
+            "eyJhbGciOiJub25lIn0".to_owned(),
+            format!("eyJ{missing_secret}"),
+            not_json,
+            missing_secret,
+            format!("eyJ{}", "A".repeat(NAMED_TOKEN_LIMIT)),
+        ] {
+            let Err(message) = clean_token(&bad) else {
+                panic!("a wrong paste must be refused: {bad:?}");
+            };
+            assert!(!message.contains(&bad) || bad.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_token_is_never_a_command_line_argument() {
+        let arguments = named_arguments();
+        assert!(arguments.iter().all(|argument| !argument.contains("eyJ")));
+        assert!(arguments.iter().all(|argument| argument != "--token"));
+        assert_eq!(arguments.last().map(String::as_str), Some("run"));
+        assert!(arguments.iter().any(|a| a == "--no-autoupdate"));
+    }
+
+    #[test]
+    fn a_saved_named_tunnel_survives_a_restart_and_forgetting_it_returns_to_the_quick_one() {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        assert_eq!(tunnel.stable_host(), None);
+        let token = token_for_test();
+        let host = tunnel
+            .set_named("Jarvis.Example.com", &token)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(host, "jarvis.example.com");
+        assert_eq!(tunnel.stable_host().as_deref(), Some("jarvis.example.com"));
+
+        let again = McpTunnel::new(&directory);
+        assert_eq!(again.stable_host().as_deref(), Some("jarvis.example.com"));
+        let host_file = std::fs::read_to_string(directory.join(NAMED_HOST_FILE))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            !host_file.contains(&token),
+            "the token has a file of its own"
+        );
+
+        again.clear_named().unwrap_or_else(|e| panic!("{e}"));
+        again
+            .clear_named()
+            .unwrap_or_else(|e| panic!("forgetting twice is fine: {e}"));
+        assert_eq!(again.stable_host(), None);
+        assert_eq!(McpTunnel::new(&directory).stable_host(), None);
+        assert!(!directory.join(NAMED_TOKEN_FILE).exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Falsified by loading a host without its token: the tunnel would then run with nothing, and the Host rewrite would trust a name that has no
+    /// tunnel behind it.
+    #[test]
+    fn half_a_named_tunnel_is_no_named_tunnel() {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        std::fs::remove_file(directory.join(NAMED_TOKEN_FILE)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(McpTunnel::new(&directory).stable_host(), None);
+
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(directory.join(NAMED_TOKEN_FILE), "damaged")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(McpTunnel::new(&directory).stable_host(), None);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_refused_save_changes_nothing() {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(tunnel.set_named("127.0.0.1", &token_for_test()).is_err());
+        assert!(tunnel.set_named("other.example.com", "garbage").is_err());
+        assert_eq!(tunnel.stable_host().as_deref(), Some("jarvis.example.com"));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Falsified by comparing with `contains` or `ends_with`, or by accepting any host when none is saved.
+    #[test]
+    fn only_the_owners_own_hostname_is_treated_as_the_endpoints_own() {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        assert!(!tunnel.is_public_host("jarvis.example.com"));
+        assert!(!tunnel.is_public_host(""));
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(tunnel.is_public_host("jarvis.example.com"));
+        assert!(tunnel.is_public_host("JARVIS.example.com:443"));
+        for other in [
+            "",
+            "example.com",
+            "evil.jarvis.example.com",
+            "jarvis.example.com.evil.test",
+            "xjarvis.example.com",
+            "jarvis.example.com:notaport",
+            "127.0.0.1:8766",
+            "localhost",
+        ] {
+            assert!(!tunnel.is_public_host(other), "{other:?}");
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    fn registering_child() -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("cmd");
+        command.args([
+            "/C",
+            "echo INF https://decoy-name.trycloudflare.com 1>&2 & if defined TUNNEL_TOKEN echo INF Registered tunnel connection connIndex=0 1>&2 & ping -n 4 127.0.0.1 >nul",
+        ]);
+        command
+    }
+
+    #[cfg(not(windows))]
+    fn registering_child() -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("sh");
+        command.args([
+            "-c",
+            "echo 'INF https://decoy-name.trycloudflare.com' 1>&2; [ -n \"$TUNNEL_TOKEN\" ] && echo 'INF Registered tunnel connection connIndex=0' 1>&2; exec sleep 30",
+        ]);
+        command
+    }
+
+    #[tokio::test]
+    async fn a_named_tunnel_is_on_at_the_owners_hostname_once_the_program_registers_and_gets_the_token_in_its_environment()
+     {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let named = tunnel.named_snapshot().unwrap_or_else(|| panic!("saved"));
+        let (stop_sender, mut stop_receiver) = oneshot::channel();
+        let watcher = Arc::clone(&tunnel);
+        let mut changes = tunnel.changes.subscribe();
+        let task = tokio::spawn(async move {
+            watcher
+                .watch(
+                    registering_child(),
+                    &mut stop_receiver,
+                    Some(&named),
+                    &mut changes,
+                )
+                .await
+        });
+        let mut seen = None;
+        for _ in 0..100 {
+            if let Tunnel::On { url } = tunnel.status() {
+                seen = Some(url);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // The decoy quick-tunnel address in the log is not taken in named mode; the owner's hostname is.
+        assert_eq!(seen.as_deref(), Some("https://jarvis.example.com"));
+        let _ = stop_sender.send(());
+        let ended = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap_or_else(|_| panic!("the child was not stopped"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(ended, Ended::Stopped);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    fn decoy_child() -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("cmd");
+        command.args([
+            "/C",
+            "echo INF https://decoy-name.trycloudflare.com 1>&2 & ping -n 4 127.0.0.1 >nul",
+        ]);
+        command
+    }
+
+    #[cfg(not(windows))]
+    fn decoy_child() -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("sh");
+        command.args([
+            "-c",
+            "echo 'INF https://decoy-name.trycloudflare.com' 1>&2; exec sleep 30",
+        ]);
+        command
+    }
+
+    #[test]
+    fn cloudflares_refusal_is_read_from_the_log_and_nothing_else_is_kept() {
+        let line = "2026-10-12T19:26:14Z ERR Register tunnel error from server side error=\"Failed to get tunnel\" connIndex=0 event=0 ip=198.41.192.167";
+        assert_eq!(refusal(line).as_deref(), Some("Failed to get tunnel"));
+        assert_eq!(
+            refusal("ERR Register tunnel error from server side connIndex=0").as_deref(),
+            Some("it was refused")
+        );
+        assert_eq!(
+            refusal("INF Registered tunnel connection connIndex=0"),
+            None
+        );
+        assert_eq!(refusal("INF Starting tunnel tunnelID=abc"), None);
+        let long = format!(
+            "ERR Register tunnel error from server side error=\"{}\"",
+            "x".repeat(500)
+        );
+        assert_eq!(refusal(&long).as_deref(), Some("it was refused"));
+    }
+
+    #[cfg(windows)]
+    fn refusing_child() -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("cmd");
+        command.args([
+            "/C",
+            "echo ERR Register tunnel error from server side connIndex=0 1>&2 & ping -n 4 127.0.0.1 >nul",
+        ]);
+        command
+    }
+
+    #[cfg(not(windows))]
+    fn refusing_child() -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("sh");
+        command.args([
+            "-c",
+            "echo 'ERR Register tunnel error from server side connIndex=0' 1>&2; exec sleep 30",
+        ]);
+        command
+    }
+
+    /// Without this the owner of a wrong token would see "starting" for ever, because the program retries and never exits.
+    #[tokio::test]
+    async fn a_named_tunnel_cloudflare_refuses_is_a_problem_with_a_sentence() {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let named = tunnel.named_snapshot().unwrap_or_else(|| panic!("saved"));
+        let (stop_sender, mut stop_receiver) = oneshot::channel();
+        let watcher = Arc::clone(&tunnel);
+        let mut changes = tunnel.changes.subscribe();
+        let task = tokio::spawn(async move {
+            watcher
+                .watch(
+                    refusing_child(),
+                    &mut stop_receiver,
+                    Some(&named),
+                    &mut changes,
+                )
+                .await
+        });
+        let mut seen = None;
+        for _ in 0..100 {
+            if let Tunnel::Problem { reason } = tunnel.status() {
+                seen = Some(reason);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let reason = seen.unwrap_or_else(|| panic!("no problem was reported"));
+        assert!(reason.contains("did not accept the tunnel"), "{reason}");
+        assert!(!reason.contains("eyJ"), "the token is never repeated");
+        let _ = stop_sender.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Falsified by reporting "on" when the program starts or prints any address: Cloudflare could not yet reach the owner's hostname.
+    #[tokio::test]
+    async fn a_named_tunnel_that_never_registers_is_never_reported_on() {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let named = tunnel.named_snapshot().unwrap_or_else(|| panic!("saved"));
+        let (stop_sender, mut stop_receiver) = oneshot::channel();
+        let watcher = Arc::clone(&tunnel);
+        let mut changes = tunnel.changes.subscribe();
+        let task = tokio::spawn(async move {
+            watcher
+                .watch(
+                    decoy_child(),
+                    &mut stop_receiver,
+                    Some(&named),
+                    &mut changes,
+                )
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert!(!matches!(tunnel.status(), Tunnel::On { .. }));
+        let _ = stop_sender.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Falsified by not selecting on the change signal: the running child would go on serving the old tunnel.
+    #[tokio::test]
+    async fn saving_a_new_tunnel_stops_the_running_program_so_it_can_start_with_the_new_one() {
+        let directory = scratch_directory();
+        let tunnel = McpTunnel::new(&directory);
+        let (_stop_sender, mut stop_receiver) = oneshot::channel();
+        let watcher = Arc::clone(&tunnel);
+        let mut changes = tunnel.changes.subscribe();
+        changes.borrow_and_update();
+        let task = tokio::spawn(async move {
+            watcher
+                .watch(decoy_child(), &mut stop_receiver, None, &mut changes)
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tunnel
+            .set_named("jarvis.example.com", &token_for_test())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let ended = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap_or_else(|_| panic!("the child was not stopped"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(ended, Ended::Changed);
         let _ = std::fs::remove_dir_all(&directory);
     }
 }

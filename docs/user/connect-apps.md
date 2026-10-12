@@ -43,9 +43,25 @@ A cloud app connects from its own servers, so an address that only works on this
 
 For ElevenLabs: Agents, Integrations, **Add custom MCP server**, Server URL = the address shown, Secret token = your key. Then attach it to your agent.
 
-- **The address changes every time JARVIS starts.** Paste the new one into the app after a restart. This is fine for trying it, not for a phone number people call; a stable address needs your own Cloudflare account and is planned.
+- **Without your own Cloudflare tunnel (below) the address changes every time JARVIS starts.** Paste the new one into the app after a restart. That is fine for trying it, not for a phone number people call.
 - Anyone with the address **and** the key can use the tools, so treat both as passwords. Every request without the key gets 401.
 - Switch it off the same way and the address stops working at once. It also stops when JARVIS stops.
 - Not tested yet against a real ElevenLabs agent. Details: [cloudflare-tunnel.md](../research/integrations/cloudflare-tunnel.md).
 
-Reasons and decisions: [ADR-0170](../adr/0170-other-apps-connect-to-jarvis-with-one-switch-and-one-key.md), [ADR-0172](../adr/0172-the-endpoint-for-other-agents-serves-the-built-in-browser-and-documentation-tools.md), [ADR-0173](../adr/0173-one-switch-makes-the-endpoint-for-other-agents-reachable-from-the-internet.md).
+Reasons and decisions: [ADR-0170](../adr/0170-other-apps-connect-to-jarvis-with-one-switch-and-one-key.md), [ADR-0172](../adr/0172-the-endpoint-for-other-agents-serves-the-built-in-browser-and-documentation-tools.md), [ADR-0173](../adr/0173-one-switch-makes-the-endpoint-for-other-agents-reachable-from-the-internet.md), [ADR-0202](../adr/0202-the-owner-may-give-jarvis-a-named-cloudflare-tunnel-for-an-address-that-never-changes.md).
+
+## An address that never changes (your own Cloudflare tunnel)
+
+For a phone agent you want an address that is the same after every restart, so you paste it into ElevenLabs once. You need a free Cloudflare account with a domain on it. Nothing changes if you skip this: the free temporary address above keeps working.
+
+1. In the Cloudflare dashboard open **Networking, Tunnels, Create tunnel** and name it (for example `jarvis`).
+2. Add a **published application route**: a name such as `jarvis.yourdomain.com`, and as the **Service URL** the address shown in Settings, Connect apps, From the internet (usually `http://127.0.0.1:8766`).
+3. Open the tunnel, choose **Add a replica** and copy the install command. **Do not run it.** The long text starting with `eyJ` is the tunnel token.
+4. In JARVIS, Settings, Connect apps, From the internet, open **Want an address that never changes?**, enter the name from step 2, paste the command (or the token) and press **Save and connect**. Or run `jarvis mcp access public named jarvis.yourdomain.com --from-env CLOUDFLARE_TUNNEL_TOKEN` (the token comes from the environment variable, a `--file`, or is typed in; it is never a command-line value).
+5. The address is now `https://jarvis.yourdomain.com/mcp`. Put it in ElevenLabs once as the MCP server URL, with your key as the secret token.
+
+- The token is kept privately on this computer, is not shown again and is never written to a log. If it leaks, rotate it in Cloudflare and paste the new one.
+- The name is guessable, so the protection is still the key: every request without it gets 401.
+- If the endpoint's port changes (it takes the next free port when 8766 is taken), update the route's Service URL in Cloudflare.
+- **Go back** with the button next to the name, or `jarvis mcp access public named off`.
+- If Cloudflare refuses the tunnel (a wrong or rotated token, a deleted tunnel) the card shows the reason.

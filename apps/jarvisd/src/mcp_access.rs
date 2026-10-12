@@ -212,6 +212,19 @@ pub async fn require_key(
     if let Ok(value) = HeaderValue::from_str(&format!("Bearer {ACCESS_FINGERPRINT}")) {
         request.headers_mut().insert(header::AUTHORIZATION, value);
     }
+    // A request that came through the owner's named tunnel carries the owner's public hostname as its Host. The key has been checked, so the
+    // endpoint is told what it always sees (its own loopback address); the endpoint's own Host guard is not loosened for anyone else.
+    let through_named_tunnel = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|host| access.tunnel().is_public_host(host));
+    if through_named_tunnel
+        && let Some(port) = access.serving_port()
+        && let Ok(value) = HeaderValue::from_str(&format!("127.0.0.1:{port}"))
+    {
+        request.headers_mut().insert(header::HOST, value);
+    }
     next.run(request).await
 }
 
@@ -222,6 +235,10 @@ pub fn routes() -> axum::Router<GatewayState> {
         .route("/mcp/access", get(overview).post(switch))
         .route("/mcp/access/key", post(new_key))
         .route("/mcp/access/public", post(set_public))
+        .route(
+            "/mcp/access/public/named",
+            post(set_named).delete(clear_named),
+        )
 }
 
 fn access(state: &GatewayState) -> Result<&Arc<McpAccess>, Box<Response>> {
@@ -265,13 +282,60 @@ fn public_json(access: &McpAccess) -> serde_json::Value {
         crate::mcp_tunnel::Tunnel::On { url } => Some(format!("{url}{ENDPOINT_PATH}")),
         _ => None,
     };
+    let stable_host = tunnel.stable_host();
     json!({
         "wanted": tunnel.wanted(),
         "available": tunnel.available(),
         "download_megabytes": tunnel.download_megabytes(),
         "status": status,
         "url": url,
+        // The owner's own Cloudflare tunnel (`ADR-0202`). The token is never shown; only that there is one, and the name it serves.
+        "stable": {
+            "configured": stable_host.is_some(),
+            "host": stable_host,
+            "service_url": access.serving_port().map(|port| format!("http://127.0.0.1:{port}")),
+        },
     })
+}
+
+/// The body of `POST /api/v1/mcp/access/public/named`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamedBody {
+    hostname: String,
+    token: String,
+}
+
+/// `POST /api/v1/mcp/access/public/named`: save the owner's own Cloudflare tunnel (its token and the hostname published for it) and use it in
+/// place of the quick tunnel. When the endpoint is being served this also switches the internet address on, and a running tunnel restarts at once.
+pub async fn set_named(State(state): State<GatewayState>, Json(body): Json<NamedBody>) -> Response {
+    let access = match access(&state) {
+        Ok(access) => access,
+        Err(response) => return *response,
+    };
+    let tunnel = access.tunnel();
+    if let Err(message) = tunnel.set_named(&body.hostname, &body.token) {
+        return refused(&message);
+    }
+    if let Some(port) = access.serving_port() {
+        if let Err(message) = tunnel.set_wanted(true) {
+            return refused(&message);
+        }
+        tunnel.start(port);
+    }
+    (StatusCode::OK, Json(overview_json(&state, access))).into_response()
+}
+
+/// `DELETE /api/v1/mcp/access/public/named`: forget the owner's tunnel. A running tunnel goes back to the quick tunnel at once.
+pub async fn clear_named(State(state): State<GatewayState>) -> Response {
+    let access = match access(&state) {
+        Ok(access) => access,
+        Err(response) => return *response,
+    };
+    if let Err(message) = access.tunnel().clear_named() {
+        return refused(&message);
+    }
+    (StatusCode::OK, Json(overview_json(&state, access))).into_response()
 }
 
 /// The body of `POST /api/v1/mcp/access/public`.
@@ -543,5 +607,95 @@ mod tests {
     #[test]
     fn the_fixed_caller_is_a_valid_fingerprint() {
         assert!(jarvis_mcp_transport::Fingerprint::parse(ACCESS_FINGERPRINT).is_ok());
+    }
+
+    fn host_app(access: Arc<McpAccess>) -> Router {
+        Router::new()
+            .route(
+                "/mcp",
+                post(|request: Request| async move {
+                    request
+                        .headers()
+                        .get(header::HOST)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("none")
+                        .to_owned()
+                }),
+            )
+            .layer(middleware::from_fn_with_state(access, require_key))
+    }
+
+    async fn call_with_host(app: &Router, key: Option<&str>, host: &str) -> (StatusCode, String) {
+        let mut request = axum::http::Request::post("/mcp").header(header::HOST, host);
+        if let Some(key) = key {
+            request = request.header(header::AUTHORIZATION, key);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                request
+                    .body(Body::empty())
+                    .unwrap_or_else(|e| panic!("{e}")),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Falsified by rewriting before the key check (a stranger would be answered), by rewriting every Host, or by not rewriting at all (the
+    /// endpoint's own Host guard would refuse the owner's public name).
+    #[tokio::test]
+    async fn the_owners_public_name_reaches_the_endpoint_as_loopback_only_with_the_key() {
+        let directory = scratch();
+        let access = Arc::new(McpAccess::open(&directory));
+        let key = access.ensure_key().unwrap_or_else(|e| panic!("{e}"));
+        access.set_serving_port(8766);
+        let token = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .encode(br#"{"a":"account","t":"tunnel-id","s":"c2VjcmV0"}"#)
+        };
+        access
+            .tunnel()
+            .set_named("jarvis.example.com", &token)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let app = host_app(Arc::clone(&access));
+
+        let (status, seen) = call_with_host(&app, Some(&key), "jarvis.example.com").await;
+        assert_eq!((status, seen.as_str()), (StatusCode::OK, "127.0.0.1:8766"));
+        let (_, seen) = call_with_host(&app, Some(&key), "Jarvis.Example.com:443").await;
+        assert_eq!(seen, "127.0.0.1:8766");
+        for other in [
+            "evil.example.com",
+            "jarvis.example.com.evil.test",
+            "localhost",
+        ] {
+            let (status, seen) = call_with_host(&app, Some(&key), other).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(seen, other, "only the owner's own name is rewritten");
+        }
+        let (status, seen) = call_with_host(&app, None, "jarvis.example.com").await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "no key, no answer: {seen}"
+        );
+        let (status, _) = call_with_host(&app, Some("wrong"), "jarvis.example.com").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        access
+            .tunnel()
+            .clear_named()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let (_, seen) = call_with_host(&app, Some(&key), "jarvis.example.com").await;
+        assert_eq!(
+            seen, "jarvis.example.com",
+            "forgotten, the name means nothing"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

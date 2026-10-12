@@ -22,7 +22,7 @@ Verified live on 2026-10-10 on Windows: cold start to a public address in about 
 
 **Costs and limits, stated honestly:**
 
-- **The address changes every time JARVIS starts.** The owner must paste the new one into the cloud app. That is acceptable for trying it and **not** for a phone number people call. A stable address needs a named tunnel on the owner's Cloudflare account with a hostname (`P11-001g`; the Host header must then be handled on the server side, which is a trust-boundary change of its own).
+- **The address changes every time JARVIS starts.** The owner must paste the new one into the cloud app. That is acceptable for trying it and **not** for a phone number people call. A stable address is a named tunnel on the owner's Cloudflare account: **built in `ADR-0202`** (the Host header is handled by `require_key` after the key check).
 - Cloudflare calls quick tunnels a testing service with no uptime guarantee, 200 in-flight requests and no server-sent events.
 - **Anyone holding the address and the key can use the served tools**, including starting agent runs that spend model credit. One shared key and a long random one are the protection; a key per agent and revocation come with `P11-001e`.
 - Acting tools (clicks, sending mail) are still refused for the caller until approvals can be answered (`P11-001e`), so a phone agent can look things up and read, not yet act.

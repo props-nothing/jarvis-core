@@ -14,7 +14,7 @@ use crate::output::ExitStatus;
 use crate::schedule::{print_json, report};
 
 const USAGE: &str = "usage: jarvis mcp <list|on|off|add|test|remove|access> [...]
-       jarvis mcp access [on|off|key]                              # let other AI apps (Claude Code, Cursor, VS Code) hand JARVIS tasks: shows the address and key\n       jarvis mcp access public on|off                             # reach it from the internet (a cloud phone agent): a free temporary address\n       jarvis mcp list [--json]                                    # the abilities you can switch on, and any program you added\n       jarvis mcp on browser                                       # switch an ability on (JARVIS does the setup)\n       jarvis mcp off browser\n       jarvis mcp add NAME [--read-only] -- PROGRAM [ARGS...]      # a program on this computer, e.g. -- npx -y @playwright/mcp@latest\n       jarvis mcp add NAME [--read-only] --url https://host/mcp    # a remote server (HTTPS)\n       jarvis mcp test NAME                                        # connect once and show its tools; nothing is saved\n       jarvis mcp test -- PROGRAM [ARGS...]                        # try a server before adding it\n       jarvis mcp remove NAME\n       A change applies on the next `jarvis restart`.";
+       jarvis mcp access [on|off|key]                              # let other AI apps (Claude Code, Cursor, VS Code) hand JARVIS tasks: shows the address and key\n       jarvis mcp access public on|off                             # reach it from the internet (a cloud phone agent): a free temporary address\n       jarvis mcp access public named HOSTNAME [--from-env NAME]   # a stable address on your own Cloudflare tunnel (token from the environment, a file, or typed in)\n       jarvis mcp access public named off                          # back to the free temporary address\n       jarvis mcp list [--json]                                    # the abilities you can switch on, and any program you added\n       jarvis mcp on browser                                       # switch an ability on (JARVIS does the setup)\n       jarvis mcp off browser\n       jarvis mcp add NAME [--read-only] -- PROGRAM [ARGS...]      # a program on this computer, e.g. -- npx -y @playwright/mcp@latest\n       jarvis mcp add NAME [--read-only] --url https://host/mcp    # a remote server (HTTPS)\n       jarvis mcp test NAME                                        # connect once and show its tools; nothing is saved\n       jarvis mcp test -- PROGRAM [ARGS...]                        # try a server before adding it\n       jarvis mcp remove NAME\n       A change applies on the next `jarvis restart`.";
 
 /// Runs one MCP verb.
 pub async fn run_mcp(client: &ApiClient, arguments: &[String]) -> ExitStatus {
@@ -121,7 +121,12 @@ fn render_abilities(overview: &Value) -> String {
 /// The internet-address part of `jarvis mcp access`.
 fn render_public(public: &Value) -> String {
     let state = public["status"]["state"].as_str().unwrap_or("off");
+    let stable = public["stable"]["configured"] == true;
     match state {
+        "on" if stable => format!(
+            "\nreachable from the internet at: {}\n  (your own Cloudflare tunnel, so the address stays the same; anyone with it and the key can use the tools)\n  back to the temporary address with: jarvis mcp access public named off\n\nAnything that needs your approval waits for you (see `jarvis approvals list`) and is refused after two minutes.\n",
+            public["url"].as_str().unwrap_or("")
+        ),
         "on" => format!(
             "\nreachable from the internet at: {}\n  (the address changes every time JARVIS starts; anyone with it and the key can use the tools)\n  stop it with: jarvis mcp access public off\n\nAnything that needs your approval waits for you (see `jarvis approvals list`) and is refused after two minutes.\n",
             public["url"].as_str().unwrap_or("")
@@ -166,14 +171,17 @@ fn render_access(info: &Value) -> String {
     text
 }
 
-/// The words of a command that are not flags or the values of `--url` and `--root`.
+/// The words of a command that are not flags or the values of `--url`, `--root`, `--from-env` and `--file`.
 fn words_of(arguments: &[String]) -> Vec<&str> {
     let mut words = Vec::new();
     let mut skip = false;
     for argument in arguments {
         if skip {
             skip = false;
-        } else if argument == "--url" || argument == "--root" {
+        } else if matches!(
+            argument.as_str(),
+            "--url" | "--root" | "--from-env" | "--file"
+        ) {
             skip = true;
         } else if !argument.starts_with("--") {
             words.push(argument.as_str());
@@ -182,12 +190,49 @@ fn words_of(arguments: &[String]) -> Vec<&str> {
     words
 }
 
+/// Reads the tunnel token from an environment variable, a file, or standard input. It is never a command-line value, which would be kept in
+/// shell history and visible to other processes.
+fn read_tunnel_token(arguments: &[String]) -> Result<String, String> {
+    use std::io::{IsTerminal as _, Read as _, Write as _};
+    if let Some(name) = flag(arguments, "--from-env") {
+        return std::env::var(name)
+            .map_err(|_| format!("the environment variable {name} is not set"));
+    }
+    if let Some(path) = flag(arguments, "--file") {
+        return std::fs::read_to_string(path).map_err(|_| format!("{path} could not be read"));
+    }
+    let mut text = String::new();
+    if std::io::stdin().is_terminal() {
+        eprint!(
+            "In Cloudflare open the tunnel, choose Add a replica and copy the install command (do not run it). Paste it here and press Enter (use --from-env NAME or --file PATH to avoid it showing): "
+        );
+        let _ = std::io::stderr().flush();
+        std::io::stdin()
+            .read_line(&mut text)
+            .map_err(|error| error.to_string())?;
+    } else {
+        std::io::stdin()
+            .take(4096)
+            .read_to_string(&mut text)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(text)
+}
+
 async fn access(client: &ApiClient, rest: &[String]) -> ExitStatus {
     let result = match words_of(rest).as_slice() {
         ["public", "on"] => client.mcp_access_public(true).await,
         ["public", "off"] => client.mcp_access_public(false).await,
+        ["public", "named", "off"] => client.mcp_access_named_off().await,
+        ["public", "named", hostname] => match read_tunnel_token(rest) {
+            Ok(token) => client.mcp_access_named(hostname, &token).await,
+            Err(message) => {
+                eprintln!("jarvis: {message}");
+                return ExitStatus::Usage;
+            }
+        },
         [] => client.mcp_access().await,
-        ["public"] => {
+        ["public", ..] => {
             eprintln!("{USAGE}");
             return ExitStatus::Usage;
         }
@@ -547,6 +592,36 @@ mod tests {
         assert!(
             !text.contains("browser  connected"),
             "an ability is not repeated as a custom program: {text}"
+        );
+    }
+
+    #[test]
+    fn a_stable_address_says_it_stays_and_a_temporary_one_says_it_changes() {
+        let stable = render_public(&serde_json::json!({
+            "status": { "state": "on" },
+            "url": "https://jarvis.example.com/mcp",
+            "stable": { "configured": true, "host": "jarvis.example.com" }
+        }));
+        assert!(stable.contains("https://jarvis.example.com/mcp"));
+        assert!(stable.contains("stays the same"));
+        assert!(!stable.contains("changes every time"));
+    }
+
+    #[test]
+    fn the_token_value_after_from_env_is_not_taken_for_a_hostname() {
+        let arguments: Vec<String> = [
+            "public",
+            "named",
+            "jarvis.example.com",
+            "--from-env",
+            "TOKEN_VAR",
+        ]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
+        assert_eq!(
+            words_of(&arguments),
+            vec!["public", "named", "jarvis.example.com"]
         );
     }
 
