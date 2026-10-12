@@ -54,10 +54,10 @@ Reasons and decisions: [ADR-0170](../adr/0170-other-apps-connect-to-jarvis-with-
 
 For a phone agent you want an address that is the same after every restart, so you paste it into ElevenLabs once. You need a free Cloudflare account with a domain on it. Nothing changes if you skip this: the free temporary address above keeps working.
 
-1. In the Cloudflare dashboard open **Networking, Tunnels, Create tunnel** and name it (for example `jarvis`).
-2. Add a **published application route**: a name such as `jarvis.yourdomain.com`, and as the **Service URL** the address shown in Settings, Connect apps, From the internet (usually `http://127.0.0.1:8766`).
-3. Open the tunnel, choose **Add a replica** and copy the install command. **Do not run it.** The long text starting with `eyJ` is the tunnel token.
-4. In JARVIS, Settings, Connect apps, From the internet, open **Want an address that never changes?**, enter the name from step 2, paste the command (or the token) and press **Save and connect**. Or run `jarvis mcp access public named jarvis.yourdomain.com --from-env CLOUDFLARE_TUNNEL_TOKEN` (the token comes from the environment variable, a `--file`, or is typed in; it is never a command-line value).
+1. In the Cloudflare dashboard open **Networking, Tunnels, Create tunnel** and name it (for example `jarvis`). Pick any operating system on the next page: **you do not install or run anything**, JARVIS runs Cloudflare's connector itself.
+2. On that page, under **Install and Run**, copy the command (`cloudflared.exe service install eyJ...`). **Do not run it.** The long text starting with `eyJ` is the tunnel token.
+3. In JARVIS, Settings, Connect apps, From the internet, open **Want an address that never changes?**, enter the name you want (for example `jarvis.yourdomain.com`), paste the command (or just the token) and press **Save and connect**. Or run `jarvis mcp access public named jarvis.yourdomain.com --from-env CLOUDFLARE_TUNNEL_TOKEN` (the token comes from the environment variable, a `--file`, or is typed in; it is never a command-line value). Within a few seconds Cloudflare's **Connection Status** turns to connected.
+4. Back in Cloudflare continue to the route: add a **published application** with the same name and, as the **Service URL**, the address shown in JARVIS (usually `http://127.0.0.1:8766`).
 5. The address is now `https://jarvis.yourdomain.com/mcp`. Put it in ElevenLabs once as the MCP server URL, with your key as the secret token.
 
 - The token is kept privately on this computer, is not shown again and is never written to a log. If it leaks, rotate it in Cloudflare and paste the new one.

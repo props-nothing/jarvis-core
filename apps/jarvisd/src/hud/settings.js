@@ -892,20 +892,29 @@ window.JarvisSettings = function (context) {
       var service = stable.service_url || "http://127.0.0.1:8766";
       [
         "You need a free Cloudflare account with a domain on it.",
-        "In the Cloudflare dashboard open Networking, Tunnels, Create tunnel. Name it (for example jarvis).",
-        "Add a published application route: pick a name such as jarvis.yourdomain.com, and set the Service URL to " + service + " (this is the endpoint on this computer).",
-        "Open the tunnel, choose Add a replica, and copy the install command (do not run it). Paste it below, with the name from step 3."
+        "In the Cloudflare dashboard open Networking, Tunnels, Create tunnel and name it (for example jarvis). Pick any operating system: you do not install anything, JARVIS runs the connector itself.",
+        "On that page copy the command under Install and Run (cloudflared.exe service install eyJ...). Do not run it.",
+        "Choose the name you want, such as jarvis.yourdomain.com, and paste both below. Press Save and connect: within a few seconds Cloudflare's Connection Status turns to connected.",
+        "Back in Cloudflare continue to the route: add a published application with that same name and the Service URL " + service + "."
       ].forEach(function (text, index) { details.appendChild(el("p", "help", (index + 1) + ". " + text)); });
-      var host = el("input"); host.type = "text"; host.placeholder = "jarvis.yourdomain.com"; host.autocomplete = "off";
-      var token = el("input"); token.type = "password"; token.placeholder = "the install command, or the token that starts with eyJ"; token.autocomplete = "off";
+      var host = el("input"); host.type = "text"; host.placeholder = "jarvis.yourdomain.com"; host.autocomplete = "off"; host.spellcheck = false;
+      var token = el("input"); token.type = "password"; token.placeholder = "cloudflared.exe service install eyJ... (or just the eyJ... token)"; token.autocomplete = "off"; token.spellcheck = false;
       var save = el("button", "yes", "Save and connect");
       save.addEventListener("click", function () {
         save.disabled = true; out.className = "help"; out.textContent = "";
         putJson("/mcp/access/public/named", "POST", { hostname: host.value, token: token.value }).then(function () { token.value = ""; reload(); },
           function (error) { save.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That could not be saved."); });
       });
-      var fields = el("div", "acts"); fields.appendChild(host); fields.appendChild(token); fields.appendChild(save);
-      details.appendChild(fields);
+      var hostRow = el("div", "set-row");
+      hostRow.appendChild(el("span", "name", "hostname"));
+      hostRow.appendChild(host);
+      hostRow.appendChild(el("span"));
+      var tokenRow = el("div", "set-row");
+      tokenRow.appendChild(el("span", "name", "tunnel token"));
+      tokenRow.appendChild(token);
+      var acts = el("div", "acts"); acts.appendChild(save); tokenRow.appendChild(acts);
+      details.appendChild(hostRow);
+      details.appendChild(tokenRow);
       details.appendChild(out);
       box.appendChild(details);
       return box;

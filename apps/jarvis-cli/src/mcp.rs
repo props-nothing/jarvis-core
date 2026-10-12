@@ -204,7 +204,7 @@ fn read_tunnel_token(arguments: &[String]) -> Result<String, String> {
     let mut text = String::new();
     if std::io::stdin().is_terminal() {
         eprint!(
-            "In Cloudflare open the tunnel, choose Add a replica and copy the install command (do not run it). Paste it here and press Enter (use --from-env NAME or --file PATH to avoid it showing): "
+            "In Cloudflare copy the install command shown when you create the tunnel (do not run it). Paste it here and press Enter (use --from-env NAME or --file PATH to avoid it showing): "
         );
         let _ = std::io::stderr().flush();
         std::io::stdin()

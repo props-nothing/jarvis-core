@@ -593,7 +593,7 @@ fn clean_hostname(input: &str) -> Result<String, String> {
 /// paste is caught here and not as a tunnel that never connects.
 fn clean_token(input: &str) -> Result<String, String> {
     let refused = || {
-        "that is not a tunnel token: in Cloudflare open the tunnel, choose Add a replica, and copy the long text that starts with eyJ".to_owned()
+        "that is not a tunnel token: in Cloudflare copy the install command shown when you create the tunnel (do not run it), or just its long text that starts with eyJ".to_owned()
     };
     if input.len() > NAMED_TOKEN_LIMIT {
         return Err(refused());
