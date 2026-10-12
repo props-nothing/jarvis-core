@@ -11,13 +11,15 @@
 //! **It is in memory, deliberately.** The caller's request does not survive a daemon restart, so an approval for it that did would be a question
 //! nobody is waiting on. A restart simply drops the waiting calls, and the callers see a refusal.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use jarvis_core::{CorrelationId, SystemClock, UtcTimestamp};
 use jarvis_protocol::PendingApprovalReply;
 use serde_json::Value;
 use tokio::sync::oneshot;
+
+use crate::phone_service::PhoneApproval;
 
 /// How long a call waits for the owner before it is refused.
 pub const WAIT: Duration = Duration::from_secs(120);
@@ -37,6 +39,9 @@ struct Waiting {
 #[derive(Default)]
 pub struct InboundApprovals {
     waiting: Mutex<Vec<Waiting>>,
+    /// A second way for the owner to say yes: on a phone call JARVIS placed (`ADR-0200`). Set once at startup, and absent in a profile
+    /// without phone calls.
+    phone: OnceLock<Arc<dyn PhoneApproval>>,
 }
 
 /// Why a call could not be put in front of the owner.
@@ -47,6 +52,16 @@ pub enum AskError {
 }
 
 impl InboundApprovals {
+    /// Lets a yes spoken on a live phone call stand for the owner's click. Set once; a second call is ignored.
+    pub fn set_phone_approval(&self, phone: Arc<dyn PhoneApproval>) {
+        let _ = self.phone.set(phone);
+    }
+
+    /// The phone's say, when this profile has one.
+    #[must_use]
+    pub fn phone_approval(&self) -> Option<&Arc<dyn PhoneApproval>> {
+        self.phone.get()
+    }
     /// Puts a call in front of the owner. Returns its identifier and the receiver its answer arrives on.
     ///
     /// # Errors

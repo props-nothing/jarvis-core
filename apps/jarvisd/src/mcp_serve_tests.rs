@@ -604,6 +604,125 @@ async fn approval_runner(
     (runner, approvals, adapter, root)
 }
 
+/// A phone that answers the same thing every time, standing in for the live-call check.
+struct StubPhone(Option<crate::phone_service::PhoneYes>);
+
+#[async_trait::async_trait]
+impl crate::phone_service::PhoneApproval for StubPhone {
+    async fn approves(&self, _tool: &str, _risk: u8) -> Option<crate::phone_service::PhoneYes> {
+        self.0.clone()
+    }
+}
+
+/// As [`approval_runner`], under `policy`.
+async fn approval_runner_under(
+    policy: WorkspacePolicy,
+) -> (
+    crate::mcp_serve::RemoteMcpRunner,
+    Arc<crate::inbound_approvals::InboundApprovals>,
+    Arc<crate::approval_fixture::RecordingApprovalAdapter>,
+    TempRoot,
+) {
+    let root = TempRoot::new();
+    root.write("notes/todo.txt", "buy milk");
+    let (database, _pipeline) = pipeline_over(&root).await;
+    let roots = must(WorkspaceRoots::new([root.path()]));
+    let adapter = Arc::new(crate::approval_fixture::RecordingApprovalAdapter::default());
+    let pipeline = Arc::new(must(ToolPipeline::with_adapters(
+        Arc::clone(&database),
+        Some(roots),
+        policy,
+        vec![(
+            vec![approval_declaring_definition()],
+            Arc::clone(&adapter) as Arc<dyn jarvis_tools::ToolExecutor>,
+        )],
+    )));
+    let served = must(pipeline.definitions());
+    let approvals = Arc::new(crate::inbound_approvals::InboundApprovals::default());
+    let runner = crate::mcp_serve::RemoteMcpRunner::new(pipeline, served, LOCAL_WORKSPACE_ID)
+        .with_approvals(
+            Arc::clone(&approvals),
+            "owner",
+            std::time::Duration::from_millis(400),
+        );
+    (runner, approvals, adapter, root)
+}
+
+fn call_arguments() -> serde_json::Value {
+    json!({ "path": "notes/todo.txt" })
+}
+
+/// **A yes spoken on a live call is the owner's answer: the call runs and nothing waits in the console.**
+///
+/// This is the double approval the owner met: the phone agent asked on the phone, and the same call then waited in the console as well.
+/// Falsified by ignoring the phone's answer: the call would wait for the console and time out.
+#[tokio::test]
+async fn a_yes_on_the_phone_runs_the_call_without_a_second_question() {
+    let (runner, approvals, adapter, _root) =
+        approval_runner_under(WorkspacePolicy::default()).await;
+    approvals.set_phone_approval(Arc::new(StubPhone(Some(crate::phone_service::PhoneYes {
+        call_id: "call-1".to_owned(),
+    }))));
+    let result = must(
+        runner
+            .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+            .await
+            .map_err(|error| error.to_string()),
+    );
+    assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+    assert_eq!(adapter.calls(), 1);
+    assert!(
+        approvals.list().is_empty(),
+        "nothing was put in front of the owner a second time"
+    );
+}
+
+/// **Without a live call the question stays in the console**, so a phone that says no changes nothing about the existing rule.
+#[tokio::test]
+async fn without_a_live_call_the_question_still_waits_in_the_console() {
+    let (runner, approvals, adapter, _root) =
+        approval_runner_under(WorkspacePolicy::default()).await;
+    approvals.set_phone_approval(Arc::new(StubPhone(None)));
+    let refused = runner
+        .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("with no answer the call must not run"));
+    assert!(refused.to_string().contains("did not answer"), "{refused}");
+    assert_eq!(adapter.calls(), 0);
+}
+
+/// **"Always ask first" outranks the phone**: the owner tightened this tool, so the question is the console's, whatever was said on a call.
+#[tokio::test]
+async fn a_tool_set_to_always_ask_first_ignores_a_yes_on_the_phone() {
+    let policy = WorkspacePolicy::default().requiring(
+        must(jarvis_tools::ToolId::new(APPROVAL_TOOL)),
+        jarvis_tools::ApprovalPolicy::Ask,
+    );
+    let (runner, approvals, adapter, _root) = approval_runner_under(policy).await;
+    approvals.set_phone_approval(Arc::new(StubPhone(Some(crate::phone_service::PhoneYes {
+        call_id: "call-1".to_owned(),
+    }))));
+    let refused = runner
+        .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("a pinned tool must wait for the console"));
+    assert!(refused.to_string().contains("did not answer"), "{refused}");
+    assert_eq!(adapter.calls(), 0);
+}
+
+/// **The phone agent cannot place the next call**: the phone tools are not served to other apps at all.
+#[test]
+fn the_phone_tools_are_not_served_to_other_apps() {
+    let definitions = must(crate::phone_tool::PhoneTool::definitions());
+    assert_eq!(definitions.len(), 2);
+    assert!(
+        super::servable_definitions(&definitions).is_empty(),
+        "no phone tool may be offered to a connected app"
+    );
+}
+
 /// Waits (briefly) until a call is waiting for the owner, and returns its identifier.
 async fn waiting_id(approvals: &crate::inbound_approvals::InboundApprovals) -> String {
     for _ in 0..100 {

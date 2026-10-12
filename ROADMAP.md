@@ -161,7 +161,7 @@ No JARVIS-specific runtime protocol and no per-framework adapter (OpenAI Agents,
 Deliver:
 
 - local speech recognition and synthesis that need no key, voice activity detection and echo handling, and a client that is not a browser tab (`P8-010`); voice notes through Telegram are the cheapest first one
-- provider-neutral outbound calls (Twilio, SIP) to numbers the owner approves, signed webhooks, call records, consent flags and retention (`P8-007` to `P8-009`, `P8-011`)
+- provider-neutral outbound calls (Twilio, SIP) to numbers the owner approves, signed webhooks, call records, consent flags and retention (`P8-007` to `P8-009`, `P8-011`). **First slice built (`ADR-0200`):** JARVIS rings the owner through an ElevenLabs agent, to listed numbers only, with records and a yes on the phone that can answer the approval; not yet run against a real account.
 
 Parked until the owner uses them: ElevenLabs Custom LLM and Speech Engine transports, model-based turn detection ([ADR-0010](docs/adr/0010-model-based-turn-detection.md) stays the policy if built), and a realtime room.
 

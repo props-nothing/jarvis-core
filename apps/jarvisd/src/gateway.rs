@@ -92,6 +92,8 @@ pub struct GatewayState {
     mcp_access: Option<Arc<crate::mcp_access::McpAccess>>,
     /// The Telegram chat, when the daemon serves one (ADR-0184).
     telegram: Option<Arc<crate::telegram::TelegramBridge>>,
+    /// Phone calls to the owner, when the daemon has them (ADR-0200).
+    phone: Option<Arc<crate::phone_service::PhoneService>>,
     /// The pictures tools produced, for the console to show (`P11-011`).
     images: Option<Arc<crate::image_store::ImageStore>>,
 }
@@ -115,8 +117,22 @@ impl GatewayState {
             mcp: Arc::new(crate::mcp_admin::McpSnapshot::default()),
             mcp_access: None,
             telegram: None,
+            phone: None,
             images: None,
         }
+    }
+
+    /// Attaches the phone calls, which turns their routes on.
+    #[must_use]
+    pub fn with_phone(mut self, phone: Arc<crate::phone_service::PhoneService>) -> Self {
+        self.phone = Some(phone);
+        self
+    }
+
+    /// Returns the phone calls, when the daemon has them.
+    #[must_use]
+    pub(crate) fn phone(&self) -> Option<&Arc<crate::phone_service::PhoneService>> {
+        self.phone.as_ref()
     }
 
     /// Attaches the picture store, which turns its route on.
@@ -418,7 +434,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/skills/{id}/enable", post(enable_skill))
         .merge(crate::mcp_admin::routes())
         .merge(crate::mcp_access::routes())
-        .merge(crate::telegram::routes())
+        .merge(crate::telegram::routes().merge(crate::phone_service::routes()))
         .merge(crate::image_store::routes())
         .merge(crate::google_service::routes())
         .merge(crate::contacts_service::routes())

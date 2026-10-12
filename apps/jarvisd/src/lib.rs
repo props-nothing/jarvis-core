@@ -41,6 +41,8 @@ mod model_probe;
 mod model_routing;
 mod notify;
 mod ocr;
+mod phone_service;
+mod phone_tool;
 mod project_context;
 mod project_service;
 mod project_tool;
@@ -236,6 +238,13 @@ enum DaemonError {
         /// Which part was rejected, named by the variant.
         #[source]
         source: crate::schedule_tool::ScheduleToolError,
+    },
+    /// The phone tools could not state their own contract.
+    #[error("the phone tools could not be defined")]
+    PhoneTool {
+        /// Which part was rejected, named by the variant.
+        #[source]
+        source: crate::phone_tool::PhoneToolError,
     },
     /// The delegation tools could not state their own contract.
     #[error("the delegation tools could not be defined")]
@@ -448,11 +457,21 @@ fn record_startup_error(root: Option<&Path>, error: &DaemonError) {
 
 /// What the gateway drives runs with, and the runs recovery just settled as interrupted.
 struct Services {
+    /// The configured executor model, resolved at start so an unimplemented name fails the
+    /// daemon rather than being discovered when a run is started.
     executor: Option<Arc<executor::Executor>>,
+    /// The composed tool pipeline, resolved at start for the same reason: an unusable workspace
+    /// grant must fail the daemon rather than the first tool call.
     tools: Option<Arc<crate::tool_pipeline::ToolPipeline>>,
+    /// The speech provider, resolved at start so a missing key file fails the daemon rather than the first sentence.
     speech: Option<Arc<jarvis_voice::ElevenLabsSpeech>>,
+    /// Phone calls to the owner and their records (`ADR-0200`).
+    phone: Arc<crate::phone_service::PhoneService>,
+    /// The runs recovery just settled as interrupted, which may get one continuation once runs can be driven.
     interrupted: Vec<String>,
+    /// What the MCP servers turned out to be at start, for the management routes.
     mcp_snapshot: Arc<crate::mcp_admin::McpSnapshot>,
+    /// The key for other apps that connect to JARVIS, and whether the endpoint is serving.
     mcp_access: Arc<crate::mcp_access::McpAccess>,
 }
 
@@ -465,20 +484,8 @@ struct Running {
     database: Arc<SqliteDatabase>,
     credential: jarvis_core::ClientCredential,
     http_port: Option<u16>,
-    /// The configured executor model, resolved at start so an unimplemented name fails the
-    /// daemon rather than being discovered when a run is started.
-    executor: Option<Arc<executor::Executor>>,
-    /// The composed tool pipeline, resolved at start for the same reason: an unusable workspace
-    /// grant must fail the daemon rather than the first tool call.
-    tools: Option<Arc<crate::tool_pipeline::ToolPipeline>>,
-    /// The speech provider, resolved at start so a missing key file fails the daemon rather than the first sentence.
-    speech: Option<Arc<jarvis_voice::ElevenLabsSpeech>>,
-    /// The runs recovery just settled as interrupted, which may get one continuation once runs can be driven.
-    interrupted: Vec<String>,
-    /// What the MCP servers turned out to be at start, for the management routes.
-    mcp_snapshot: Arc<crate::mcp_admin::McpSnapshot>,
-    /// The key for other apps that connect to JARVIS, and whether the endpoint is serving.
-    mcp_access: Arc<crate::mcp_access::McpAccess>,
+    /// What the HTTP gateway is built from, composed at start.
+    services: Services,
     /// The connected MCP host, held so its connections stay open and can be closed on shutdown.
     ///
     /// Held **beside** the pipeline rather than inside it because the two have different lifetimes: the
@@ -593,16 +600,40 @@ fn warn_about_unused_environment() {
     }
 }
 
+/// Loads the saved configuration, writing it back in the current format when it was an older one.
+fn load_config_migrating(paths: &AppPaths) -> Result<jarvis_storage::LoadedConfig, DaemonError> {
+    let config_store = ConfigStore::from_paths(paths);
+    let loaded_config = config_store.load()?;
+    if loaded_config.migration().is_some() {
+        config_store.save(loaded_config.config())?;
+    }
+    Ok(loaded_config)
+}
+
+/// Phone calls to the owner (`ADR-0200`). They read their settings fresh, so nothing here depends on the configuration as it was at
+/// start. The one service is shared by the tools, the Settings routes and the endpoint other apps use, which is how a yes spoken on a
+/// live call reaches an approval.
+fn compose_phone(
+    paths: &AppPaths,
+    database: &Arc<SqliteDatabase>,
+    access: &crate::mcp_access::McpAccess,
+) -> Arc<phone_service::PhoneService> {
+    let phone = Arc::new(phone_service::PhoneService::new(
+        paths.clone(),
+        Arc::clone(database),
+    ));
+    access
+        .approvals()
+        .set_phone_approval(Arc::clone(&phone) as Arc<dyn phone_service::PhoneApproval>);
+    phone
+}
+
 async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonError> {
     let health = Arc::new(HealthState::new());
     let paths = resolve_paths(root)?;
     paths.prepare()?;
 
-    let config_store = ConfigStore::from_paths(&paths);
-    let loaded_config = config_store.load()?;
-    if loaded_config.migration().is_some() {
-        config_store.save(loaded_config.config())?;
-    }
+    let loaded_config = load_config_migrating(&paths)?;
 
     // The daemon is the sole issuer of the profile credential.
     let credential_store = CredentialStore::at(paths.config().join(LOCAL_CREDENTIAL_FILE_NAME));
@@ -677,6 +708,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     // length where clippy's `too_many_lines` signals a function carrying a second responsibility.
     let executor = compose_executor(loaded_config.config().daemon())?;
     let speech = compose_speech(loaded_config.config().daemon())?;
+    let phone = compose_phone(&paths, &database, &mcp_access);
 
     // The tool pipeline and MCP host are composed HERE, for the same reason the executor is: an unusable
     // workspace grant must stop the daemon at startup rather than be discovered by the first tool call.
@@ -687,6 +719,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         loaded_config.config(),
         &paths,
         Arc::clone(&database),
+        &phone,
         executor.as_ref(),
     )
     .await?;
@@ -714,14 +747,17 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         credential,
         http_port,
         mcp,
-        mcp_snapshot,
-        mcp_access,
         serving_mcp,
         mcp_stop,
-        executor,
-        tools,
-        speech,
-        interrupted,
+        services: Services {
+            executor,
+            tools,
+            speech,
+            phone,
+            interrupted,
+            mcp_snapshot,
+            mcp_access,
+        },
         daemon_id,
         accept_loop: Box::pin(accept_clients(listener, context)),
     })
@@ -926,6 +962,7 @@ async fn compose_tools(
     config: &jarvis_storage::Config,
     paths: &AppPaths,
     database: Arc<SqliteDatabase>,
+    phone: &Arc<crate::phone_service::PhoneService>,
     executor: Option<&Arc<executor::Executor>>,
 ) -> Result<
     (
@@ -982,7 +1019,7 @@ async fn compose_tools(
             &database,
         ))) as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
-    push_project_tool(&database, &mut additional)?;
+    push_project_tool(&database, phone, &mut additional)?;
     // The model can propose a skill; the owner approves it in the console (`skill_tool`).
     let skill_tool = Arc::new(crate::skill_tool::SkillProposeTool::new(Arc::clone(
         &database,
@@ -1168,18 +1205,29 @@ fn push_google_tools(
     Ok(())
 }
 
-/// Registers the project journal tool: it needs only the database, and it refuses outside a project (`ADR-0151`).
+/// Registers the project journal tool: it needs only the database, and it refuses outside a project (`ADR-0151`). The contact and memory
+/// keeping tools and the phone tools ride along, since each is the model looking after the owner's own state or reaching the owner.
+///
+/// The phone tools exist in every profile and refuse, saying what is missing, until the owner sets phone calls up in Settings. They are
+/// not served to other apps (`mcp_serve::servable_definitions`).
 ///
 /// # Errors
 ///
-/// Returns [`DaemonError::ProjectTool`] when the tool's own contract is rejected.
+/// Returns [`DaemonError::ProjectTool`] (or the matching variant) when a tool's own contract is rejected.
 fn push_project_tool(
     database: &Arc<SqliteDatabase>,
+    phone: &Arc<crate::phone_service::PhoneService>,
     additional: &mut Vec<(
         Vec<jarvis_tools::ToolDefinition>,
         Arc<dyn jarvis_tools::ToolExecutor>,
     )>,
 ) -> Result<(), DaemonError> {
+    additional.push((
+        crate::phone_tool::PhoneTool::definitions()
+            .map_err(|source| DaemonError::PhoneTool { source })?,
+        Arc::new(crate::phone_tool::PhoneTool::new(Arc::clone(phone)))
+            as Arc<dyn jarvis_tools::ToolExecutor>,
+    ));
     additional.push((
         crate::project_tool::ProjectTool::definitions()
             .map_err(|source| DaemonError::ProjectTool { source })?,
@@ -1601,6 +1649,8 @@ struct HttpTransport {
     triggers: Option<tokio::task::JoinHandle<()>>,
     /// The Telegram chat's loop. It sleeps until a token is saved in Settings, so it runs whenever runs are driven.
     telegram: Option<tokio::task::JoinHandle<()>>,
+    /// The phone calls' poller: looks at open calls every few seconds, which is one local query when there are none.
+    phone: tokio::task::JoinHandle<()>,
 }
 
 impl HttpTransport {
@@ -1625,6 +1675,7 @@ impl HttpTransport {
             interrupted,
             mcp_snapshot,
             mcp_access,
+            phone,
         } = services;
         // Loopback only. Reaching any other interface is remote mode, which `P10-004` owns as an
         // explicit TLS-terminated configuration rather than something that happens by default.
@@ -1659,6 +1710,7 @@ impl HttpTransport {
             .with_mcp(mcp_snapshot)
             .with_mcp_access(mcp_access)
             .with_telegram(Arc::clone(&telegram))
+            .with_phone(Arc::clone(&phone))
             .with_images(images);
         // Scheduled tasks fire through the same state the routes use, so a scheduled run is an ordinary run. Only
         // when runs are driven at all: a scheduler over a daemon with no executor would start runs nothing runs.
@@ -1671,6 +1723,7 @@ impl HttpTransport {
         let telegram = state
             .drives_runs()
             .then(|| tokio::spawn(telegram.run(state.clone())));
+        let phone = tokio::spawn(phone.run());
         if state.drives_runs() && !interrupted.is_empty() {
             let resumed = state.clone();
             tokio::spawn(async move {
@@ -1699,6 +1752,7 @@ impl HttpTransport {
                 scheduler,
                 triggers,
                 telegram,
+                phone,
             },
             stopped,
         ))
@@ -1725,6 +1779,7 @@ impl HttpTransport {
         if let Some(telegram) = &self.telegram {
             telegram.abort();
         }
+        self.phone.abort();
         let _ = self.shutdown.send(());
         if !drain(self.handle, SHUTDOWN_GRACE).await {
             tracing::warn!(
@@ -1907,13 +1962,8 @@ where
         database,
         credential,
         http_port,
-        executor,
-        tools,
-        speech,
-        interrupted,
+        services,
         mcp,
-        mcp_snapshot,
-        mcp_access,
         serving_mcp,
         mcp_stop,
         daemon_id,
@@ -1929,14 +1979,7 @@ where
                 port,
                 Arc::clone(&database),
                 credential.clone(),
-                Services {
-                    executor,
-                    tools,
-                    speech,
-                    interrupted,
-                    mcp_snapshot,
-                    mcp_access,
-                },
+                services,
                 settings_service::SettingsContext::new(paths.clone(), root.clone()),
             )
             .await?;

@@ -96,7 +96,7 @@ pub struct Entry {
 /// Built-in tool families that are offered only when the model asks, because most runs never touch them and each rides along on every call.
 /// Chosen by what the owner's runs actually use: a family used by routine work (files, web, mail, memory, contacts, projects, delegation,
 /// the skills the model proposes) stays offered, since one search costs more than a few calls' worth of its definitions.
-pub const DEFERRED_NATIVE_FAMILIES: &[&str] = &["calendar", "schedule"];
+pub const DEFERRED_NATIVE_FAMILIES: &[&str] = &["calendar", "schedule", "voice"];
 
 /// The prefix of a deferred built-in group's name, so it can never be mistaken for an MCP server of the same name.
 const NATIVE_GROUP_PREFIX: &str = "jarvis-";

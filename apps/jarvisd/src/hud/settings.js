@@ -21,6 +21,7 @@ window.JarvisSettings = function (context) {
       ["permissions", "Permissions", "For each tool: let the rules decide, always ask, run without asking, or switch it off."],
       ["google", "Google", "Sign in with your Google account so JARVIS can read your mail and calendar. Reading is on by default. Sending mail and adding events need the option below and ask you every time; drafts are saved without asking."],
       ["telegram", "Telegram", "Talk to JARVIS from your phone. It answers in a Telegram chat only you can use, and asks you there when it needs your approval."],
+      ["phone", "Phone", "JARVIS rings you when it needs you, and you can ring JARVIS. A voice agent at ElevenLabs does the talking; the tools stay with JARVIS."],
       ["advanced", "Advanced", "Ports and other technical settings. The defaults are right for almost everyone. Letting other apps use JARVIS is under Connect apps."]
     ];
     var sview = { reply: null, tools: [], tab: "brain" };
@@ -65,9 +66,11 @@ window.JarvisSettings = function (context) {
       "daemon.tool_workspace_roots": "Folders", "daemon.code_sandbox_image": "Sandbox image", "daemon.code_sandbox_interpreter": "Interpreter",
       "daemon.speech_voice_id": "Voice", "daemon.speech_model": "Voice model", "daemon.http_port": "Console port",
       "daemon.mcp_serve_port": "Let other apps use JARVIS (port)", "daemon.notifications": "Notifications", "daemon.google_client_id": "Client ID",
-      "daemon.google_actions": "Send mail & events", "policy.trust": "Runs without asking"
+      "daemon.google_actions": "Send mail & events", "policy.trust": "Runs without asking",
+      "daemon.phone_agent_id": "Agent id", "daemon.phone_number_id": "Phone number id", "daemon.phone_owner_numbers": "Numbers JARVIS may call",
+      "daemon.phone_approves": "Your yes on the phone counts", "daemon.phone_opening_line": "JARVIS writes the opening line"
     };
-    function settingRow(setting, label) {
+    function settingRow(setting, label, live) {
       var row = el("div", "set-row");
       var name = el("span", "name", label && label !== "folders" ? label : LABELS[setting.key] || setting.key.replace(/^(daemon|policy)\./, ""));
       name.title = setting.key;
@@ -82,14 +85,16 @@ window.JarvisSettings = function (context) {
         var values = valuesFor(setting.kind, field.value);
         if (!values.length || !values[0]) { settingsNote("Enter a value, or use Unset.", true); return; }
         putJson("/settings/" + encodeURIComponent(setting.key), "PUT", { values: values }).then(function () {
-          saved(setting.key);
+          if (live) { settingsNote(setting.key + " saved."); loadSettings(); } else { saved(setting.key); }
         }, function (error) { settingsNote(explain(error, "That value was refused."), true); });
       });
       acts.appendChild(save);
       if (setting.value !== null && setting.value !== undefined) {
         var unset = el("button", "", "Unset");
         unset.addEventListener("click", function () {
-          putJson("/settings/" + encodeURIComponent(setting.key), "DELETE").then(function () { saved(setting.key + " removed;"); },
+          putJson("/settings/" + encodeURIComponent(setting.key), "DELETE").then(function () {
+            if (live) { settingsNote(setting.key + " removed."); loadSettings(); } else { saved(setting.key + " removed;"); }
+          },
             function (error) { settingsNote(explain(error, "That cannot be removed on its own."), true); });
         });
         acts.appendChild(unset);
@@ -627,6 +632,90 @@ window.JarvisSettings = function (context) {
         poll();
       }, 2000);
     }
+    // ---- Phone: the ElevenLabs agent and number, the numbers JARVIS may ring, a test call and the recent calls ---------------
+    // These settings apply at once (the daemon reads them on every call), so nothing here asks for a restart.
+    function phonePanel(body) {
+      var voiceKey = sview.reply && sview.reply.keys && sview.reply.keys.voice ? sview.reply.keys.voice.state : "unknown";
+      var help = el("div", "card");
+      help.appendChild(el("h4", "", "Setup, once"));
+      var steps = el("ol");
+      ["At elevenlabs.io, create an agent and import a phone number (a Twilio number or a SIP trunk) for it. Assign the agent to the number.",
+       "Add the agent as an MCP server pointing at JARVIS (Connect apps shows the address and key), with tool approval set to ask you for acting tools.",
+       "Put your ElevenLabs key in the Voice tab. It needs access to the agents platform, not only speech.",
+       "Fill in the agent id, the phone number id (listed below once the key is set) and your own number. JARVIS rings only numbers you list here.",
+       "Press Call me now. To ring JARVIS, call the number you imported; the agent answers and uses JARVIS's tools."].forEach(function (text) {
+        steps.appendChild(el("li", "", text));
+      });
+      help.appendChild(steps);
+      help.appendChild(el("p", "lead", "The call and what is said on it pass through ElevenLabs (and Twilio or your SIP provider). JARVIS keeps a short record of each call it placed: who, why, how long and a summary. It does not keep the transcript or the audio."));
+      body.appendChild(help);
+      var keyNote = el("p", "lead", voiceKey === "set" ? "ElevenLabs key: set (Voice tab)." : "ElevenLabs key: not set. Add it in the Voice tab first.");
+      body.appendChild(keyNote);
+      ["daemon.phone_agent_id", "daemon.phone_number_id", "daemon.phone_owner_numbers", "daemon.phone_approves", "daemon.phone_opening_line"].forEach(function (key) {
+        var setting = byKey(key);
+        if (setting) body.appendChild(settingRow(setting, null, true));
+      });
+      var card = el("div", "card");
+      card.appendChild(el("h4", "", "Status"));
+      var line = el("p", "lead", "Checking...");
+      var more = el("div", "acts");
+      var numbers = el("ul", "help");
+      var calls = el("ul", "help");
+      card.appendChild(line);
+      card.appendChild(more);
+      card.appendChild(numbers);
+      card.appendChild(el("h4", "", "Recent calls"));
+      card.appendChild(calls);
+      body.appendChild(card);
+      function paint(status) {
+        more.replaceChildren();
+        numbers.replaceChildren();
+        calls.replaceChildren();
+        var check = status.check;
+        if (!status.ready) {
+          line.textContent = status.missing || "Phone calls are not set up.";
+        } else if (check && check.ok === false) {
+          line.textContent = "Set up, but ElevenLabs says: " + (check.problem || "something is wrong") + ".";
+        } else if (check && check.answers_with_this_agent === false) {
+          line.textContent = "Ready, but this phone number is assigned to another agent at ElevenLabs, so calling it will not reach this one.";
+        } else {
+          line.textContent = "Ready. JARVIS may ring " + (status.numbers || []).join(", ") + ", at most " + status.limits.per_hour + " times an hour.";
+        }
+        var test = el("button", "yes", "Call me now");
+        test.disabled = !status.ready;
+        test.addEventListener("click", function () {
+          test.disabled = true;
+          putJson("/phone/test", "POST").then(function () { settingsNote("Calling you now."); poll(); },
+            function (error) { settingsNote(explain(error, "The call was not placed."), true); test.disabled = false; });
+        });
+        more.appendChild(test);
+        var again = el("button", "", "Check with ElevenLabs");
+        again.addEventListener("click", function () { poll(true); });
+        more.appendChild(again);
+        var clear = el("button", "danger", "Delete call records");
+        clear.addEventListener("click", function () {
+          putJson("/phone/calls", "DELETE").then(function () { settingsNote("Call records deleted."); poll(); },
+            function (error) { settingsNote(explain(error, "Could not delete them."), true); });
+        });
+        more.appendChild(clear);
+        ((check && check.numbers) || []).forEach(function (number) {
+          var text = (number.label || "number") + " " + number.number + " (" + number.provider + "), id " + number.id +
+            (number.agent_id ? ", agent " + number.agent_id : ", no agent");
+          numbers.appendChild(el("li", "", text));
+        });
+        (status.calls || []).forEach(function (call) {
+          var text = new Date(call.placed_at).toLocaleString() + ": " + call.status.replace("_", " ") + ", " + call.to +
+            (call.duration_seconds !== null && call.duration_seconds !== undefined ? ", " + call.duration_seconds + " s" : "") + ". " + call.reason +
+            (call.summary ? " Summary: " + call.summary : "") + (call.error ? " (" + call.error + ")" : "");
+          calls.appendChild(el("li", "", text));
+        });
+        if (!(status.calls || []).length) calls.appendChild(el("li", "", "No calls yet."));
+      }
+      function poll(check) {
+        api("/phone" + (check || voiceKey === "set" ? "?check=1" : "")).then(paint, function () { line.textContent = "Phone calls are not available on this daemon."; });
+      }
+      poll();
+    }
     // ---- MCP servers: list what each one became, test one before adding it, add, remove (P11-001) -------------------------    // A command is typed on one line and split here into a program and its arguments (quotes keep a path with spaces together).
     // The daemon resolves the program and checks the whole entry before it writes anything; a change applies on restart.
     function splitCommand(text) {
@@ -939,6 +1028,8 @@ window.JarvisSettings = function (context) {
         googlePanel(body);
       } else if (sview.tab === "telegram") {
         telegramPanel(body);
+      } else if (sview.tab === "phone") {
+        phonePanel(body);
       } else {
         inGroup("advanced").filter(function (s) { return s.key !== "daemon.mcp_serve_port"; }).forEach(function (s) { body.appendChild(settingRow(s)); });
         programsPanel(body);

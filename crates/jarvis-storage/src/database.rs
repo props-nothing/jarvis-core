@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Current application-owned SQLite schema version.
-pub const CURRENT_SCHEMA_VERSION: i64 = 23;
+pub const CURRENT_SCHEMA_VERSION: i64 = 24;
 /// Default filename for the canonical local database.
 pub const DEFAULT_DATABASE_FILENAME: &str = "jarvis.sqlite3";
 
@@ -446,6 +446,21 @@ pub enum DatabaseError {
     /// A stored schedule row contradicts the domain's rules (another build, a backup, a hand edit).
     #[error("the stored schedule has an invalid {field}")]
     StoredScheduleInvalid {
+        /// Stable field name without the offending value.
+        field: &'static str,
+    },
+    /// No phone call exists for the requested identifier in this workspace.
+    #[error("no phone call exists for the requested identifier")]
+    PhoneCallNotFound,
+    /// A phone call field was refused (blank, too long, or an unknown status).
+    #[error("the phone call's {field} is not acceptable")]
+    InvalidPhoneCall {
+        /// Stable field name without the offending value.
+        field: &'static str,
+    },
+    /// A stored phone call row contradicts the rules (another build, a backup, a hand edit).
+    #[error("the stored phone call has an invalid {field}")]
+    StoredPhoneCallInvalid {
         /// Stable field name without the offending value.
         field: &'static str,
     },

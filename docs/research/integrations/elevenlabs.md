@@ -1,7 +1,7 @@
 ---
 integration: elevenlabs
 status: researched
-last_verified: 2026-09-21
+last_verified: 2026-10-11
 owners: []
 selected_spec_version: current hosted API as of verification date
 selected_sdk: undecided
@@ -260,3 +260,55 @@ Adopted: HTTP streaming per sentence with `previous_text` for continuity (omitte
 WebSocket input-streaming endpoint, which would let the voice start from the first few words and keep one voice context for
 the whole answer. It needs a WebSocket client dependency and its own contract tests; with measured first-sentence latency of
 about 0.4 s end to end it is not the bottleneck, so it stays a candidate (`P3-040`).
+
+## Phone calls placed by JARVIS (added 2026-10-11, `P8-007`, `ADR-0200`)
+
+Research for the first telephony slice: JARVIS asks an ElevenLabs agent to ring the owner, and reads how the call went. The owner had already
+connected an ElevenLabs agent to JARVIS's MCP endpoint (Mode B above) and let it call them, so the voice, the number and the agent exist; what was
+missing is JARVIS deciding to call, recording it, and not asking twice.
+
+### Sources read on 2026-10-11
+
+| Source | URL | Used for |
+| --- | --- | --- |
+| Documentation index | https://elevenlabs.io/docs/llms.txt (219 KB, fetched with curl; the page tool timed out twice) | page discovery |
+| Outbound call via Twilio | https://elevenlabs.io/docs/eleven-agents/api-reference/integrations/twilio/outbound-call.md | request, response, `telephony_call_config` |
+| Outbound call via SIP trunk | https://elevenlabs.io/docs/eleven-agents/api-reference/sip-trunk/outbound-call.md | same shape, `sip_call_id` in the answer |
+| List phone numbers | https://elevenlabs.io/docs/eleven-agents/api-reference/phone-numbers/list.md | `provider`, `phone_number_id`, `assigned_agent` |
+| Get conversation details | https://elevenlabs.io/docs/eleven-agents/api-reference/conversations/get.md | `status`, `transcript`, `metadata`, `analysis` |
+| Overrides | https://elevenlabs.io/docs/eleven-agents/customization/personalization/overrides.md | what a per-call override needs |
+| Dynamic variables | https://elevenlabs.io/docs/eleven-agents/customization/personalization/dynamic-variables.md | `dynamic_variables`, `system__` reserved prefix |
+| MCP integration | https://elevenlabs.io/docs/eleven-agents/customization/tools/mcp.md | approval modes: Always Ask, Fine-Grained, No Approval |
+| API authentication | https://elevenlabs.io/docs/api-reference/authentication.md | `xi-api-key`; keys can be limited by scope, quota and IP |
+| Post-call webhooks | https://elevenlabs.io/docs/eleven-agents/workflows/post-call-webhooks.md | `ElevenLabs-Signature`, three event types, retry and auto-disable |
+
+### Contract used
+
+- **Place a call.** `POST /v1/convai/twilio/outbound-call` for a Twilio number, `POST /v1/convai/sip-trunk/outbound-call` for a SIP trunk number. Body: `agent_id`, `agent_phone_number_id`, `to_number` (required), `conversation_initiation_client_data` (`dynamic_variables`, optional `conversation_config_override.agent.first_message`) and `telephony_call_config.ringing_timeout_secs` (default 60; JARVIS sends 45). Answer: `success`, `message`, `conversation_id`, and `callSid` (Twilio) or `sip_call_id` (SIP).
+- **Which endpoint.** The number's `provider` from `GET /v1/convai/phone-numbers` (`twilio`, `sip_trunk`, `exotel`). Exotel (and WhatsApp) numbers are refused: no endpoint was verified for them.
+- **How a call went.** `GET /v1/convai/conversations/{conversation_id}`: `status` is one of `initiated`, `in-progress`, `processing`, `done`, `failed`; `metadata.call_duration_secs`, `metadata.termination_reason`; `analysis.transcript_summary`; `transcript[]` with `role` (`user`|`agent`), `message`, `time_in_call_secs`.
+- **Authentication.** `xi-api-key` header, the same key the console voice uses. A key restricted to speech cannot place calls; the adapter reports 401/403 as "the key needs access to the agents platform".
+- **Servers.** Regional hosts exist (`api.us.elevenlabs.io`, `api.eu.residency.elevenlabs.io`, `api.in.residency.elevenlabs.io`, `api.sg.residency.elevenlabs.io`). JARVIS uses the default host; an account with data residency would need a setting for the host (**not built**).
+- **Overrides are off by default.** "For most fields, an error will be thrown if an override is provided when that field does not have overrides enabled." So JARVIS sends **dynamic variables only** (`jarvis_reason`, `jarvis_call_id`, `jarvis_urgent`) and sets the opening line (an override of `agent.first_message`) only when the owner switches `daemon.phone_opening_line` on, after enabling that override in the agent's Security tab.
+- **Per-call MCP tool approval** is a setting on the ElevenLabs side (Always Ask, Fine-Grained, No Approval). JARVIS cannot see whether the agent asked: a call arrives the same either way. This is why a yes on the phone is a separate, narrow, opt-in rule (`ADR-0200`), not something inferred from the arrival of a tool call.
+- **Not documented / not found:** an endpoint to hang up a live conversation (no `voice.call.end`), and the retry and ordering guarantees of the status values.
+
+### Decisions
+
+1. **Poll, do not receive webhooks, in this slice.** `GET conversations/{id}` every 10 seconds while a call is open works on a laptop with no public address. The post-call webhook needs a reachable address (the Cloudflare tunnel exists, `ADR-0173`), an HMAC check over the raw body and a durable inbox (`P8-008`); it stays open.
+2. **No retry of a placement.** A timed-out request may have started the call. The result is `Uncertain`, the record stays open, and the next call is refused until it is settled.
+3. **Transcript and audio are not stored by JARVIS.** The record keeps the provider's summary; the status tool reads the transcript from the provider when asked, fenced as data.
+
+### Unresolved
+
+- No live call has been made by this code. Unproven until then: that undeclared `dynamic_variables` are accepted for an agent that does not reference them; the exact `termination_reason` strings; how `in-progress` is reported while the phone is still ringing (JARVIS treats only `in-progress` as "answered").
+- Legal disclosure, consent, quiet-hour and recording rules by jurisdiction (this slice calls only the owner, at the owner's request).
+- Retention of transcripts and audio at ElevenLabs is the account's setting, not JARVIS's.
+
+### Falsifying tests
+
+The phone adapter and daemon tests use a stand-in that follows this contract: Twilio and SIP endpoints are chosen by the number's provider; an unsupported or unknown number places nothing; a refusal and a 422 carry the provider's reason without the key; an unusable answer to a placement is `Uncertain` and is sent exactly once; statuses never go backwards; a number off the owner's list is refused before anything is recorded. **An opt-in live smoke test is still owed:** with the owner's key, agent and number, press "Call me now" in Settings (Phone), answer, then read the call in `jarvis.voice.status`.
+
+| Date | Sources | Change | Who |
+| --- | --- | --- | --- |
+| 2026-10-11 | the pages above | Added the outbound call, number list and conversation read contracts for the telephony slice | GitHub Copilot |

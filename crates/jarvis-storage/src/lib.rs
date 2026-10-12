@@ -19,6 +19,7 @@ mod summary_repository;
 mod approval_repository;
 mod contact_repository;
 mod digest_repository;
+mod phone_call_repository;
 mod project_repository;
 mod schedule_repository;
 pub mod settings;
@@ -80,6 +81,11 @@ pub use paths::{
 pub use pgvector::{
     DistanceMetric, MAX_INDEXED_DIMENSIONS, PgVectorError, decode as decode_embedding,
     encode as encode_embedding, is_indexable,
+};
+pub use phone_call_repository::{
+    MAX_PHONE_REASON_CHARS, NewPhoneCall, PhoneCallUpdate, StoredPhoneCall, attach_provider_call,
+    count_phone_calls_since, create_phone_call, delete_phone_calls, find_phone_call,
+    list_phone_calls, prune_phone_calls, unsettled_phone_calls, update_phone_call,
 };
 pub use project_repository::{
     LinkKind, MAX_DAILY_RUN_LIMIT, MAX_DAILY_TOKEN_LIMIT, MAX_NOTE_CHARS, NewProject, NoteKind,

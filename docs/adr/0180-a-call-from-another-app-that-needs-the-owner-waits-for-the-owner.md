@@ -1,6 +1,6 @@
 # ADR-0180: A call from another app that needs the owner waits for the owner
 
-Status: Accepted (amends `ADR-0039`)
+Status: Accepted (amends `ADR-0039`; amended by `ADR-0200`: a yes spoken on a live phone call JARVIS placed can answer the question)
 Date: 2026-10-10
 
 ## Context

@@ -1,4 +1,4 @@
-//! Speech synthesis: text in, audio out, through a hosted provider.
+//! Speech synthesis: text in, audio out, through a hosted provider; and phone calls through the same provider's agents ([`phone`]).
 //!
 //! The provider's key is held here, in the daemon, and never reaches a browser or any other client: the page asks the
 //! daemon to speak and gets audio back. See `docs/research/integrations/elevenlabs.md` (the text-to-speech section) for
@@ -8,6 +8,8 @@ use std::fmt;
 use std::time::Duration;
 
 use bytes::Bytes;
+
+pub mod phone;
 
 /// The most characters one request may speak. A long answer is spoken in several requests, which also lets the
 /// first sentence start playing while the rest is still being made.

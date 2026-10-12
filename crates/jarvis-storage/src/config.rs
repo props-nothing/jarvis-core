@@ -269,10 +269,29 @@ pub struct DaemonConfig {
     /// Whether the Google sign-in also asks to send mail and create calendar events (each action still asks the owner). Unset means no.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     google_actions: Option<bool>,
+    /// The `ElevenLabs` agent that speaks on a phone call (`ADR-0200`). Not a secret. Calls use the voice key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_agent_id: Option<String>,
+    /// The `ElevenLabs` phone number a call is placed from. Not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_number_id: Option<String>,
+    /// The numbers JARVIS may call, in international format. Nothing else is ever rung, whatever a model asks for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    phone_owner_numbers: Vec<String>,
+    /// Whether the owner's yes spoken on a call JARVIS placed counts as the approval of a low-risk tool the phone agent asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_approves: Option<bool>,
+    /// Whether JARVIS sets the agent's opening line (it then names JARVIS as an AI and says why it calls). Needs the agent's
+    /// "first message" override switched on at the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_opening_line: Option<bool>,
 }
 
 /// The words a reasoning effort may be (the same ones providers use).
 const REASONING_EFFORTS: [&str; 4] = ["none", "low", "medium", "high"];
+
+/// The most numbers JARVIS may be allowed to call.
+pub const MAX_PHONE_NUMBERS: usize = 5;
 
 fn default_http_port() -> u16 {
     DEFAULT_HTTP_PORT
@@ -411,6 +430,36 @@ impl DaemonConfig {
         self.google_client_secret_ref.as_deref()
     }
 
+    /// The `ElevenLabs` agent that speaks on a phone call, if one is set.
+    #[must_use]
+    pub fn phone_agent_id(&self) -> Option<&str> {
+        self.phone_agent_id.as_deref()
+    }
+
+    /// The `ElevenLabs` phone number id calls are placed from, if one is set.
+    #[must_use]
+    pub fn phone_number_id(&self) -> Option<&str> {
+        self.phone_number_id.as_deref()
+    }
+
+    /// The numbers JARVIS may call, each in international format. A stored value that is not one is refused when the configuration loads.
+    #[must_use]
+    pub fn phone_owner_numbers(&self) -> &[String] {
+        &self.phone_owner_numbers
+    }
+
+    /// Whether a yes spoken on a call JARVIS placed approves a low-risk tool (off unless the owner turned it on).
+    #[must_use]
+    pub fn phone_approves(&self) -> bool {
+        self.phone_approves.unwrap_or(false)
+    }
+
+    /// Whether JARVIS sets the agent's opening line (off unless the owner turned it on).
+    #[must_use]
+    pub fn phone_opening_line(&self) -> bool {
+        self.phone_opening_line.unwrap_or(false)
+    }
+
     /// The file holding the web search key, if search is configured.
     #[must_use]
     pub fn search_api_key_ref(&self) -> Option<&Path> {
@@ -527,6 +576,11 @@ impl Default for DaemonConfig {
             google_client_id: None,
             google_client_secret_ref: None,
             google_actions: None,
+            phone_agent_id: None,
+            phone_number_id: None,
+            phone_owner_numbers: Vec::new(),
+            phone_approves: None,
+            phone_opening_line: None,
         }
     }
 }
@@ -858,6 +912,7 @@ impl Config {
             return Err(ConfigError::InvalidTelegramKey);
         }
         self.validate_google()?;
+        self.validate_phone()?;
         self.validate_push()?;
         self.validate_code_sandbox()?;
         self.validate_speech()?;
@@ -891,6 +946,40 @@ impl Config {
             Err(ConfigError::InvalidFallbackProvider)
         }
     }
+
+    /// Validates the phone settings. Each is saved on its own by the settings screen, so none needs another; the daemon places a call
+    /// only when it has all of them and a voice key. A number is stored in its canonical form, so a number written another way is
+    /// refused here and not quietly compared as a different string.
+    fn validate_phone(&self) -> Result<(), ConfigError> {
+        let plain = |value: &String| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        };
+        let daemon = &self.daemon;
+        let numbers_ok = daemon.phone_owner_numbers.len() <= MAX_PHONE_NUMBERS
+            && daemon
+                .phone_owner_numbers
+                .iter()
+                .enumerate()
+                .all(|(index, number)| {
+                    jarvis_core::normalize_phone_number(number).is_ok_and(|canonical| {
+                        &canonical == number
+                            && !daemon.phone_owner_numbers[..index].contains(number)
+                    })
+                });
+        if daemon.phone_agent_id.as_ref().is_none_or(plain)
+            && daemon.phone_number_id.as_ref().is_none_or(plain)
+            && numbers_ok
+        {
+            Ok(())
+        } else {
+            Err(ConfigError::InvalidPhone)
+        }
+    }
+
     /// Validates the push settings: a topic ntfy would accept, and a server that is `https://`, or `http://` on this machine only.
     fn validate_push(&self) -> Result<(), ConfigError> {
         let topic_ok = self.daemon.push_topic.as_deref().is_none_or(|topic| {
@@ -1293,6 +1382,12 @@ pub enum ConfigError {
     /// The web search key path was not absolute.
     #[error("daemon.search_api_key_ref must be an absolute path")]
     InvalidSearchKey,
+    /// The phone settings were unusable: an agent or number id that is not letters, digits, `-` or `_`, or a number that is not in
+    /// international format.
+    #[error(
+        "daemon.phone_agent_id and daemon.phone_number_id must be ElevenLabs ids (letters, digits, - or _), and daemon.phone_owner_numbers numbers in international format such as +31612345678, each written once"
+    )]
+    InvalidPhone,
     /// The Telegram token path was not absolute.
     #[error("daemon.telegram_token_ref must be an absolute path")]
     InvalidTelegramKey,
@@ -1494,6 +1589,11 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "google_client_id",
                 "google_client_secret_ref",
                 "google_actions",
+                "phone_agent_id",
+                "phone_number_id",
+                "phone_owner_numbers",
+                "phone_approves",
+                "phone_opening_line",
             ],
             &mut unknown,
         );

@@ -189,6 +189,8 @@ voice.call.status
 voice.call.end
 ```
 
+**Built (`ADR-0200`):** `jarvis.voice.call` and `jarvis.voice.status` (a tool id is `namespace.name`, so the names are flat). `end` is not built: the provider documents no hang-up call. Calls ring only numbers the owner listed, and the phone tools are not served to Connect apps.
+
 The ElevenLabs Twilio adapter currently maps `start` to its outbound-call API with `agent_id`, `agent_phone_number_id`, `to_number`, optional dynamic variables/user ID, and bounded conversation overrides. The SIP adapter uses the current SIP outbound API/phone-number configuration. These mappings must be regenerated or hand-verified against current OpenAPI before release.
 
 Store JARVIS call ID, provider call/conversation IDs, intended recipient entity, normalized/E.164 target, reason, policy/approval receipt, initiating event/workflow, timestamps, status, costs, transcript/audio references, and terminal outcome.

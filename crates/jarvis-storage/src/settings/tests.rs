@@ -280,6 +280,48 @@ fn a_batch_applies_a_pair_together_and_is_all_or_nothing() {
 }
 
 #[test]
+fn phone_numbers_are_saved_in_one_canonical_form_and_a_bad_setting_leaves_the_file_untouched() {
+    let (_scratch, paths) = Scratch::new();
+    set(
+        &paths,
+        "phone_owner_numbers",
+        &["+31 (6) 1234 5678, 0031 20 123 4567; +31612345678".to_owned()],
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let loaded = ConfigStore::from_paths(&paths)
+        .load()
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        loaded.config().daemon().phone_owner_numbers(),
+        ["+31612345678", "+31201234567"],
+        "written once each, in the form that is compared"
+    );
+
+    let snapshot = text(&paths);
+    for bad in ["0612345678", "+31 abc", "", "+31612345678, 112"] {
+        assert!(
+            set(&paths, "phone_owner_numbers", &[bad.to_owned()]).is_err(),
+            "{bad:?} must be refused"
+        );
+    }
+    assert!(set(&paths, "phone_agent_id", &words("agent 1")).is_err());
+    assert!(set(&paths, "phone_number_id", &words("../x")).is_err());
+    assert_eq!(text(&paths), snapshot, "a refused change writes nothing");
+
+    set(&paths, "phone_agent_id", &words("agent_abc-1")).unwrap_or_else(|error| panic!("{error}"));
+    set(&paths, "phone_approves", &words("on")).unwrap_or_else(|error| panic!("{error}"));
+    let loaded = ConfigStore::from_paths(&paths)
+        .load()
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        loaded.config().daemon().phone_agent_id(),
+        Some("agent_abc-1")
+    );
+    assert!(loaded.config().daemon().phone_approves());
+    assert!(!loaded.config().daemon().phone_opening_line());
+}
+
+#[test]
 fn every_setting_has_a_tab_and_says_what_unset_means() {
     let (_scratch, paths) = Scratch::new();
     let views = list(&paths).unwrap_or_else(|error| panic!("{error}"));
@@ -292,6 +334,7 @@ fn every_setting_has_a_tab_and_says_what_unset_means() {
                 "permissions",
                 "google",
                 "telegram",
+                "phone",
                 "advanced"
             ]
             .contains(&view.group),

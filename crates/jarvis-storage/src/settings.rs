@@ -22,6 +22,7 @@ enum Kind {
     Count,
     ToolIds,
     Flag,
+    Numbers,
 }
 
 impl Kind {
@@ -35,6 +36,7 @@ impl Kind {
             Self::Count => "count",
             Self::ToolIds => "tools",
             Self::Flag => "flag",
+            Self::Numbers => "numbers",
         }
     }
 }
@@ -276,6 +278,56 @@ const SETTINGS: &[Setting] = &[
         example: "eleven_flash_v2_5",
     },
     Setting {
+        table: "daemon",
+        field: "phone_agent_id",
+        kind: Kind::Text,
+        help: "the ElevenLabs agent that speaks on the phone (its id, from the agent's page at elevenlabs.io)",
+        group: "phone",
+        default: None,
+        unset_means: "No phone calls. The agent is the voice and the ears of a call; it uses JARVIS's tools through Connect apps, so what it may do is decided here.",
+        example: "agent_0123456789abcdef",
+    },
+    Setting {
+        table: "daemon",
+        field: "phone_number_id",
+        kind: Kind::Text,
+        help: "the ElevenLabs phone number calls are placed from (its id, shown below once the voice key is set)",
+        group: "phone",
+        default: None,
+        unset_means: "No phone calls. Import a Twilio number or a SIP trunk into ElevenLabs first.",
+        example: "phnum_0123456789abcdef",
+    },
+    Setting {
+        table: "daemon",
+        field: "phone_owner_numbers",
+        kind: Kind::Numbers,
+        help: "the numbers JARVIS may call, in international format, separated by commas",
+        group: "phone",
+        default: None,
+        unset_means: "No phone calls: JARVIS rings only a number you listed here, and a model can never name another.",
+        example: "+31612345678",
+    },
+    Setting {
+        table: "daemon",
+        field: "phone_approves",
+        kind: Kind::Flag,
+        help: "while a call JARVIS placed to you is open, count your yes on the phone as the approval of a low-risk tool: on or off",
+        group: "phone",
+        default: Some("off"),
+        unset_means: "Off: a tool the phone agent asks for still waits for your click in the console (or Telegram), even if the agent already asked you on the phone. On: only while a call JARVIS placed to your number is open, only for tools of risk 2 or less, and only if the agent is set to ask you first for each acting tool.",
+        example: "on",
+    },
+    Setting {
+        table: "daemon",
+        field: "phone_opening_line",
+        kind: Kind::Flag,
+        help: "let JARVIS write the agent's first sentence, which names JARVIS as an AI and says why it calls: on or off",
+        group: "phone",
+        default: Some("off"),
+        unset_means: "Off: the agent opens with its own first message and gets the reason as the variable jarvis_reason. On needs the agent's \"first message\" override switched on in its Security tab at ElevenLabs, or the provider refuses the call.",
+        example: "on",
+    },
+    Setting {
         table: "policy",
         field: "trust",
         kind: Kind::ToolIds,
@@ -456,6 +508,26 @@ fn convert(kind: Kind, values: &[String]) -> Result<Value, String> {
             .and_then(|count| i64::try_from(count).ok())
             .map(Value::Integer)
             .ok_or_else(|| "a count is a whole number from 0 to 9223372036854775807".to_owned()),
+        Kind::Numbers => {
+            let mut numbers: Vec<Value> = Vec::new();
+            for part in values
+                .iter()
+                .flat_map(|value| value.split([',', ';', '\n']))
+                .filter(|part| !part.trim().is_empty())
+            {
+                let canonical = jarvis_core::normalize_phone_number(part).map_err(|reason| {
+                    format!("{} is not a usable number: {reason}", part.trim())
+                })?;
+                let canonical = Value::String(canonical);
+                if !numbers.contains(&canonical) {
+                    numbers.push(canonical);
+                }
+            }
+            if numbers.is_empty() {
+                return Err("give at least one number, such as +31612345678".to_owned());
+            }
+            Ok(Value::Array(numbers))
+        }
         Kind::ToolIds => {
             if values.iter().any(|value| value.trim().is_empty()) {
                 return Err("tool ids must not be blank".to_owned());

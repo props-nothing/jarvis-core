@@ -209,6 +209,10 @@ typed_id!(
     TriggerId
 );
 typed_id!(
+    /// Identifies one phone call JARVIS placed.
+    PhoneCallId
+);
+typed_id!(
     /// Identifies one project: a long-running piece of work with a goal, standing guidance and a journal.
     ProjectId
 );

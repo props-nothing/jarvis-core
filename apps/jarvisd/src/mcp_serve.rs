@@ -137,6 +137,30 @@ impl RemoteMcpRunner {
             .find(|definition| definition.id().to_string() == name)
             .ok_or_else(|| refuse("that tool is not offered here"))?;
         let preview = format!("{} (asked by another app)", definition.title());
+        // The owner may already have said yes, out loud, on a call JARVIS placed to them (`ADR-0200`). That is the same owner answering
+        // the same question, so the call runs without a second one in the console; a tool above the phone's risk ceiling never gets here.
+        // A tool the owner set to "Always ask first" keeps its question in the console: tightening outranks everything else.
+        let pinned = self
+            .pipeline
+            .workspace_policy()
+            .approval_overrides()
+            .any(|(id, _)| id.to_string() == name);
+        if !pinned
+            && let Some(phone) = self.approvals.phone_approval()
+            && let Some(yes) = phone.approves(name, definition.risk().level()).await
+        {
+            tracing::info!(tool = name, call = %yes.call_id, "the owner approved a call from another app on the phone");
+            let approver = format!("{}:phone", self.owner_id);
+            return self
+                .run_approved(
+                    name,
+                    arguments,
+                    correlation_id,
+                    format!("phone-{}", yes.call_id),
+                    approver,
+                )
+                .await;
+        }
         let (id, answer) = self
             .approvals
             .ask(
@@ -166,6 +190,20 @@ impl RemoteMcpRunner {
             return Err(refuse("the owner said no, so the call was not run"));
         }
         tracing::info!(tool = name, approval = %id, "the owner approved a call from another app");
+        let answered_by = self.owner_id.clone();
+        self.run_approved(name, arguments, correlation_id, id, answered_by)
+            .await
+    }
+
+    /// Runs a call the owner said yes to, citing the answer on the receipt.
+    async fn run_approved(
+        &self,
+        name: &str,
+        arguments: Value,
+        correlation_id: CorrelationId,
+        approval_id: String,
+        approver_id: String,
+    ) -> Result<ToolCallResult, AdapterError> {
         let now = jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock);
         let actor = ToolActor::remote(
             self.workspace_id.clone(),
@@ -174,8 +212,8 @@ impl RemoteMcpRunner {
             &self.served,
         );
         let owner = OwnerApproval {
-            approval_id: id,
-            approver_id: self.owner_id.clone(),
+            approval_id,
+            approver_id,
             approved_at: now,
             expires_at: jarvis_core::UtcTimestamp::from_unix_nanos(
                 now.unix_nanos() + i128::try_from(self.wait.as_nanos()).unwrap_or(i128::MAX / 4),
@@ -326,6 +364,8 @@ pub(crate) fn servable_definitions(definitions: &[ToolDefinition]) -> Vec<ToolDe
                 && id != jarvis_tools::WRITE_TOOL
                 && id != jarvis_tools::EDIT_TOOL
                 && id != jarvis_tools::MOVE_TOOL
+                // The phone agent is an app on this endpoint; if it could place the next call, a loop could keep the owner's phone ringing.
+                && !id.starts_with("jarvis.voice.")
         })
         .cloned()
         .collect()
