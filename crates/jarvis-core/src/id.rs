@@ -213,6 +213,10 @@ typed_id!(
     PhoneCallId
 );
 typed_id!(
+    /// Identifies one coding task delegated to an external agent.
+    DelegatedTaskId
+);
+typed_id!(
     /// Identifies one project: a long-running piece of work with a goal, standing guidance and a journal.
     ProjectId
 );

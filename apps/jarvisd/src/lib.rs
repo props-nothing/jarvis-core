@@ -6,6 +6,7 @@ mod build_info;
 mod clock;
 mod code_agents;
 mod code_delegate;
+mod code_delegate_async;
 mod code_run;
 mod command_run;
 mod contacts_service;
@@ -619,6 +620,20 @@ fn warn_about_unused_environment() {
     }
 }
 
+async fn interrupt_prior_delegations(
+    database: &jarvis_storage::SqliteDatabase,
+    now: UtcTimestamp,
+) -> Result<(), DaemonError> {
+    let count = jarvis_storage::interrupt_delegated_tasks(database, now).await?;
+    if count > 0 {
+        tracing::warn!(
+            count,
+            "coding tasks from the prior daemon were marked interrupted"
+        );
+    }
+    Ok(())
+}
+
 /// Loads the saved configuration, writing it back in the current format when it was an older one.
 fn load_config_migrating(paths: &AppPaths) -> Result<jarvis_storage::LoadedConfig, DaemonError> {
     let config_store = ConfigStore::from_paths(paths);
@@ -678,6 +693,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     let database = Arc::new(SqliteDatabase::open_default(&paths).await?);
     let daemon_id = DaemonRunId::new();
     let started_at = UtcTimestamp::now(&SystemClock);
+    interrupt_prior_delegations(&database, started_at).await?;
     let instance = DaemonInstanceStart::new(
         daemon_id,
         std::process::id(),
@@ -1065,7 +1081,7 @@ async fn compose_tools(
     push_document_tool(config, &mut additional)?;
     push_knowledge_tool(config, &database, &mut additional).await?;
     push_code_tool(config, &mut additional)?;
-    push_command_tool(config, paths, &mut additional)?;
+    push_command_tool(config, paths, &database, &mut additional).await?;
     // Delegation needs a model to drive a sub-agent with, so it is composed only when the daemon has an executor.
     let agent = executor.map(|executor| {
         Arc::new(crate::delegate::AgentTool::new(
@@ -1374,9 +1390,10 @@ fn push_search_tool(
 /// # Errors
 ///
 /// Returns [`DaemonError::CommandRunTool`] when the tool's own contract is rejected.
-fn push_command_tool(
+async fn push_command_tool(
     config: &jarvis_storage::Config,
     paths: &AppPaths,
+    database: &Arc<jarvis_storage::SqliteDatabase>,
     additional: &mut Vec<(
         Vec<jarvis_tools::ToolDefinition>,
         Arc<dyn jarvis_tools::ToolExecutor>,
@@ -1394,12 +1411,19 @@ fn push_command_tool(
         paths.data().join("worktrees"),
         crate::code_delegate::AgentSource::Saved(paths.clone()),
     ) {
+        let identity = jarvis_storage::load_local_identity(database)
+            .await
+            .map_err(DaemonError::Database)?;
+        let delegate = Arc::new(delegate);
+        let background = crate::code_delegate_async::AsyncCodeDelegateTool::new(
+            Arc::clone(&delegate),
+            Arc::clone(database),
+            identity.workspace_id().to_owned(),
+        );
         additional.push((
-            vec![
-                crate::code_delegate::CodeDelegateTool::definition()
-                    .map_err(|source| DaemonError::CodeDelegateTool { source })?,
-            ],
-            Arc::new(delegate) as Arc<dyn jarvis_tools::ToolExecutor>,
+            crate::code_delegate_async::AsyncCodeDelegateTool::definitions()
+                .map_err(|source| DaemonError::CodeDelegateTool { source })?,
+            Arc::new(background) as Arc<dyn jarvis_tools::ToolExecutor>,
         ));
     }
     let paths = paths_of_roots;

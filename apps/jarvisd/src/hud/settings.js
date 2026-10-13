@@ -805,6 +805,27 @@ window.JarvisSettings = function (context) {
         holder.appendChild(out);
       }
       api("/code-agents").then(paint, function () { holder.appendChild(el("p", "help bad", "The coding agents could not be listed.")); });
+      var tasks = el("div");
+      card.appendChild(tasks);
+      function paintTasks(reply) {
+        tasks.replaceChildren();
+        var found = reply.tasks || [];
+        if (!found.length) return;
+        tasks.appendChild(el("h4", "", "Background coding tasks"));
+        found.slice(0, 10).forEach(function (task) {
+          var row = el("div", "set-row");
+          row.appendChild(el("span", "name", task.repository));
+          var middle = el("div");
+          middle.appendChild(el("span", "help", task.task));
+          if (task.branch) middle.appendChild(el("code", "", task.branch));
+          if (task.error) middle.appendChild(el("span", "help bad", task.error));
+          row.appendChild(middle);
+          row.appendChild(el("span", "badge " + (task.status === "completed" ? "on" : "off"), task.status.replace("_", " ")));
+          tasks.appendChild(row);
+        });
+        tasks.appendChild(el("p", "secthint", "Start a longer task by asking JARVIS to use the background coding agent. It returns a task id immediately; JARVIS notifies you when it ends. The branch and worktree are always kept for review."));
+      }
+      api("/code-agents/tasks").then(paintTasks, function () {});
       return card;
     }
     var POSTURES = [["default", "Default (the rules decide)"], ["ask", "Always ask first"], ["trusted", "Run without asking"], ["off", "Off"]];

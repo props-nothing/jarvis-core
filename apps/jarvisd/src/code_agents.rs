@@ -482,6 +482,7 @@ pub fn routes() -> axum::Router<GatewayState> {
         .route("/code-agents", axum::routing::get(status))
         .route("/code-agents/test", axum::routing::post(test))
         .route("/code-agents/sign-in", axum::routing::post(sign_in))
+        .route("/code-agents/tasks", axum::routing::get(tasks))
 }
 
 /// `GET /api/v1/code-agents`
@@ -542,6 +543,35 @@ pub async fn status(State(state): State<GatewayState>) -> Response {
         })),
     )
         .into_response()
+}
+
+/// `GET /api/v1/code-agents/tasks`: recent durable background tasks for the Coding agent card.
+pub async fn tasks(State(state): State<GatewayState>) -> Response {
+    let Ok(identity) = jarvis_storage::load_local_identity(&state.database_handle()).await else {
+        return refused("the local workspace could not be read");
+    };
+    let Ok(tasks) =
+        jarvis_storage::list_delegated_tasks(&state.database_handle(), identity.workspace_id(), 20)
+            .await
+    else {
+        return refused("coding tasks could not be read");
+    };
+    let shown: Vec<Value> = tasks
+        .into_iter()
+        .map(|task| {
+            json!({
+                "task_id": task.id,
+                "repository": task.repository,
+                "task": task.task,
+                "status": task.status,
+                "branch": task.branch,
+                "error": task.error,
+                "created_at": task.created_at.to_string(),
+                "finished_at": task.finished_at.map(|time| time.to_string()),
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(json!({ "tasks": shown }))).into_response()
 }
 
 /// One check or sign-in at a time: each starts a process, and the second would only fight the first for the agent's own files.

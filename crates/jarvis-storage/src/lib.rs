@@ -19,6 +19,7 @@ mod summary_repository;
 
 mod approval_repository;
 mod contact_repository;
+mod delegated_task_repository;
 mod digest_repository;
 mod phone_call_repository;
 mod project_repository;
@@ -50,6 +51,11 @@ pub use credential::{CREDENTIAL_FILE_NAME, CredentialStore, CredentialStoreError
 pub use database::{
     CURRENT_SCHEMA_VERSION, DEFAULT_DATABASE_FILENAME, DaemonInstanceStart, DaemonStopReason,
     DatabaseError, SqliteDatabase,
+};
+pub use delegated_task_repository::{
+    DelegatedTaskFinish, NewDelegatedTask, StoredDelegatedTask, create_delegated_task,
+    find_delegated_task, finish_delegated_task, interrupt_delegated_tasks, list_delegated_tasks,
+    mark_delegated_task_running,
 };
 pub use digest_repository::{
     FailedRun, ModelUsage, ProjectActivity, RunTotals, StoredDigest, digest_since,

@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Current application-owned SQLite schema version.
-pub const CURRENT_SCHEMA_VERSION: i64 = 25;
+pub const CURRENT_SCHEMA_VERSION: i64 = 26;
 /// Default filename for the canonical local database.
 pub const DEFAULT_DATABASE_FILENAME: &str = "jarvis.sqlite3";
 
@@ -464,6 +464,12 @@ pub enum DatabaseError {
         /// Stable field name without the offending value.
         field: &'static str,
     },
+    /// No delegated coding task has that id in this workspace.
+    #[error("no delegated coding task exists for the requested identifier")]
+    DelegatedTaskNotFound,
+    /// A stored delegated task contradicts its schema or lifecycle.
+    #[error("the stored delegated coding task is invalid")]
+    StoredDelegatedTaskInvalid,
     /// A knowledge index entry was refused (an empty or over-long piece of text).
     #[error("the knowledge index entry's {field} is not acceptable")]
     InvalidKnowledge {

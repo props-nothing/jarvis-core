@@ -108,15 +108,19 @@ pub enum CodeDelegateToolError {
 
 /// The arguments of one call, validated.
 #[derive(Debug)]
-struct Arguments {
-    repository: String,
-    task: String,
-    allow_commands: bool,
-    minutes: u64,
+pub(crate) struct Arguments {
+    pub(crate) repository: String,
+    pub(crate) task: String,
+    pub(crate) allow_commands: bool,
+    pub(crate) minutes: u64,
 }
 
 impl Arguments {
     fn parse(value: &Value) -> Result<Self, String> {
+        Self::parse_with_max(value, MAX_MINUTES)
+    }
+
+    pub(crate) fn parse_with_max(value: &Value, max_minutes: u64) -> Result<Self, String> {
         let text = |name: &str| value.get(name).and_then(Value::as_str).map(str::trim);
         let repository = text("repository")
             .filter(|text| !text.is_empty())
@@ -134,8 +138,8 @@ impl Arguments {
             None | Some(Value::Null) => DEFAULT_MINUTES,
             Some(value) => value
                 .as_u64()
-                .filter(|minutes| (1..=MAX_MINUTES).contains(minutes))
-                .ok_or_else(|| format!("minutes must be 1 to {MAX_MINUTES}"))?,
+                .filter(|minutes| (1..=max_minutes).contains(minutes))
+                .ok_or_else(|| format!("minutes must be 1 to {max_minutes}"))?,
         };
         Ok(Self {
             repository,
@@ -346,7 +350,16 @@ impl CodeDelegateTool {
     }
 
     /// Runs one delegated task and describes what happened.
+    #[cfg(test)]
     async fn run(&self, arguments: &Arguments) -> Result<Value, AdapterError> {
+        self.run_with_cancel(arguments, &Notify::new()).await
+    }
+
+    pub(crate) async fn run_with_cancel(
+        &self,
+        arguments: &Arguments,
+        cancel: &Notify,
+    ) -> Result<Value, AdapterError> {
         let directory = self
             .folders
             .resolve_directory(&arguments.repository)
@@ -403,7 +416,7 @@ impl CodeDelegateTool {
             };
         let policy = WorktreePolicy::new(&tree.path, arguments.allow_commands);
         let report = connection
-            .prompt(&framed_task(&tree, arguments), &policy, &Notify::new())
+            .prompt(&framed_task(&tree, arguments), &policy, cancel)
             .await;
         connection.close().await;
         kill_tree(pid);
@@ -617,7 +630,7 @@ impl ToolExecutor for CodeDelegateTool {
             return Err(refused("the call was already past its deadline"));
         }
         let arguments = Arguments::parse(request.arguments()).map_err(|reason| refused(&reason))?;
-        let body = self.run(&arguments).await?;
+        let body = self.run_with_cancel(&arguments, &Notify::new()).await?;
         let evidence = ProviderEvidence::new("code:delegate").ok();
         let record = evidence
             .as_ref()
