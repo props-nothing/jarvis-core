@@ -78,6 +78,6 @@ Approval does not remove validation, scope, idempotency, or audit requirements.
 
 ## Prototype Warning
 
-The [example](example/readme.md) stores configuration and API keys in a JSON file and executes many actions inside one Python process. It is a reference prototype, not a secure deployment baseline. The root [.gitignore](.gitignore) excludes its known local secret and memory paths, but ignored files that were previously committed would still require history cleanup and credential rotation.
+The [historical Python prototype](docs/migration/python-prototype.md) stored configuration and API keys in JSON and executed many actions inside one process. It is no longer in the current tree and was never a secure deployment baseline. Removing files or ignoring paths does not remove previously committed secrets from history; exposed credentials still require rotation and appropriate history cleanup.
 
 See [the detailed threat model](docs/architecture/security.md) for assets, boundaries, abuse cases, and required controls.

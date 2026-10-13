@@ -20,7 +20,7 @@ Docker is optional for containerized code execution; Tesseract is optional for O
 
 ## Current State
 
-The repository contains the working Rust assistant, its architecture and acceptance evidence, a separate product website, and a Python behavior reference. The [roadmap](../../ROADMAP.md) and [backlog](../../TODO.md) are the current delivery ledger; the milestones below explain the foundation, not the ceiling of today's capabilities.
+The repository contains the working Rust assistant, its architecture and acceptance evidence, a separate product website, and the historical Python migration record. The prototype source is no longer in the current tree. The [roadmap](../../ROADMAP.md) and [backlog](../../TODO.md) are the current delivery ledger; the milestones below explain the foundation, not the ceiling of today's capabilities.
 
 Phase 1 (`P1-001` through `P1-012`) has delivered a runnable local foundation:
 
@@ -374,7 +374,7 @@ The first implementation slice should require only:
 
 The committed [rust-toolchain.toml](../../rust-toolchain.toml) is the exact Rust version authority. Rustup installs or selects that toolchain automatically when commands run from this repository.
 
-Node.js is introduced only when the web/Tauri UI begins. Python is introduced only for isolated Python runtime workers or the reference prototype. Neither is a core runtime prerequisite.
+Node.js is optional for the built-in MCP browser/documentation abilities and some ACP adapters; the separate product website also uses it. Python may be needed by a third-party tool or runtime, but neither Node.js nor Python is a core daemon runtime prerequisite.
 
 ## Foundation: `P1-001`
 
@@ -528,7 +528,7 @@ printing an empty list — "nothing is configured" and "this daemon cannot serve
 
 ## Prototype
 
-The [example](../../example/readme.md) can be run separately to study behavior, subject to its dependencies, terms, and local credential handling. Do not run it automatically during production setup or tests. Do not read or commit its `config/api_keys.json` or `memory/long_term.json`.
+The prototype source is no longer in this checkout. Its historical behavior remains documented in [the migration inventory](../migration/python-prototype.md). Do not restore or automatically run historical prototype code as part of production setup or tests, and never recover personal keys or memories as fixtures.
 
 Use [the migration inventory](../migration/python-prototype.md) to translate behaviors into clean-room tests and Rust ownership.
 

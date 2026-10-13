@@ -127,15 +127,14 @@ jarvis-core/
 |-- apps/                  Daemon and CLI composition roots
 |-- crates/                Domain, application, protocol, and storage crates
 |-- frontend/              Product website, separate from the daemon console
-|-- docs/                  Canonical specifications and ADRs
-`-- example/               Licensed Python prototype used as a behavior reference
+`-- docs/                  Canonical specifications, migration records, and ADRs
 ```
 
 The target source tree is specified in [repository-layout.md](docs/architecture/repository-layout.md). It is created incrementally in the order defined by [TODO.md](TODO.md); absent crates and directories are not implied implementations.
 
 ## Prototype Notice
 
-The example identifies itself as CC BY-NC 4.0 and contains patterns that are unsuitable for the production trust boundary, including plaintext credential storage and in-process tool execution. Do not silently move its code into the new platform. Preserve useful behavior through documented acceptance tests and clean-room implementations unless license compatibility is explicitly established.
+The former Python prototype is no longer part of the current tree. Its [migration record](docs/migration/python-prototype.md) retains the behavior and license boundaries: it identified itself as CC BY-NC 4.0 and used patterns unsuitable for the production trust boundary, including plaintext credential storage and in-process tool execution. Historical source is not permission to reuse it. Preserve useful behavior through documented acceptance tests and clean-room implementations unless license compatibility is explicitly established.
 
 ## License Status
 
