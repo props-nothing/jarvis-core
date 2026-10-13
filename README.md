@@ -1,41 +1,92 @@
-# JARVIS
+<h1 align="center">JARVIS</h1>
+<p align="center"><img src="docs/assets/jarvis-banner.svg" alt="JARVIS: your own AI operating system. Models suggest. You decide. Rust enforces." width="1200"></p>
+<p align="center"><strong>Your own AI operating system.</strong><br>Persistent memory. Real tools. A voice. You remain in control.</p>
 
-JARVIS is a planned cross-platform personal AI operating system: a persistent, installable service that can reason, remember, use tools, run durable workflows, react to events, and communicate through text, desktop, web, API, and voice.
+<p align="center">
+    <a href="https://github.com/props-nothing/jarvis-core/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/props-nothing/jarvis-core/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
+    <a href="docs/architecture/overview.md"><img src="https://img.shields.io/badge/core-Rust-dea584?style=flat-square" alt="Rust core"></a>
+    <a href="docs/user/quick-start.md"><img src="https://img.shields.io/badge/status-working_assistant-238636?style=flat-square" alt="Working assistant; in development"></a>
+    <a href="docs/user/platforms.md"><img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-0078d4?style=flat-square" alt="Platform notes for Windows, macOS and Linux"></a>
+</p>
 
-This repository is in the **working-assistant stage**: `jarvisd` and `jarvis` run end to end against a local or hosted OpenAI-compatible model (Ollama on this computer or in the cloud, OpenAI, Gemini, Anthropic's compatible endpoint, or any other), with an optional fallback model at a second provider. `jarvis init` and `jarvis start` set it up and open the browser console at `http://127.0.0.1:8765/` (`jarvis hud`), where you talk to it by text or voice, watch what it is doing live (the sources it reads, the tools it calls), answer its questions with a yes or no, and change every setting. What it can do today, under a policy and approvals that survive a restart:
+<p align="center">
+    <a href="#quick-start">Quick start</a> &middot;
+    <a href="docs/README.md">Documentation</a> &middot;
+    <a href="ROADMAP.md">Roadmap</a> &middot;
+    <a href="CONTRIBUTING.md">Contributing</a> &middot;
+    <a href="SECURITY.md">Security</a>
+</p>
 
-- **Files and documents:** read, search, write, edit and move files in folders you grant; read PDF, Word, spreadsheet and slide files, and photos or scanned PDFs when `tesseract` is installed.
-- **The web:** search (with a key) and fetch pages and PDFs, in parts, with sources shown.
-- **Gmail and Google Calendar** after you sign in once from Settings: search and read mail, send mail with attachments and replies, save drafts, save attachments, read and create events (anything that reaches another person asks you first).
-- **Projects:** a goal, standing guidance and a journal per project, with daily caps on scheduled runs and on tokens; a contacts list that stops it writing to someone you marked do-not-contact; a daily digest and an optional push to your phone.
-- **Work that continues without you:** scheduled tasks, sub-agents, resume after a restart, code and shell commands (the shell tool is held for you by default), memory it proposes and you confirm.
-- **Oversight:** approvals, `jarvis cancel` as a kill switch, an audit trail, and a token count for every model call; `jarvis eval` runs a suite of prompts against it and compares with the last run, so a change to a prompt, a tool or a model can be measured.
+JARVIS is a **local-first personal AI assistant with a durable Rust core**. Talk to it, give it a project, connect your tools, and watch it work. Your conversations, memory, approvals and task state stay with JARVIS, not with a replaceable model or agent framework.
 
-Telephony, messaging apps, the desktop client, installers and coding-agent runtimes are not built. The direction ([ADR-0167](docs/adr/0167-capability-and-reach-come-from-open-protocols-before-bespoke-code.md)) is open protocols before bespoke code: a browser and developer-documentation lookup built in and on by default (working now, [docs/user/abilities.md](docs/user/abilities.md)), other programs using JARVIS with one switch and one key ([docs/user/connect-apps.md](docs/user/connect-apps.md)), more through MCP, Telegram for reach, coding agents over ACP, and skills the model proposes and you approve. Google's push and watch framework in `jarvis-connectors` is tested but not wired into the daemon and is planned for retirement (`TODO.md`, `P5-005b`). [ROADMAP.md](ROADMAP.md) has the current direction and the next slices; [TODO.md](TODO.md) is the ledger. A `--root <dir>` portable mode keeps every managed file inside one explicit directory. The existing [Python example](example/readme.md) is a behavior reference and prototype, not the production core.
-## Quick start
+Use a local or hosted OpenAI-compatible model, choose a fallback, and reach the same assistant from the browser console, terminal, Telegram or an authenticated external app. Cloud models and connected services receive the data needed for the operations you enable; local-first does not mean every integration is offline.
 
-Build it (`cargo build --release`), and run `jarvis` (one program; the daemon is the same file, `jarvis daemon`). The first run asks a few questions,
-starts the assistant and opens its console in your browser. See [docs/user/quick-start.md](docs/user/quick-start.md), [docs/user/platforms.md](docs/user/platforms.md) (Linux server, macOS, Windows: what is verified) and [docs/user/settings.md](docs/user/settings.md) (every setting, its default, and why a few are off until you turn them on); the
-target onboarding experience (including the console's Settings screen, `jarvis config` and `jarvis keys`) and what is still missing from it is [docs/product/onboarding.md](docs/product/onboarding.md).
+> **Models suggest. You decide. Rust enforces.**
+> Tool effects pass through deterministic policy, durable approvals and an audit trail. A web page cannot grant permissions, and a model cannot approve its own request.
 
-## Product Goal
+## What You Can Do
 
-The finished system should let a person install JARVIS on Windows, macOS, or Linux and then use the same trusted core from a CLI, desktop app, browser, phone, or another agent. JARVIS may use OpenClaw, OpenAI Agents, LangGraph, local models, ElevenLabs, Gmail, Outlook, Home Assistant, and future systems, but none of them owns JARVIS.
+| Capability | What JARVIS does today |
+| --- | --- |
+| **Talk and watch** | A browser console with a reactive face, text and voice, live activity, sources, approvals and a stop control. Browser speech recognition; optional ElevenLabs synthesis. |
+| **Work with your files** | Read, search, write, edit and move within granted folders. Read PDF, Word, spreadsheets and slides; create documents; optional Tesseract OCR. |
+| **Use the web** | Fetch pages and PDFs, use a built-in browser, look up developer documentation, and search with a configured search key. |
+| **Connect your day** | Google sign-in for Gmail and Calendar: mail, drafts, replies, attachments and events, with policy-controlled effects. |
+| **Keep a project moving** | Project goals, guidance, journals, recurring schedules, mail/file/webhook triggers, quiet hours, digests and run/token budgets. |
+| **Remember deliberately** | Proposed memories and procedures that the owner approves, with inspectable state rather than a provider-owned chat history. |
+| **Extend its reach** | Managed MCP servers and an opt-in app endpoint; Telegram for phone access. Additional services through existing protocols first. |
+| **Stay accountable** | Durable approvals, cancellation, audit records, model usage and evaluation suites. Sub-agents and background work use the same authority boundary. |
+
+See [the user guide](docs/user/quick-start.md), [abilities](docs/user/abilities.md) and [settings](docs/user/settings.md) for setup, defaults and limits.
+
+## Quick Start
+
+**Source setup today:** install the pinned Rust toolchain and the native build prerequisites in the [development guide](docs/development/getting-started.md). Have a local model server such as [Ollama](https://ollama.com), or a hosted OpenAI-compatible provider ready.
+
+```text
+git clone https://github.com/props-nothing/jarvis-core.git
+cd jarvis-core
+cargo build --release -p jarvis-cli
+```
+
+Windows:
+
+```powershell
+.\target\release\jarvis.exe
+```
+
+macOS / Linux:
+
+```bash
+./target/release/jarvis
+```
+
+The first run asks for a model and any folders you want to grant, starts the assistant, and opens its signed-in browser console. Later runs reopen it. Use `jarvis install` to install the built program for your user; `jarvis hud` reopens the console.
+
+> **Release status:** CI produces platform artifacts, but public binary distribution is blocked until a license is chosen. The separate product website offers source-building bootstrap scripts, not signed prebuilt releases; they require a development toolchain. [Platform notes](docs/user/platforms.md) distinguish tested behavior from targets.
+
+## Built, Experimental, Next
+
+**Working assistant:** browser and CLI, Google tools, Telegram, MCP management, approved skills, time-zone schedules and triggers, project journals, model routing and spend guards. The [backlog](TODO.md) records the acceptance evidence and remaining live checks.
+
+**Limited first slices:** outbound calls to listed owner numbers through an ElevenLabs agent have been run live by the owner. ACP coding-agent delegation is implemented in isolated git worktrees, but only the real Codex adapter handshake is verified; a full real-agent task is still owed. A worktree is **not a sandbox**. See [coding agents](docs/user/code-agents.md) and [the roadmap](ROADMAP.md).
+
+**Not shipped:** a Tauri desktop client, browser-independent local voice, general telephony, signed public installers and the complete server/multi-device profile. The multi-step durable workflow engine is parked until a named requirement needs more than ordinary runs and schedules.
+
+## How It Fits Together
+
+One native program, one trusted core, replaceable models and tools. The CLI runs the daemon as `jarvis daemon`; the daemon owns durable state and authorization. The diagram below shows the current local-first path, not a claim that every planned adapter has shipped.
 
 ```mermaid
 flowchart TB
-    UI[CLI / Desktop / Web / Mobile / Voice / API] --> D[jarvisd]
-    D --> C[JARVIS application and domain core]
-    C --> R[Runtime adapters]
-    C --> T[Tool and connector gateway]
-    C --> M[Memory and context]
-    C --> W[Events and durable workflows]
-    R --> RX[Native / OpenClaw / OpenAI Agents / LangGraph / ACP]
-    T --> TX[MCP / Gmail / Microsoft Graph / GitHub / Browser / Home]
-    M --> DB[SQLite local / PostgreSQL + pgvector server]
-    W --> DB
-    V[ElevenLabs or another voice provider] --> D
-    D --> V
+    UI[Browser console / CLI / Telegram / connected apps] --> D[jarvis daemon]
+    D --> P[Deterministic policy and owner approvals]
+    P --> R[Native runs and supervised delegation]
+    P --> T[Tools / MCP / Google / browser]
+    R --> L[Replaceable local or hosted models]
+    D --> M[Memory / projects / schedules / audit]
+    M --> DB[(Local SQLite and profile files)]
+    V[Browser voice / optional ElevenLabs] <--> D
 ```
 
 ## Non-Negotiable Boundaries
@@ -49,31 +100,23 @@ flowchart TB
 - SQLite is the zero-dependency local default; PostgreSQL plus pgvector is the server and multi-device backend.
 - External API work starts with current official documentation or an official `llms.txt` index and leaves a dated research record.
 
-## Read First
+## Find Your Way
 
-1. [Product requirements](docs/product/requirements.md)
-2. [Architecture overview](docs/architecture/overview.md)
-3. [Repository layout](docs/architecture/repository-layout.md)
-4. [Roadmap](ROADMAP.md)
-5. [Implementation backlog](TODO.md)
-6. [Engineering instructions](AGENTS.md)
-7. [External integration research workflow](docs/development/external-research.md)
-8. [Definition of done](docs/development/definition-of-done.md)
-
-The [architecture index](ARCHITECTURE.md) links the subsystem specifications and accepted Architecture Decision Records (ADRs).
-
-## Intended Product Surfaces
-
-- `jarvisd`: long-running daemon and sole owner of durable application state.
-- `jarvis`: CLI and administration client.
-- `jarvis-desktop`: optional Tauri desktop client.
-- Versioned HTTP, WebSocket, SSE, local IPC, MCP, and OpenAI-compatible endpoints.
-- Provider-neutral runtime, model, tool, connector, storage, workflow, and voice ports.
+| Goal | Start here |
+| --- | --- |
+| Start your assistant | [Quick start](docs/user/quick-start.md) / [platforms](docs/user/platforms.md) |
+| Choose models, voice and permissions | [Settings](docs/user/settings.md) |
+| Add tools or connect another app | [Abilities](docs/user/abilities.md) / [connect apps](docs/user/connect-apps.md) |
+| Keep long-running work organized | [Projects](docs/user/projects.md) / [evaluations](docs/user/evals.md) |
+| Understand the trust boundary | [Architecture](ARCHITECTURE.md) / [security](docs/architecture/security.md) |
+| Build or contribute | [Contributing](CONTRIBUTING.md) / [engineering rules](AGENTS.md) |
+| See what is next | [Roadmap](ROADMAP.md) / [acceptance backlog](TODO.md) |
+| Browse the complete reference | [Documentation](docs/README.md) / [ADRs](docs/adr/README.md) |
 
 ## Current Workspace
 
 ```text
-jarvis-improved/
+jarvis-core/
 |-- Cargo.toml            Rust workspace and lint policy
 |-- rust-toolchain.toml   Pinned compiler, Clippy, and rustfmt
 |-- AGENTS.md              Repository-wide AI engineering rules
@@ -83,6 +126,7 @@ jarvis-improved/
 |-- TODO.md                Executable implementation backlog
 |-- apps/                  Daemon and CLI composition roots
 |-- crates/                Domain, application, protocol, and storage crates
+|-- frontend/              Product website, separate from the daemon console
 |-- docs/                  Canonical specifications and ADRs
 `-- example/               Licensed Python prototype used as a behavior reference
 ```
@@ -95,4 +139,4 @@ The example identifies itself as CC BY-NC 4.0 and contains patterns that are uns
 
 ## License Status
 
-No license has yet been selected for the new JARVIS platform. Distribution outside applicable default copyright rules is blocked until the owner chooses one. Third-party source and documentation research is tracked in [THIRD_PARTY.md](THIRD_PARTY.md).
+No license has yet been selected for the new JARVIS platform. A public repository is not an open-source license: distribution outside applicable default copyright rules is blocked until the owner chooses one. Third-party source and documentation research is tracked in [THIRD_PARTY.md](THIRD_PARTY.md).

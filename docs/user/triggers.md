@@ -1,5 +1,9 @@
 # Triggers: something happens, a task starts
 
+**New mail. A changed file. A local event. Ordinary runs, under ordinary policy.**
+
+[Documentation](../README.md) / [Projects](projects.md) / [Google](google.md) / [Settings](settings.md)
+
 A trigger waits for something and starts a task for each new thing, while you are away. There are three kinds.
 
 ```text

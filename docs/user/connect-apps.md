@@ -1,5 +1,9 @@
 # Connect apps
 
+**Other programs can use JARVIS. They cannot become its owner.**
+
+[Documentation](../README.md) / [Abilities](abilities.md) / [MCP servers](mcp.md) / [Security](../../SECURITY.md)
+
 Let another program use JARVIS: Claude Code, Cursor, VS Code, or your own script.
 
 This is different from [Abilities](abilities.md) (what JARVIS can use) and from Permissions (which of JARVIS's tools ask first). Connect apps is the other direction: *other programs using JARVIS*.

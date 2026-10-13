@@ -1,5 +1,9 @@
 # Projects
 
+**Give long-running work a goal, a brief and a memory of its own progress.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Triggers](triggers.md) / [Evaluations](evals.md)
+
 A **project** is long-running work you want JARVIS to keep doing: a goal, your standing guidance, where its files live, and a journal of what has happened. Every run that belongs to a
 project is told all of that, so you write it once instead of pasting it into each request, and tomorrow's run knows what today's run decided.
 

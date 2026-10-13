@@ -1,8 +1,11 @@
-# Signing in with Google
+# Google: Mail And Calendar
+
+**Read your day. Draft the next step. Approve what leaves your account.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Settings](settings.md) / [Triggers](triggers.md)
 
 JARVIS can read your Gmail and your Google Calendar once you sign in, so you can ask "what did the landlord email me about?" or
-"what is on my calendar tomorrow?". It is **read-only**: the sign-in asks Google for the two `readonly` permissions and nothing that sends,
-changes or deletes. You sign in from the console: **Settings, Google**.
+"what is on my calendar tomorrow?". It is **read-only by default**: without Google actions enabled, sign-in asks for the two `readonly` permissions and nothing that sends, changes or deletes. Optional actions add drafts, sends and calendar changes with extra scopes and policy-controlled effects, as described below. You sign in from the console: **Settings, Google**.
 
 ## One-time setup (about five minutes)
 
@@ -32,7 +35,7 @@ On the command line: `jarvis config set google_client_id ...` and `jarvis keys s
 
 **It asks first.** Mail and calendar are your most private data, and a message is written by strangers and can contain text aimed at the assistant,
 so these tools are held for your yes (one click on the card, or **Always allow** if you do not want to be asked). Everything they return is marked to
-the model as untrusted data to read, never to obey. Nothing here can send an email or accept an invitation. (Saving an attachment writes a file on this machine, so it asks too.)
+the model as untrusted data to read, never to obey. The read-only tools above cannot send an email or accept an invitation. (Saving an attachment writes a file on this machine, so it asks too.)
 
 **Where your data goes.** Mail and calendar text you ask about is given to the model you chose. With a local model that stays on your machine; with a
 cloud model (Ollama cloud, for example) it goes to that service as part of the conversation. Choose accordingly.
@@ -40,7 +43,7 @@ cloud model (Ollama cloud, for example) it goes to that service as part of the c
 ## Letting JARVIS send mail and add events (optional, off by default)
 
 Reading is the default. If you also want "reply to Anna that I will be late" or "put the dentist on my calendar", turn on **Settings, Google, google_actions** (or
-`jarvis config set google_actions on`), restart once, and **sign in again** so Google asks for the two extra permissions (send email, create calendar events). The two tools then exist:
+`jarvis config set google_actions on`), restart once, and **sign in again** so Google asks for the extra permissions for sending mail, managing drafts and changing calendar events. These tools then exist:
 
 | Tool | What it does |
 | --- | --- |

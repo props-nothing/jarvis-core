@@ -1,5 +1,11 @@
 # Architecture Overview
 
+**Rust owns authority. Models and adapters remain replaceable.**
+
+[Documentation](../README.md) / [Architecture map](../../ARCHITECTURE.md) / [Decisions](../adr/README.md) / [Delivery status](../../ROADMAP.md)
+
+> **Target architecture:** this document includes future deployment profiles, clients and infrastructure. The current product uses the local Rust daemon, SQLite, browser/CLI/Telegram clients and policy-controlled tools. Later accepted ADRs take precedence; the complete server profile, Tauri client and multi-step workflow engine are not shipped. See the [current capability summary](../../README.md#built-experimental-next).
+
 ## Decision Summary
 
 JARVIS is a native daemon with multiple clients. Rust owns durable orchestration and authority. External models, agent runtimes, voice systems, tools, and databases connect through explicit ports.
@@ -39,8 +45,8 @@ flowchart TB
 
     subgraph Isolated[Replaceable or isolated adapters]
         Models[Model providers]
-        Runtimes[OpenClaw / OpenAI Agents / LangGraph / ACP]
-        Connectors[Gmail / Microsoft Graph / GitHub / Home Assistant]
+        Runtimes[ACP coding agents / optional external runtimes]
+        Connectors[Google / MCP services / optional native connectors]
         MCP[MCP servers]
         Sandbox[Sandbox workers]
     end

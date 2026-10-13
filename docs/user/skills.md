@@ -1,5 +1,9 @@
 # Skills: how JARVIS learns your routines
 
+**A procedure it can learn. Never a permission it can grant itself.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Projects](projects.md) / [Permissions](settings.md)
+
 A skill is a procedure: when to use it, and the tools to call in order. After a task that took many steps and that you are likely to ask for again, JARVIS can write one down. It is only a **proposal**. It changes nothing until you approve it.
 
 ## What you see

@@ -1,4 +1,8 @@
-# Evaluating the assistant
+# Evaluate Your Assistant
+
+**Measure the answer, the tool choice and the cost. Don't guess whether it improved.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Projects](projects.md) / [Testing strategy](../development/testing.md)
 
 `jarvis eval` answers "did that change make JARVIS better or worse at my work?". It runs a file of prompts against your running JARVIS, checks each answer against what you said should be true, and compares with the last time you ran the same file.
 

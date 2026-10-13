@@ -1,4 +1,8 @@
-# Tool programs (MCP), for developers
+# MCP: Extend Your Assistant
+
+**Bring an existing tool server. Keep JARVIS in charge of its effects.**
+
+[Documentation](../README.md) / [Built-in abilities](abilities.md) / [Connect apps](connect-apps.md) / [Settings](settings.md)
 
 Most people never need this page: the browser and documentation lookup come built in and appear under **Settings, Permissions** like any other tool ([abilities.md](abilities.md)).
 

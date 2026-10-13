@@ -1,5 +1,9 @@
 # JARVIS Implementation Backlog
 
+**The evidence ledger: shipped slices, open checks and deliberate deferrals.**
+
+[Home](README.md) / [Roadmap summary](ROADMAP.md#at-a-glance) / [Documentation](docs/README.md) / [Definition of done](docs/development/definition-of-done.md)
+
 This is the execution ledger. Work top to bottom unless an ADR records why ordering changed. A box may be checked only when its acceptance evidence exists. Update this file in the same change as the implementation.
 
 ## Next Slices (reviewed 2026-10-10, revised after the `P5` to `P9` review, `ADR-0167`)

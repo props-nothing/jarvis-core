@@ -1,5 +1,9 @@
 # Coding agents: hand JARVIS a coding task
 
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Settings](settings.md) / [Security](../../SECURITY.md)
+
+> **Experimental first slice.** Scripted-agent tests and the real Codex adapter handshake are verified; a full task against a real agent and the console sign-in flow on a real account remain unverified. Worktrees separate checkouts, not operating-system permissions. JARVIS does not automatically merge or push the result.
+
 For a change bigger than a few edits, JARVIS can hand the task to a coding agent of your own (ChatGPT/Codex, Claude, GitHub Copilot, Gemini, OpenCode, goose, Cursor, Qwen Code, Kimi, Cline, or any other that speaks the Agent Client Protocol) instead of writing it all itself. Ask in plain words: "have the coding agent add a dark mode toggle to the `webshop` repository". JARVIS asks you first, then waits for the agent and brings back a summary, the diff and the name of a branch.
 
 **Nothing is merged, pushed or deleted.** The agent works in a *new worktree on a new branch* (`jarvis/<task>-<id>`), a separate checkout of your repository under JARVIS's own folder, so your own checkout is not where it works. You read the branch and decide.

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
+  <title id="title">JARVIS: your own AI operating system</title>
+  <desc id="description">JARVIS wordmark with a geometric core and three connected capabilities: reason, remember, act. Models suggest. You decide. Rust enforces.</desc>
+  <rect width="1200" height="360" fill="#101413"/>
+  <path d="M0 300H1200M900 0V360M940 0V360M980 0V360M1020 0V360M1060 0V360M1100 0V360M1140 0V360M1180 0V360M900 40H1200M900 80H1200M900 120H1200M900 160H1200M900 200H1200M900 240H1200" stroke="#25352e" stroke-width="1"/>
+  <rect x="52" y="45" width="7" height="24" fill="#76e5b2"/>
+  <text x="75" y="63" fill="#76e5b2" font-family="Consolas, monospace" font-size="16" letter-spacing="2">PERSONAL AI / DURABLE RUST CORE</text>
+  <text x="48" y="169" fill="#f5f8f6" font-family="Segoe UI, sans-serif" font-size="100" font-weight="800">JARVIS</text>
+  <text x="54" y="211" fill="#d9e4df" font-family="Segoe UI, sans-serif" font-size="28">Your own AI operating system.</text>
+  <text x="54" y="258" fill="#a7b9af" font-family="Segoe UI, sans-serif" font-size="18">Models suggest. You decide. Rust enforces.</text>
+  <g fill="none" stroke="#76e5b2" stroke-width="3">
+    <path d="M1020 49L1110 101V205L1020 257L930 205V101Z"/>
+    <path d="M1020 82L1081 117V189L1020 224L959 189V117Z" stroke="#e8be60"/>
+    <path d="M1020 116L1051 134V170L1020 188L989 170V134Z"/>
+    <path d="M930 153H877M1110 153H1165M1020 49V18M1020 257V286"/>
+  </g>
+  <circle cx="1020" cy="153" r="8" fill="#f5f8f6"/>
+  <g font-family="Consolas, monospace" font-size="16">
+    <text x="54" y="336" fill="#76e5b2">01 / REASON</text>
+    <text x="270" y="336" fill="#e8be60">02 / REMEMBER</text>
+    <text x="510" y="336" fill="#f49a8d">03 / ACT</text>
+    <text x="933" y="336" fill="#a7b9af">OWNER CONTROLLED</text>
+  </g>
+</svg>

@@ -1,6 +1,25 @@
 # JARVIS Roadmap
 
+**A capable assistant first. Infrastructure when the evidence demands it.**
+
+[Home](README.md) / [Documentation](docs/README.md) / [Acceptance backlog](TODO.md) / [Architecture](ARCHITECTURE.md)
+
 This roadmap is ordered by risk. Each phase must leave a runnable vertical slice. A later phase may start only when the previous phase's exit gate passes or an ADR explains the exception.
+
+## At A Glance
+
+Documentation snapshot: **2026-10-13**. This summarizes recorded delivery evidence, not a fresh run of every provider or platform gate.
+
+| Track | Current position | Next proof |
+| --- | --- | --- |
+| Personal assistant | Browser/CLI, memory, files, documents, Google, projects and oversight are delivered slices. | Close the remaining owner-account checks recorded in the backlog. |
+| Reach and initiative | Telegram, approved skills, schedules, triggers and model routing are built. | Measure quality and cost; finish setup polish and remote/MCP credential gaps. |
+| Coding delegation | ACP tools, worktree delegation and console configuration exist; real Codex handshake verified. | Run a complete task against a real agent and verify sign-in, review and cancellation. |
+| Voice and calls | Browser voice and optional synthesis; owner outbound calls reported working live. | Browser-independent local voice and broader call-path evidence. |
+| Distribution | User-level install/service paths and CI archives exist. | Owner license choice, public signed distribution and clean-machine evidence. |
+| Scale | Local SQLite is the default. | Server/multi-device work only with a named requirement and proven ownership semantics. |
+
+The phase descriptions below are gates and dependency order, **not a list of completed features**. [TODO.md](TODO.md) records the individual slices and unresolved checks.
 
 ## Current Direction (reviewed 2026-10-10)
 
@@ -30,7 +49,7 @@ Measured against the four hallmarks of a real J.A.R.V.I.S.:
 
 0. **Check what is only tested against stand-ins** with the owner's own accounts (OCR, the second provider, the push, a reply from another sender).
 1. ~~**MCP made real and manageable** (`P11-001`)~~ **built and run live on two real servers** (`ADR-0168`): the door to every tool that already exists as an MCP server. A server that needs a key, and a remote one, are open (`P11-001b`).
-2. **Tool discovery** (`P11-002`): hundreds of tools without a token tax; nothing is removed.
+2. ~~**Tool discovery** (`P11-002`)~~ **delivered** (`ADR-0176`): tools are selected for the request without making any unreachable. Meaning-based ranking and broader model comparisons remain open.
 2b. ~~**Connect apps**~~ **built** (`ADR-0170`): one switch and one key let Claude Code, Cursor, VS Code or a script use JARVIS, including starting a run with `jarvis.agent.delegate`; approvals stay with the owner.
 3. ~~**A browser**~~ **built as a one-click ability** (`P11-001c`, `ADR-0169`): JavaScript pages and acting on the web; a measured hostile-page eval is still owed (`P11-003`).
 4. ~~**Skills the model proposes and the owner approves**~~ delivered (`P11-004`, `ADR-0183`): it learns the owner's procedures.

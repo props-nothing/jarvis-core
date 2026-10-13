@@ -1,11 +1,15 @@
-# Settings reference
+# Settings Reference
+
+**Choose what JARVIS knows, reaches and may do.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Google](google.md) / [Telegram](telegram.md) / [Phone](phone.md) / [Connect apps](connect-apps.md)
 
 Everything you can change after setup, where it lives in the console (**Settings** in the header), and **why each one is off or
 unset by default**. A setting that is unset is never "missing" or "not built yet": each one below is either safe to leave off,
 needs something only you can supply (a key, Docker, a folder), or is deliberately opt-in so nothing is reachable by accident.
 
-Change them in the console, or with `jarvis config set KEY VALUE...` / `jarvis keys set model|voice`. Changes apply after
-`jarvis restart` (the console's **Restart to apply** does it). Every change is checked by the same rules the daemon starts with and
+Change them in the console, or with `jarvis config set KEY VALUE...` / `jarvis keys set model|voice`. Settings that require a restart apply after
+`jarvis restart` (the console's **Restart to apply** does it); live settings, including permissions and phone settings, apply immediately as marked below. Every change is checked by the same rules the daemon starts with and
 refused, leaving the file untouched, if it would not start. Keys are stored in a private file and are never shown again.
 
 ## Brain

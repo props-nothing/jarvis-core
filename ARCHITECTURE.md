@@ -1,6 +1,12 @@
-# Architecture Index
+# JARVIS Architecture
 
-The canonical design is split by ownership boundary. This file is an index, not a duplicate specification.
+**One trusted core. Many replaceable capabilities.**
+
+[Home](README.md) / [Documentation](docs/README.md) / [Roadmap](ROADMAP.md) / [Decisions](docs/adr/README.md)
+
+The canonical design is split by ownership boundary. This is your map of those boundaries, not a duplicate specification.
+
+> **Design is not delivery.** These specifications include target profiles and adapters that are not shipped. Start with the [current capability summary](README.md#built-experimental-next) and [backlog](TODO.md) for implementation and live-verification status. Later accepted ADRs supersede earlier design choices.
 
 ## System Shape
 
@@ -19,19 +25,18 @@ The dependency rule is inward: applications and adapters depend on domain interf
 
 ## Canonical Specifications
 
-- [Overview and process topology](docs/architecture/overview.md)
-- [Repository ownership and dependency rules](docs/architecture/repository-layout.md)
-- [Runtime and model architecture](docs/architecture/runtime-and-models.md)
-- [Tools, MCP, and connectors](docs/architecture/tools-and-connectors.md)
-- [Memory and context](docs/architecture/memory-and-context.md)
-- [Identity and workspaces](docs/architecture/identity-and-workspaces.md)
-- [Storage and data ownership](docs/architecture/storage.md)
-- [Events, scheduler, and workflows](docs/architecture/events-and-workflows.md)
-- [Voice and telephony](docs/architecture/voice-and-telephony.md)
-- [Security and threat model](docs/architecture/security.md)
-- [Public and internal protocols](docs/architecture/protocols.md)
-- [Conceptual data schema](docs/data/schema.md)
-- [API and adapter contracts](docs/api/contracts.md)
+| Boundary | Canonical reference | Key question |
+| --- | --- | --- |
+| System | [Overview](docs/architecture/overview.md) / [repository layout](docs/architecture/repository-layout.md) | Which process and crate own the decision? |
+| Reasoning | [Runtimes and models](docs/architecture/runtime-and-models.md) | Can the model or runtime be replaced without losing authority? |
+| Effects | [Tools, MCP and connectors](docs/architecture/tools-and-connectors.md) | Who authorizes and records an action? |
+| Memory | [Memory and context](docs/architecture/memory-and-context.md) | Where did this fact come from, and can it be forgotten? |
+| Identity | [Identity and workspaces](docs/architecture/identity-and-workspaces.md) | Which actor has access to which resource? |
+| Durability | [Storage](docs/architecture/storage.md) / [data schema](docs/data/schema.md) | What survives a restart? |
+| Automation | [Events and workflows](docs/architecture/events-and-workflows.md) | Can work resume without duplicating an effect? |
+| Voice | [Voice and telephony](docs/architecture/voice-and-telephony.md) | Which session and authority does a voice represent? |
+| Security | [Threat model](docs/architecture/security.md) | What happens when input is hostile or evidence is missing? |
+| Interoperability | [Protocols](docs/architecture/protocols.md) / [contracts](docs/api/contracts.md) | What may cross a public or adapter boundary? |
 
 ## Integration Research
 

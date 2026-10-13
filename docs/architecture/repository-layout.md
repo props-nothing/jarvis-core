@@ -1,13 +1,19 @@
 # Repository Layout
 
+**Crates are ownership boundaries, not a filing system.**
+
+[Documentation](../README.md) / [Architecture map](../../ARCHITECTURE.md) / [Development setup](../development/getting-started.md)
+
+> **Target tree, not an inventory.** The tree below retains planned directories. The live [Cargo workspace](../../Cargo.toml) determines which members exist, and [TODO.md](../../TODO.md) records their delivery evidence. The browser console is composed in `apps/jarvisd`; `frontend/` is the separate product website. Framework-per-directory runtime workers and a Tauri client remain plans, not shipped paths.
+
 ## Target Tree
 
 Create this tree incrementally. Phase 1 begins with only the six members named in `P1-001`; later crates appear when their behavior is implemented.
 
-Implemented so far beyond the initial six: `crates/jarvis-observability` (structured logging, redaction, and the readers behind `jarvis logs`), `crates/jarvis-diagnostics` (offline `doctor` checks, stable findings, and verified repair), `crates/jarvis-models` (provider-neutral model contracts plus one OpenAI-compatible adapter), `crates/jarvis-mcp` (MCP server identity, canonical tool naming, and schema conformance), `crates/jarvis-mcp-transport` (the MCP SDK dependency, `server/discover` negotiation, and stdio/Streamable-HTTP transports), `crates/jarvis-sandbox` (OS-level confinement contracts and the Linux cgroup-v2 backend), `crates/jarvis-web` (the guarded web fetch tool), `crates/jarvis-documents` (reading PDF, Word, spreadsheet and slide files as hostile input), and `tests/e2e` (the process-level Phase 1 acceptance gate).
+Implemented members beyond the initial six include observability, diagnostics, models, MCP identity and transport, sandboxing, web fetch, document handling, connectors, runtimes, tools and voice contracts. A crate existing does not prove that every planned adapter is reachable or verified. `tests/e2e` contains process-level acceptance gates; the backlog records what each gate establishes.
 
 ```text
-jarvis/
+jarvis-core/
 |-- Cargo.toml
 |-- Cargo.lock
 |-- rust-toolchain.toml

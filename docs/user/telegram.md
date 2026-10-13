@@ -1,5 +1,9 @@
 # Telegram: talk to JARVIS from your phone
 
+**Your assistant and approvals, without opening a port on your network.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Settings](settings.md) / [Phone calls](phone.md)
+
 JARVIS can live in a Telegram chat only you can use. It is the same assistant: same tools, same memory, same permissions. When it needs your approval it sends buttons.
 
 ## Set it up (about two minutes, once)
@@ -23,7 +27,7 @@ That is all. From now on only your chat is answered. Anyone else who finds the b
 JARVIS writes in Markdown and Telegram shows it properly: **bold**, *italic*, `code`, code blocks with a language, links, quotes, headings as bold lines, lists with bullets, and tables as aligned monospace text (or one small card per row when a table is too wide for a phone). Long answers arrive as several messages, cut between paragraphs, never through a code block. If Telegram ever refuses a message's formatting, it is sent again as plain text so nothing is lost.
 ## What it does not do yet
 
-Photos, files and voice notes are not read or sent. Groups are never answered.
+Incoming photos, files and voice notes are not handled as general chat attachments. JARVIS can send pictures produced by its tools, such as browser screenshots, before the answer. This is not general file exchange or voice-note support. Groups are never answered.
 
 ## Good to know
 

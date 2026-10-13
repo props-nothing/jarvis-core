@@ -1,4 +1,8 @@
-# Built-in tools: the browser and documentation lookup
+# Abilities: Browser And Documentation
+
+**Read the live web. Look up current docs. Ask before acting.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [MCP servers](mcp.md) / [Permissions](settings.md)
 
 These come with JARVIS and are **on by default**: the first time JARVIS starts it sets them up for you (it downloads two small programs once, which takes seconds). Nothing to switch on. They are ordinary tools: each is listed under **Settings, Permissions**, where you can set it to ask, run without asking, or **Off**. To remove one entirely, run `jarvis mcp off browser`; it stays off. Set `JARVIS_NO_BUILTIN_ABILITIES=1` to stop JARVIS adding them at all. Reasons: [ADR-0171](../adr/0171-the-browser-and-documentation-lookup-come-with-jarvis.md).
 

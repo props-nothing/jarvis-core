@@ -1,5 +1,9 @@
 # Phone: JARVIS rings you, and you ring JARVIS
 
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Connect apps](connect-apps.md) / [Settings](settings.md)
+
+> **Provider-backed, not local voice.** Calls require your ElevenLabs and telephone-provider accounts. The owner's outbound-call path has been run live; that does not verify every inbound or third-party-call configuration. Caller ID is not proof of identity. Keep consequential tools on fresh approval, and review the limits below before enabling access.
+
 JARVIS can ring your phone when it needs you ("call me if the deploy fails"), and you can ring it. An **ElevenLabs agent** does the talking and listening; the tools, the memory and the rules stay with JARVIS. When the agent wants to do something, it uses JARVIS's tools through **Connect apps**, so everything it does passes the same permissions and approvals as anything else.
 
 ## Set it up (once)
@@ -86,4 +90,4 @@ JARVIS keeps a short record of each call it placed: the number (shown masked), t
 
 ## What it does not do yet
 
-JARVIS cannot hang up a call or turn a stranger's call away at the door (see above), and learns how a call went by asking ElevenLabs every ten seconds, not from a webhook. Accounts with data residency (an EU, India or Singapore ElevenLabs host) are not supported yet. The first real call with your account is the check that matters: if **Call me now** fails, the message says why (a key without access to agents, an id that is not in your account, an override that is not enabled).
+JARVIS cannot hang up a call. Optional caller screening can turn away an unlisted caller before an inbound conversation starts, as described above, but cannot prove that caller ID is genuine. JARVIS learns how a call went by asking ElevenLabs every ten seconds, not from a webhook. Accounts with data residency (an EU, India or Singapore ElevenLabs host) are not supported yet. The first real call with your account is the check that matters: if **Call me now** fails, the message says why (a key without access to agents, an id that is not in your account, an override that is not enabled).

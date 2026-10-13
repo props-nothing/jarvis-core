@@ -1,6 +1,25 @@
-# Installation And Release Plan
+# Installation And Releases
 
-This is the required product behavior. No installer/release exists yet.
+**A native program today. Signed, verified distribution is the release goal.**
+
+[Documentation](../README.md) / [Quick start](../user/quick-start.md) / [Platform evidence](../user/platforms.md) / [Roadmap](../../ROADMAP.md)
+
+## Available Today
+
+| Path | Status |
+| --- | --- |
+| Build the CLI from source | `cargo build --release -p jarvis-cli`; the same `jarvis` program runs its daemon. |
+| Install for your user | `jarvis install` copies the program and sets up PATH; no administrator rights required. |
+| Start at login | `jarvis service install` / `uninstall`; native platform details are in the [platform guide](../user/platforms.md). |
+| Portable profile | `--root` keeps managed state in an explicit directory and does not install a service. |
+| CI archives | Platform workflow artifacts and tagged draft releases; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
+| Public signed binaries and updates | Not shipped; license choice, signing, clean-machine evidence and update/rollback work remain. |
+
+The separate product website also has source-building bootstrap scripts. Those are not the signed-download bootstrap design below. Do not infer production readiness or public redistribution rights from a successful build.
+
+## Target Release Contract
+
+The remaining sections specify required product behavior and retain the original planning design where identified. They are not claims that every installer, signature, service reconciliation step or deployment profile is implemented.
 
 ## Artifact Matrix
 
@@ -79,7 +98,9 @@ Never rewrite an externally managed service without explicit operator action.
 
 ### Implemented Planning Surface (P1-011)
 
-`jarvis service` implements steps 1, 2, and 6 and is strictly read-only: it resolves
+This records the original read-only planning slice, not the ceiling of the current service commands. Later slices added `jarvis service install` and `uninstall`; see the [platform guide](../user/platforms.md) for current behavior and verification limits.
+
+The original `jarvis service` planning surface implements steps 1, 2, and 6 and is strictly read-only: it resolves
 the daemon binary (beside the client, never the client itself), renders the
 definition the platform manager would use, and classifies the existing definition.
 
@@ -92,8 +113,7 @@ definition the platform manager would use, and classifies the existing definitio
 | `unreadable` | the definition could not be read | **no** |
 
 Ownership is decided by the marker inside the definition, not by its path. Staging,
-activation, readiness waiting, and rollback are not implemented; that is the
-installation slice, and this task explicitly excludes installing services.
+activation, readiness waiting, and rollback were outside this original slice. Do not read that historical exclusion as a claim that service installation is still absent, or that every target reconciliation guarantee has since been proven.
 
 ## Installer Flow
 

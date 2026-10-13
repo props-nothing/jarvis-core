@@ -1,5 +1,11 @@
 # Product Requirements
 
+**The contract for a personal assistant that remains under its owner's control.**
+
+[Documentation](../README.md) / [Architecture](../../ARCHITECTURE.md) / [Roadmap](../../ROADMAP.md) / [Acceptance scenarios](../quality/acceptance-tests.md)
+
+> **Goals, not release claims.** Requirement IDs describe the target behavior and remain stable for acceptance tracking. Some journeys below include unshipped profiles and interfaces. Consult the [delivery summary](../../README.md#built-experimental-next) and [backlog](../../TODO.md) for what is implemented, verified live, pending or parked.
+
 ## Product Definition
 
 JARVIS is a user-controlled personal AI operating layer. It receives requests and events, builds bounded context, selects a reasoning runtime and model, requests capabilities through policy-controlled tools, persists durable state and memory, and returns results through the user's chosen interface.

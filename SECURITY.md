@@ -1,6 +1,14 @@
 # Security Policy
 
-JARVIS is not yet a released product. Until the Phase 3 policy and approval gates are implemented and audited, do not expose it to the public internet or entrust it with production credentials, destructive tools, financial authority, or sensitive communications.
+**The model requests an effect. Deterministic policy decides whether it may happen.**
+
+[Home](README.md) / [Threat model](docs/architecture/security.md) / [Permissions and settings](docs/user/settings.md)
+
+JARVIS is a working assistant in development, not an independently audited or generally released product. Policy-controlled tools, durable owner approvals and cancellation are implemented; their existence is not a claim that all planned security controls are complete.
+
+> **Keep the daemon on loopback.** Do not expose it directly to the public internet or give it production authority, unrestricted credentials or safety-critical responsibilities. Grant only the folders, tools and accounts needed for your task. A coding agent's git worktree is not a sandbox.
+
+The current local setup stores keys in private files referenced by configuration; an OS-keychain-backed local secret store remains a target, not a blanket guarantee. Browser speech and hosted integrations have their own data flows. Review [settings](docs/user/settings.md), [connected apps](docs/user/connect-apps.md) and [coding agents](docs/user/code-agents.md) before enabling them.
 
 ## Reporting A Vulnerability
 
@@ -30,6 +38,8 @@ Treat all of the following as untrusted:
 Only deterministic JARVIS code may grant authority. A successful model response is never authorization.
 
 ## Required Security Properties
+
+This is the required contract. Consult the [acceptance backlog](TODO.md) for implementation and verification evidence; do not infer that every item below has shipped.
 
 - Bind locally by default. Remote access requires explicit configuration, authentication, authorization, TLS, and an exposure check.
 - Separate user, workspace, client, runtime, connector-account, and tool-call identities.

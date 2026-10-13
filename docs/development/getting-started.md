@@ -1,8 +1,26 @@
-# Development Getting Started
+# Build And Run JARVIS
+
+**From a checkout to a running assistant, with the trust boundary intact.**
+
+[Documentation](../README.md) / [User quick start](../user/quick-start.md) / [Contributing](../../CONTRIBUTING.md) / [Architecture](../../ARCHITECTURE.md)
+
+## Build From Source
+
+Install Git and Rust through rustup. The repository pins the compiler and components in [rust-toolchain.toml](../../rust-toolchain.toml); rustup selects that toolchain when you run Cargo here. Windows needs the MSVC C++ build tools and Windows SDK; macOS needs the command-line developer tools; Linux needs a C/C++ toolchain and the native dependencies used by enabled workspace features.
+
+```text
+git clone https://github.com/props-nothing/jarvis-core.git
+cd jarvis-core
+cargo build --release -p jarvis-cli
+```
+
+Run `./target/release/jarvis` on Linux/macOS or `.\target\release\jarvis.exe` on Windows. It performs onboarding, starts the daemon and opens the browser console. No `jarvis` command is on your PATH until you install it or add the build directory. The [quick start](../user/quick-start.md) explains both options.
+
+Docker is optional for containerized code execution; Tesseract is optional for OCR. A working model server is needed for actual model answers, but the default offline tests use scripted models and do not need provider credentials.
 
 ## Current State
 
-The repository contains the architecture baseline, the Rust workspace from `P1-001`, and a Python reference prototype.
+The repository contains the working Rust assistant, its architecture and acceptance evidence, a separate product website, and a Python behavior reference. The [roadmap](../../ROADMAP.md) and [backlog](../../TODO.md) are the current delivery ledger; the milestones below explain the foundation, not the ceiling of today's capabilities.
 
 Phase 1 (`P1-001` through `P1-012`) has delivered a runnable local foundation:
 
@@ -17,7 +35,7 @@ Phase 1 (`P1-001` through `P1-012`) has delivered a runnable local foundation:
 - `jarvis chat`, which holds a multi-turn conversation: one run per turn, replaying the session's transcript
 - offline `doctor` diagnosis with stable finding codes, safe evidence, specific remediation, and verified repair
 - portable foreground mode where one explicit root holds every managed file
-- per-user service planning and drift detection (no service is installed yet)
+- per-user service planning and drift detection (the original Phase 1 foundation; installation was added in later product slices)
 - an automated process-level acceptance gate in `tests/e2e`, run on Windows, macOS, and Linux CI
 
 Since Phase 1 the product slices below were built ahead of their phases, each with an ADR and a live run against a real
@@ -33,10 +51,9 @@ model (see [ROADMAP.md](../../ROADMAP.md), "Current Direction"):
   token caps (`ADR-0151`, `ADR-0155`, `ADR-0165`), reading PDF, Word, spreadsheet and slide files and pictures (`ADR-0158`, `ADR-0162`), a provider and model
   picker with a fallback model at a second provider (`ADR-0163`, `ADR-0164`), and a record of the tokens every model call used
 
-Not implemented yet: service installation (`jarvis service` prints a plan), log rotation, durable workflows, Microsoft and GitHub connectors (Google's
-push and watch framework exists in `jarvis-connectors` but nothing calls it, `P5-005b`), telephony, the desktop client and installers, and external
-agent runtimes. See [TODO.md](../../TODO.md) for exactly which slices
-are done.
+Later slices also delivered user-level installation and service registration, managed MCP abilities, app connections, Telegram, approved skills, time-zone schedules, triggers, model routing, spend guards and full-text search over granted files. The owner's outbound-call path through an ElevenLabs agent has been run live. ACP coding-agent delegation is implemented, but a full task against a real agent remains unverified; a git worktree is not confinement.
+
+Still pending or deliberately parked: the multi-step durable workflow engine, native Microsoft/GitHub connectors, browser-independent local voice, the desktop client, public signed installers and the complete server profile. Google's unused push/watch framework remains tracked for retirement (`P5-005b`). See [TODO.md](../../TODO.md) for specific remaining checks rather than treating an entire phase as shipped.
 
 The next implementation task is the first unchecked item in [TODO.md](../../TODO.md).
 
@@ -90,7 +107,7 @@ cargo run -p jarvis-cli -- service
 control protocol. ADR-0011 makes HTTP a peer transport (`P2-008`), and the CLI speaks it for runs while
 `status`/`health` stay on local IPC.
 
-The HTTP transport is off by default, so enable it before asking:
+Manual daemon configuration leaves HTTP off by default. `jarvis` / `jarvis init` configures the interactive path for you; if you start a manually configured daemon, enable HTTP before asking:
 
 ```toml
 # <config>/config.toml

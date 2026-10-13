@@ -1,4 +1,8 @@
-# Quick start
+# Your First Run
+
+**One assistant. Your model. Your folders. Your rules.**
+
+[Documentation](../README.md) / [Settings](settings.md) / [Platforms](platforms.md) / [Troubleshooting](#stopping-and-troubleshooting)
 
 For someone who wants to use JARVIS, not build it. Contributors: see [development/getting-started.md](../development/getting-started.md).
 The target experience, and what is still missing from it, is in [product/onboarding.md](../product/onboarding.md).
@@ -11,6 +15,20 @@ The target experience, and what is still missing from it, is in [product/onboard
 - One program, `jarvis` (the assistant it runs in the background is the same file, started as `jarvis daemon`). Either unpack a release archive (CI builds one per platform as
   a workflow artifact, or a draft release for a tagged build; there is no public download until a licence is chosen), or build it with a Rust toolchain:
   `cargo build --release -p jarvis-cli`, then take it from `target/release/`.
+
+Start the built program directly before it is on your PATH:
+
+```powershell
+# Windows, from the repository root
+.\target\release\jarvis.exe
+```
+
+```bash
+# Linux / macOS, from the repository root
+./target/release/jarvis
+```
+
+After installation, the shorter `jarvis` commands below work in a new terminal.
 
 ## Installing it
 
@@ -100,8 +118,8 @@ default.
   silent think), and the model is asked to tell you what it is about to do and to say when each stage is done. If a task stops, it says why
   and offers **Continue**. A task may take hundreds of steps; **Stop everything** is always there.
 - **What it can do on a fresh install:** read web pages, hand work to helper agents, and offer to remember things. Files need a folder
-  you grant (Settings, Folders & code) and running code needs Docker. More tools (search what it remembers, the clock, scheduling from
-  conversation, mail and calendar) are on the roadmap (`P9-024`).
+  you grant (Settings, Folders & code) and containerized code needs Docker. Memory search and scheduling from conversation are available;
+  Gmail and Calendar need Google sign-in. The built-in browser and documentation lookup need Node.js. [Abilities](abilities.md) explains setup and limits.
 - **Reading documents.** With a folder granted, `jarvis.files.read_document` reads PDF, Word (`.docx`), spreadsheet (`.xlsx`) and slide (`.pptx`) files in it, a few thousand characters at a time, and treats their text as data to read, never as instructions. It also reads a Word file's headers, footers, footnotes and endnotes. It also reads a photo or screenshot (`.png`, `.jpg`, `.bmp`) and a scanned PDF as text, if you install the free **tesseract** program (Windows installer from github.com/UB-Mannheim/tesseract/wiki; macOS `brew install tesseract`; Linux the `tesseract-ocr` package, plus the language data for anything but English); the answer is marked as read from a picture, so expect small mistakes. It cannot read password-protected files or the old `.doc`/`.xls` formats. Together with `jarvis.gmail.save_attachment`, a PDF that arrives by mail can be saved and read.
 - **Handing a coding task to a coding agent.** With a folder granted, git, and a coding agent of your own that speaks ACP (ChatGPT/Codex, Claude, Copilot, Gemini and others, picked and tested on the **Coding agent** card in Settings, Folders & code), `jarvis.code.delegate` hands a bigger change to that agent in its own git worktree on a new branch. JARVIS asks you first, brings back the diff and the branch name, and never merges or pushes. It is not a sandbox, and a task has not yet been run against a real agent. See [code-agents.md](code-agents.md) (`ADR-0207`, `ADR-0208`).
 - **Searching your own files.** With a folder granted, `jarvis.knowledge.search` answers "what do my files say about …" without knowing which file to open: it returns the matching passages (from text, notes, code, PDF, Word, spreadsheet and slide files), each with the file's path and where it starts, so JARVIS can read on. JARVIS keeps a search index of the granted folders inside its own profile database, updated at start and every five minutes (ask it to refresh if you just added a file). It leaves out hidden files and folders (such as `.env`), `node_modules`, `target`, `dist` and `build`, links, binary files, text files over 1 MB and documents over 10 MB, and it matches words, not meaning (so "renewal" does not find "renews"). Removing a folder from Settings, Folders & code removes its text from the index at the next start. The index only holds a copy of text you already granted; it is rebuilt from the folders and can be deleted at any time (`ADR-0206`).
@@ -113,6 +131,17 @@ default.
   makes it shape later answers, **Dismiss** forgets it. It asks because a web page it read could otherwise tell it what to remember.
 - **Approvals are a yes or no.** Anything it asks about appears with Approve and Deny; you can also say "yes" or "no", or use
   `jarvis approvals approve|deny`.
+
+## Take It Further
+
+| Next step | Guide |
+| --- | --- |
+| Mail, drafts, attachments and calendar events | [Google](google.md) |
+| Chat and approvals on your phone | [Telegram](telegram.md) |
+| Calls through your ElevenLabs agent | [Phone setup and trust limits](phone.md) |
+| More tools and another app using JARVIS | [MCP](mcp.md) / [connect apps](connect-apps.md) |
+| Work that starts when something happens | [Triggers](triggers.md) / [projects](projects.md) |
+| Approved procedures and delegated code changes | [Skills](skills.md) / [coding agents](code-agents.md) |
 
 To check that a change made JARVIS better and not worse, run a suite of prompts against it and compare with the last run: `jarvis eval run evals/basics.toml` ([evals.md](evals.md)).
 

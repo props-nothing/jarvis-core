@@ -1,6 +1,22 @@
 # Contributing To JARVIS
 
-JARVIS is in early implementation. The current priority is the ordered work in [TODO.md](TODO.md), not opportunistic feature additions to the Python example.
+**Build capabilities. Preserve authority. Leave evidence.**
+
+[Home](README.md) / [Development setup](docs/development/getting-started.md) / [Architecture](ARCHITECTURE.md) / [Backlog](TODO.md)
+
+JARVIS is a working assistant under active development. Contributions should improve a runnable slice of the Rust platform, not turn the Python reference prototype into a second product. The [backlog](TODO.md) sets the order; the [engineering rules](AGENTS.md) set the boundaries.
+
+## Pick A Contribution
+
+| Change | What good looks like |
+| --- | --- |
+| Fix a bug | A small reproduction, a focused fix and a test that fails without it. |
+| Add a capability | A named acceptance slice, policy-controlled effects and a real reachable client path. |
+| Integrate a provider | Current official evidence, a thin adapter, failure-path tests and honest live-verification status. |
+| Improve documentation | Exact commands, working links, clear prerequisites and no claims stronger than the evidence. |
+| Change a boundary | An ADR explaining ownership, compatibility and the tradeoff before implementation. |
+
+No license has been selected for the new platform yet. Review [license status](README.md#license-status) and [third-party provenance](THIRD_PARTY.md) before redistributing or introducing third-party code.
 
 ## Before You Change Code
 
@@ -34,7 +50,7 @@ Never report a mock-only integration as operational. Label tests clearly as unit
 
 ## Rust Baseline
 
-Once the workspace exists, every normal Rust change must pass:
+Every normal Rust change must pass:
 
 ```text
 cargo fmt --check

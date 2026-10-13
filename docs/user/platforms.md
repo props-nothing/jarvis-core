@@ -1,4 +1,8 @@
-# Platforms: Windows, Linux (including a headless VPS) and macOS
+# Platforms And Deployment
+
+**The same core on three operating systems. Evidence, not assumptions.**
+
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Settings](settings.md) / [Build from source](../development/getting-started.md)
 
 JARVIS is built to run the same way on all three. This page says what that means today, **how each claim was checked**, how to run it
 on a server with no screen, and what is still missing. It is deliberately specific about what has and has not been run.
@@ -23,7 +27,7 @@ nobody has used JARVIS on a real Linux box or Mac yet. Treat the first run there
 
 The first release workflow run built all five archives on GitHub; its smoke test (unpack, run `jarvis version` and `jarvis daemon --version`) failed
 on every platform because of a shell glob in the script itself, since fixed and verified by packaging and running the Windows archive locally.
-macOS is the one CI job still red: the Phase 3 gate (a real daemon and an MCP child process) fails there for a reason not yet read.
+An earlier macOS CI run also failed at the Phase 3 gate (a real daemon and an MCP child process). These are historical observations, not the status of the current revision; check the [latest native CI runs](https://github.com/props-nothing/jarvis-core/actions/workflows/ci.yml) and [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) before relying on an artifact.
 
 What running the tests on real Linux and macOS runners has already found (and fixed): a socket path longer than macOS allows
 (103 bytes) failed at bind with a message that named nothing, so JARVIS now refuses it by name and says to use `--root` with a short
@@ -81,10 +85,8 @@ uninstall` removes it. `jarvis start` launches the daemon so that scripts which 
 - Archives are built by CI (Actions, "Release (private artifacts)"). Run it by hand for 14-day workflow artifacts, or push a `v*` tag to
   also attach the archives to a **draft** GitHub release, which only people with write access can see. Nothing is published, because no
   licence has been chosen yet, and there is no installer, signing or update mechanism (`P9-004` to `P9-007`, `P9-017b`). Each archive has
-  the single `jarvis` program plus a SHA-256 file; unpack it and run `jarvis`. This workflow has not run on GitHub yet, so the first
-  run (`Run workflow`) is also its test.
+  the single `jarvis` program plus a SHA-256 file; unpack it and run `jarvis`. The workflow has run on GitHub (see the packaging findings above); consult its latest result for the revision you want to use.
 - The Linux sandbox backend without a container runtime has no wait-for-exit support recorded in the sandbox research; use the
   Docker-backed code tool.
-- Telephony and messaging apps are not built, so a server has no way to reach you except the console, the CLI, the schedule runner, an optional
-  ntfy push (`docs/user/settings.md`) and the Gmail and Calendar tools once you have signed in to Google (`docs/user/google.md`). Other connectors (Microsoft, GitHub) are not built (`ROADMAP.md`).
-- Several optional integrations (a coding-agent runtime, local speech) have not been designed for a headless host yet.
+- [Telegram](telegram.md) provides chat and approvals without exposing the daemon. Optional [phone calls](phone.md) use an ElevenLabs agent and your configured telephone provider; connecting the agent to JARVIS needs the authenticated app endpoint and its documented tunnel setup. Optional push and Google tools remain available. Native Microsoft/GitHub connectors are not shipped; prefer [MCP](mcp.md) where supported.
+- Browser-independent local speech is still pending. [Coding-agent delegation](code-agents.md) needs an installed ACP agent, its login and git; a full real-agent task remains unverified, and its worktree is not a sandbox.

@@ -1,6 +1,29 @@
 # JARVIS Documentation
 
-## Start Here
+**From your first conversation to the boundaries that keep you in control.**
+
+[Home](../README.md) / [Quick start](user/quick-start.md) / [Settings](user/settings.md) / [Roadmap](../ROADMAP.md)
+
+## Choose Your Path
+
+| You want to... | Open... |
+| --- | --- |
+| Start JARVIS and get a first answer | [Quick start](user/quick-start.md) |
+| Run on Windows, macOS or a Linux server | [Platforms and verification](user/platforms.md) |
+| Pick a model, voice, folders and permissions | [Settings](user/settings.md) |
+| Connect Gmail and Calendar | [Google](user/google.md) |
+| Reach JARVIS from your phone | [Telegram](user/telegram.md) / [owner phone calls](user/phone.md) |
+| Add capabilities without rebuilding the core | [Abilities](user/abilities.md) / [MCP](user/mcp.md) |
+| Connect an editor, agent or script | [Connect apps](user/connect-apps.md) |
+| Give recurring work a goal and context | [Projects](user/projects.md) / [triggers](user/triggers.md) |
+| Teach an approved procedure | [Skills](user/skills.md) |
+| Delegate a coding task | [Coding agents and current limits](user/code-agents.md) |
+| Measure whether a change helped | [Evaluations](user/evals.md) |
+| Build and contribute | [Development setup](development/getting-started.md) / [contributing](../CONTRIBUTING.md) |
+
+> **Reading a specification?** Architecture and product requirements describe the target contract, not a feature checklist. The [README](../README.md#built-experimental-next), [roadmap](../ROADMAP.md) and [acceptance backlog](../TODO.md) distinguish shipped paths, partial implementations and unverified work. Research and ADRs retain their dated evidence.
+
+## Understand The Core
 
 1. [Product requirements](product/requirements.md)
 2. [Architecture overview](architecture/overview.md)
@@ -10,6 +33,8 @@
 6. [Glossary](glossary.md)
 
 ## Architecture
+
+**One owner of durable state. Replaceable adapters at the edges.**
 
 - [Runtime and models](architecture/runtime-and-models.md)
 - [Tools, MCP, and connectors](architecture/tools-and-connectors.md)
