@@ -69,6 +69,37 @@ async fn lifecycle_is_durable_and_workspace_scoped() {
         find_delegated_task(&db, "other", &task.id).await,
         Err(DatabaseError::DelegatedTaskNotFound)
     ));
+    for (workspace, id) in [
+        (LOCAL_WORKSPACE_ID, task.id.as_str()),
+        ("other", task.id.as_str()),
+        (LOCAL_WORKSPACE_ID, "missing"),
+    ] {
+        assert!(matches!(
+            finish_delegated_task(
+                &db,
+                workspace,
+                id,
+                &DelegatedTaskFinish {
+                    status: "failed",
+                    branch: None,
+                    worktree: None,
+                    summary: None,
+                    result_json: None,
+                    error: Some("must not overwrite the result"),
+                    now: at(3),
+                },
+            )
+            .await,
+            Err(DatabaseError::DelegatedTaskNotFound)
+        ));
+    }
+    assert_eq!(
+        find_delegated_task(&db, LOCAL_WORKSPACE_ID, &task.id)
+            .await
+            .unwrap(),
+        found
+    );
+    db.close().await;
 }
 
 #[tokio::test]

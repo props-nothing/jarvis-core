@@ -15,6 +15,7 @@ Date: 2026-10-13
 4. On daemon start, queued/running rows from the prior daemon become `interrupted`; they are never silently restarted. The child belonged to the prior process and its outcome is unknown.
 5. Completion shows an OS desktop notification. The Coding agent card lists the latest ten durable tasks and their branch or error. The task result remains available through the status tool even if the notification was missed.
 6. The existing synchronous tool remains for small jobs and compatibility. Both paths use the same agent, environment, worktree, policy and fenced result implementation.
+7. Recording `running` is required before the agent starts. Completion must update exactly one active task before a completion notification is shown; failed durable writes are logged, not treated as success. A settled result cannot be overwritten.
 
 ## Consequences
 

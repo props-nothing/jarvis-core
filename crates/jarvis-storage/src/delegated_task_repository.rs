@@ -188,10 +188,14 @@ pub async fn finish_delegated_task(
     ) {
         return Err(DatabaseError::StoredDelegatedTaskInvalid);
     }
-    sqlx::query("UPDATE delegated_tasks SET status=?3,branch=?4,worktree=?5,summary=?6,result_json=?7,error=?8,updated_at=?9,finished_at=?9 WHERE workspace_id=?1 AND id=?2 AND status IN ('queued','running')")
+    let changed = sqlx::query("UPDATE delegated_tasks SET status=?3,branch=?4,worktree=?5,summary=?6,result_json=?7,error=?8,updated_at=?9,finished_at=?9 WHERE workspace_id=?1 AND id=?2 AND status IN ('queued','running')")
         .bind(workspace).bind(id).bind(finish.status).bind(finish.branch).bind(finish.worktree).bind(finish.summary).bind(finish.result_json).bind(finish.error).bind(finish.now.to_string())
-        .execute(db.pool()).await.map_err(sqlite("finish a delegated task"))?;
-    Ok(())
+        .execute(db.pool()).await.map_err(sqlite("finish a delegated task"))?.rows_affected();
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(DatabaseError::DelegatedTaskNotFound)
+    }
 }
 
 /// Marks work whose process belonged to an earlier daemon as interrupted. Returns how many.

@@ -156,14 +156,7 @@ impl AsyncCodeDelegateTool {
         let active = Arc::clone(&self.cancellations);
         let notifications = self.notifications;
         tokio::spawn(async move {
-            let _ = jarvis_storage::mark_delegated_task_running(
-                &db,
-                &workspace,
-                &id,
-                UtcTimestamp::now(&SystemClock),
-            )
-            .await;
-            let result = inner.run_with_cancel(&args, &cancel).await;
+            let result = run_recorded_task(&db, &workspace, &id, &inner, &args, &cancel).await;
             let (status, branch, worktree, summary, result_json, error) = match result {
                 Ok(value) => {
                     let outcome = value
@@ -203,9 +196,14 @@ impl AsyncCodeDelegateTool {
                 error: error.as_deref(),
                 now: UtcTimestamp::now(&SystemClock),
             };
-            let _ = jarvis_storage::finish_delegated_task(&db, &workspace, &id, &finish).await;
+            let persisted =
+                jarvis_storage::finish_delegated_task(&db, &workspace, &id, &finish).await;
             if let Ok(mut held) = active.lock() {
                 held.remove(&id);
+            }
+            if let Err(error) = persisted {
+                tracing::error!(task_id = %id, %error, "coding task result could not be recorded");
+                return;
             }
             if notifications {
                 crate::notify::show(
@@ -261,6 +259,22 @@ impl AsyncCodeDelegateTool {
             Err(refused("that coding task is not running"))
         }
     }
+}
+async fn run_recorded_task(
+    db: &SqliteDatabase,
+    workspace: &str,
+    id: &str,
+    inner: &CodeDelegateTool,
+    args: &Arguments,
+    cancel: &Notify,
+) -> Result<Value, AdapterError> {
+    jarvis_storage::mark_delegated_task_running(db, workspace, id, UtcTimestamp::now(&SystemClock))
+        .await
+        .map_err(|error| {
+            tracing::error!(task_id = %id, %error, "coding task could not be marked running");
+            refused("the coding task could not be marked running; no agent was started")
+        })?;
+    inner.run_with_cancel(args, cancel).await
 }
 fn id(v: &Value) -> Result<&str, AdapterError> {
     v.get("task_id")

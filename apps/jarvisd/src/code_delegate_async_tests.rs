@@ -120,3 +120,48 @@ fn definitions_separate_start_read_and_stop() {
     let status = d.iter().find(|x| x.id().to_string() == STATUS).unwrap();
     assert_eq!(status.approval(), ApprovalPolicy::Auto);
 }
+
+#[tokio::test]
+async fn an_interrupted_task_cannot_launch_an_agent() {
+    let (scratch, db, manager) = rig("write:{cwd}/done.txt,say:finished").await;
+    let args = Arguments::parse_with_max(
+        &json!({"repository":"repo","task":"add done","minutes":20}),
+        60,
+    )
+    .unwrap();
+    let stored = jarvis_storage::create_delegated_task(
+        &db,
+        &NewDelegatedTask {
+            workspace_id: &manager.workspace,
+            repository: &args.repository,
+            task: &args.task,
+            allow_commands: args.allow_commands,
+            minutes: args.minutes,
+            now: UtcTimestamp::now(&SystemClock),
+        },
+    )
+    .await
+    .unwrap();
+    jarvis_storage::interrupt_delegated_tasks(&db, UtcTimestamp::now(&SystemClock))
+        .await
+        .unwrap();
+    let result = run_recorded_task(
+        &db,
+        &manager.workspace,
+        &stored.id,
+        &manager.inner,
+        &args,
+        &Notify::new(),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(AdapterError::RefusedBeforeReaching { .. })
+    ));
+    assert!(!scratch.0.join("trees").exists());
+    assert_eq!(
+        manager.status(&json!({"task_id":stored.id})).await.unwrap()["status"],
+        "interrupted"
+    );
+    db.close().await;
+}
