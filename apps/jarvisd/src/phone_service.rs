@@ -176,6 +176,19 @@ pub trait PhoneApproval: Send + Sync {
     async fn initiation(&self, _presented: &str, _caller: Option<&str>) -> Initiation {
         Initiation::Unauthorized
     }
+
+    /// What an inbound call from the owner should be told besides the agent's own prompt (`ADR-0206`): the whole prompt to run with,
+    /// or `None` when the call should go ahead with the agent as it is. Asked only after [`PhoneApproval::initiation`] said yes.
+    async fn inbound_brief(&self) -> Option<String> {
+        None
+    }
+
+    /// Whether a tool the owner trusted by name may run for the phone call that is open now without a second question (`ADR-0207`): the
+    /// owner's yes on the phone is switched on (`daemon.phone_approves`), the tool has a low risk and is not a phone tool, and **every**
+    /// open conversation on the agent is from one of the owner's numbers. The default is no.
+    async fn owner_alone_on_line(&self, _tool: &str, _risk: u8) -> bool {
+        false
+    }
 }
 
 /// The answer to "may this inbound call start", given to `ElevenLabs` before the agent picks up.
@@ -1283,6 +1296,70 @@ impl PhoneApproval for PhoneService {
         away.push_back((now().to_string(), shown));
         Initiation::Refused
     }
+
+    async fn owner_alone_on_line(&self, tool: &str, risk: u8) -> bool {
+        if tool.starts_with("jarvis.voice.") || risk > MAX_PHONE_APPROVAL_RISK {
+            return false;
+        }
+        let approves = ConfigStore::from_paths(&self.paths)
+            .load()
+            .is_ok_and(|loaded| loaded.config().daemon().phone_approves());
+        let Some((client, owners)) = self.line_inputs().filter(|_| approves) else {
+            return false;
+        };
+        let since = now()
+            .unix_nanos()
+            .checked_div(1_000_000_000)
+            .and_then(|seconds| u64::try_from(seconds).ok())
+            .unwrap_or(0)
+            .saturating_sub(GUARD_LOOKBACK.as_secs());
+        // An unreadable list, an empty one and a stranger on the line are all "no": the list is the only evidence of who is speaking.
+        client.live_conversations(since).await.is_ok_and(|live| {
+            !live.is_empty()
+                && live.iter().all(|call| {
+                    call.external_number
+                        .as_deref()
+                        .and_then(|number| normalize_phone_number(number).ok())
+                        .is_some_and(|number| owners.contains(&number))
+                })
+        })
+    }
+
+    async fn inbound_brief(&self) -> Option<String> {
+        let (client, _) = self.line_inputs()?;
+        let agent = tokio::time::timeout(INBOUND_BRIEF_WAIT, client.agent_setup())
+            .await
+            .ok()?
+            .ok()?;
+        // Never switches the override on from here: this runs while a call is being set up, and a failed brief only means the agent
+        // answers as it is.
+        agent
+            .prompt_override_allowed
+            .then(|| compose_inbound_prompt(&agent.prompt, &now().to_string()))
+    }
+}
+
+/// How long the door waits for the agent's prompt before letting the call through without a brief.
+const INBOUND_BRIEF_WAIT: Duration = Duration::from_secs(4);
+
+/// The prompt for a call the owner makes to JARVIS: the agent's own, then what it cannot do itself and how to get a callback anyway.
+///
+/// The phone tools are never served to the phone agent (`ADR-0200`), so a call cannot start the next call. A sub-agent started with
+/// `jarvis.agent.delegate` is an ordinary run that does have them, and it is bound by the same approval and call limits.
+fn compose_inbound_prompt(base: &str, now: &str) -> String {
+    format!(
+        "{}\n\n# This call\nThe owner of JARVIS is phoning you. You have no phone tool during a call and cannot ring anyone yourself, \
+         but JARVIS can ring the owner later, and you set that up with a tool. Never ask whether to do it: when the owner wants a call \
+         back, start it at once and say so.\n\
+         - A callback at a time (\"in two minutes\", \"at five\"): call jarvis.schedule.add with `at` (UTC, RFC 3339; it is now {} UTC, so work \
+         the time out from that) and an objective that says: ring the owner with jarvis.voice.call and tell them what they asked for.\n\
+         - A callback when a job is done: start the job with jarvis.agent.delegate with background set to true, and write the task so that \
+         it ends with: when the work is finished, ring the owner with jarvis.voice.call and tell them the result in a sentence or two.\n\
+         Then tell the owner it is arranged and that JARVIS will ring, so they can hang up. Only say that when the tool confirmed it; if a \
+         tool reports that something needs the owner's approval, say so instead.",
+        base.trim_end(),
+        now
+    )
 }
 
 /// The number a call rings: the one named, if it is on the owner's list, or the first on the list. A model names a reason, never a number.
@@ -1425,11 +1502,21 @@ async fn initiate(
         None => Initiation::Unauthorized,
     };
     match verdict {
-        Initiation::Allowed => Json(json!({
-            "type": "conversation_initiation_client_data",
-            "dynamic_variables": {}
-        }))
-        .into_response(),
+        Initiation::Allowed => {
+            let brief = match access.approvals().phone_approval() {
+                Some(phone) => phone.inbound_brief().await,
+                None => None,
+            };
+            let mut answer = json!({
+                "type": "conversation_initiation_client_data",
+                "dynamic_variables": {}
+            });
+            if let Some(prompt) = brief {
+                answer["conversation_config_override"] =
+                    json!({ "agent": { "prompt": { "prompt": prompt } } });
+            }
+            Json(answer).into_response()
+        }
         Initiation::Refused => (
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "this line is private" })),

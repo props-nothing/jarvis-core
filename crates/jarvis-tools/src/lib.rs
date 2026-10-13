@@ -105,4 +105,4 @@ pub use schema::{
 pub use scope::{
     MAX_SCOPE_CHARS, MAX_SCOPE_SEGMENT_CHARS, Scope, ScopeError, ScopeSet, WILDCARD_ACTION,
 };
-pub use workspace::{RootError, WorkspaceRoots};
+pub use workspace::{RootEntry, RootError, WorkspaceRoots};

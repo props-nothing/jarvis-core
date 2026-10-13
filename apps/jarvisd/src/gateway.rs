@@ -432,17 +432,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/skills/{id}/dismiss", post(dismiss_skill))
         .route("/skills/{id}/disable", post(disable_skill))
         .route("/skills/{id}/enable", post(enable_skill))
-        .merge(crate::mcp_admin::routes().merge(crate::key_test::routes()))
-        .merge(crate::mcp_access::routes())
-        .merge(crate::telegram::routes().merge(crate::phone_service::routes()))
-        .merge(crate::image_store::routes())
-        .merge(crate::google_service::routes())
-        .merge(crate::contacts_service::routes())
-        .merge(crate::digest_service::routes())
-        .merge(crate::push::routes())
-        .merge(crate::project_service::routes())
-        .merge(crate::schedule_service::routes())
-        .merge(crate::trigger_service::routes());
+        .merge(service_routes());
 
     Router::new()
         // A webhook delivery carries its secret in the address instead of the credential (`trigger_service::is_webhook_request`).
@@ -465,6 +455,25 @@ pub fn router(state: GatewayState) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .with_state(state)
+}
+
+/// The routes each feature module brings, under `/api/v1`. They are merged into the authenticated router, so none of them can omit the
+/// authentication or the body limit.
+fn service_routes() -> Router<GatewayState> {
+    crate::mcp_admin::routes()
+        .merge(crate::key_test::routes())
+        .merge(crate::code_agents::routes())
+        .merge(crate::mcp_access::routes())
+        .merge(crate::telegram::routes())
+        .merge(crate::phone_service::routes())
+        .merge(crate::image_store::routes())
+        .merge(crate::google_service::routes())
+        .merge(crate::contacts_service::routes())
+        .merge(crate::digest_service::routes())
+        .merge(crate::push::routes())
+        .merge(crate::project_service::routes())
+        .merge(crate::schedule_service::routes())
+        .merge(crate::trigger_service::routes())
 }
 
 /// The two health routes, which carry nothing to protect.

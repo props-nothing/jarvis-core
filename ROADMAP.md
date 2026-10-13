@@ -37,7 +37,7 @@ Measured against the four hallmarks of a real J.A.R.V.I.S.:
 5. **Telegram** (`P11-005`): built (`ADR-0184`), configured in Settings, reachable from a phone with no tunnel; run on the owner's phone; answers are formatted (`ADR-0186`).
 6. ~~**Time-zone schedules**~~ delivered (`P6-003`, `ADR-0182`): "every weekday at 08:00 Europe/Amsterdam". **Triggers** (`P6-012`) are delivered (`ADR-0193`, `ADR-0195`): a new mail, file or request starts an ordinary run, and quiet hours hold notices (`P6-007` in part).
 7. ~~**Model routing** (`P11-006`)~~ **built and run live** (`ADR-0196`): sub-agents and scheduled or triggered runs can use their own model, and the digest shows tokens per model. Whether a cheaper model is good enough is still measured with `jarvis eval`, not assumed.
-8. **Coding agents over ACP** (`P7`): delegate to Claude, Codex, Gemini, Copilot and others in a worktree, reviewed before anything merges.
+8. **Coding agents over ACP** (`P7`): delegate to ChatGPT/Codex, Claude, Copilot, Gemini and others in a worktree, reviewed before anything merges. **First slice built (`ADR-0207`, `ADR-0208`)**, chosen, tested and signed in from the console; the handshake has run live against the real Codex adapter, a task has not run against a real agent yet.
 9. Setup polish (`P11-007`); ~~a spend guard in the run~~ is delivered (`P11-008`, `ADR-0191`). Then local voice and calls (`P8`), distribution (`P9-004` to `P9-007`, blocked on a licence choice), and the server profile (`P10`).
 
 Parked until there is a named use: the durable workflow engine, a connector per provider, a runtime adapter per agent framework, ElevenLabs-shaped voice transports, Tauri.
@@ -161,7 +161,7 @@ No JARVIS-specific runtime protocol and no per-framework adapter (OpenAI Agents,
 Deliver:
 
 - local speech recognition and synthesis that need no key, voice activity detection and echo handling, and a client that is not a browser tab (`P8-010`); voice notes through Telegram are the cheapest first one
-- provider-neutral outbound calls (Twilio, SIP) to numbers the owner approves, signed webhooks, call records, consent flags and retention (`P8-007` to `P8-009`, `P8-011`). **First slice built (`ADR-0200`):** JARVIS rings the owner through an ElevenLabs agent, to listed numbers only, with records and a yes on the phone that can answer the approval; not yet run against a real account.
+- provider-neutral outbound calls (Twilio, SIP) to numbers the owner approves, signed webhooks, call records, consent flags and retention (`P8-007` to `P8-009`, `P8-011`). **First slice built (`ADR-0200`):** JARVIS rings the owner through an ElevenLabs agent, to listed numbers only, with records and a yes on the phone that can answer the approval; run live by the owner on a real account (2026-10-13).
 
 Parked until the owner uses them: ElevenLabs Custom LLM and Speech Engine transports, model-based turn detection ([ADR-0010](docs/adr/0010-model-based-turn-detection.md) stays the policy if built), and a realtime room.
 

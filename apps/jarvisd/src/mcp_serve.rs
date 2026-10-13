@@ -161,6 +161,30 @@ impl RemoteMcpRunner {
                 )
                 .await;
         }
+        // A call the owner made to JARVIS is not one JARVIS placed, so there is no call to cite; but a tool the owner trusted **by name**
+        // is the owner's own standing yes, and only the owner's numbers are on the line (`ADR-0207`). Pinned tools still ask.
+        if !pinned
+            && self.pipeline.workspace_policy().trusts(definition.id())
+            && let Some(phone) = self.approvals.phone_approval()
+            && phone
+                .owner_alone_on_line(name, definition.risk().level())
+                .await
+        {
+            tracing::info!(
+                tool = name,
+                "a tool the owner trusted ran for their own phone call without a second question"
+            );
+            let approver = format!("{}:phone-line", self.owner_id);
+            return self
+                .run_approved(
+                    name,
+                    arguments,
+                    correlation_id,
+                    format!("phone-line-{correlation_id}"),
+                    approver,
+                )
+                .await;
+        }
         let (id, answer) = self
             .approvals
             .ask(

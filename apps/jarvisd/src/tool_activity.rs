@@ -75,10 +75,12 @@ pub(crate) fn target_for(tool: &str, arguments: &Value) -> Option<String> {
     let text = |name: &str| arguments.get(name).and_then(Value::as_str);
     match tool {
         "jarvis.web.fetch" => text("url").map(display_address),
-        "jarvis.web.search" | "jarvis.memory.search" => {
+        "jarvis.web.search" | "jarvis.memory.search" | "jarvis.knowledge.search" => {
             text("query").map(|query| clip(query, MAX_TARGET_CHARS))
         }
-        "jarvis.agent.delegate" => text("task").map(|task| clip(task, MAX_TARGET_CHARS)),
+        "jarvis.agent.delegate" | "jarvis.code.delegate" => {
+            text("task").map(|task| clip(task, MAX_TARGET_CHARS))
+        }
         _ => None,
     }
 }

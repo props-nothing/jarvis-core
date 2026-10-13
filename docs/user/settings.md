@@ -48,6 +48,7 @@ In the console, **Settings** is a side list of tabs in four groups: **JARVIS** (
 | --- | --- | --- |
 | `tool_workspace_roots` | none | **Off by design.** With no folder granted JARVIS has no file tools at all; nothing outside a folder you chose is reachable (`ADR-0020`). Creating a file is automatic inside a granted folder, changing one asks first (`ADR-0137`). With a folder granted JARVIS can also **run a command** there (`npm run build`, `cargo test`): it asks every time and shows the full command line, runs without a shell on your machine with your privileges (not isolated), and can be set to run without asking in Permissions (`ADR-0143`). |
 | `code_sandbox_image` + `code_sandbox_interpreter` | none | **Off by design.** Running code needs Docker and an image you pulled yourself (it is never pulled for you, `ADR-0128`, `ADR-0131`). They are one setting: the console saves the pair together. |
+| `code_agent`, `code_agent_env`, `code_agent_auth` | none | The coding agent `jarvis.code.delegate` hands tasks to (`ADR-0207`, `ADR-0208`): a command (an argument vector, no shell; unset means an installed `copilot` or `gemini` is used if there is one), the **names** of environment variables it may inherit, and the sign-in method JARVIS uses if the agent asks. Chosen, tested and signed in on the **Coding agent** card; they apply at once, with no restart. See [code-agents.md](code-agents.md). |
 
 ## Permissions
 

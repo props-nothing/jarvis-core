@@ -451,6 +451,81 @@ impl WorkspaceRoots {
     }
 }
 
+/// One entry of a folder inside a granted root, as the index walk needs it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RootEntry {
+    /// The entry's name, or `None` when it is not valid UTF-8 (such an entry is never followed).
+    pub name: Option<String>,
+    /// Whether it is a folder.
+    pub is_directory: bool,
+    /// Whether it is a link of any kind. A link is reported, never followed by a walk.
+    pub is_link: bool,
+    /// Its size in bytes.
+    pub len: u64,
+    /// When it last changed, in nanoseconds since the Unix epoch, when the platform says.
+    pub modified_nanos: Option<i64>,
+}
+
+impl WorkspaceRoots {
+    /// The label of the root at `index` (in grant order), or `None` past the last.
+    #[must_use]
+    pub fn root_label(&self, index: usize) -> Option<&Path> {
+        self.roots.get(index).map(|root| root.label.as_path())
+    }
+
+    /// Lists a folder inside **one** root, unlike [`Self::read_directory`], which answers from the first root that can.
+    ///
+    /// A walk that has to cover every granted folder needs this: asking "the first root" about `.` never reaches the second. The folder
+    /// is opened through the root's handle, so it cannot leave the root.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`io::Error`] when the root does not exist, the folder cannot be opened, or an entry cannot be read.
+    pub fn list_in_root(&self, index: usize, relative: &Path) -> Result<Vec<RootEntry>, io::Error> {
+        let root = self
+            .roots
+            .get(index)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such workspace root"))?;
+        let mut entries = Vec::new();
+        for entry in root.handle.read_dir(relative)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let metadata = entry.metadata()?;
+            entries.push(RootEntry {
+                name: entry.file_name().to_str().map(str::to_owned),
+                is_directory: file_type.is_dir(),
+                is_link: file_type.is_symlink(),
+                len: metadata.len(),
+                modified_nanos: metadata
+                    .modified()
+                    .ok()
+                    .map(cap_std::time::SystemTime::into_std)
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .and_then(|since| i64::try_from(since.as_nanos()).ok()),
+            });
+        }
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(entries)
+    }
+
+    /// Opens a file inside **one** root, through its handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`io::Error`] when the root does not exist or the file cannot be opened beneath it.
+    pub fn open_file_in_root(
+        &self,
+        index: usize,
+        relative: &Path,
+    ) -> Result<cap_std::fs::File, io::Error> {
+        self.roots
+            .get(index)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such workspace root"))?
+            .handle
+            .open(relative)
+    }
+}
+
 impl std::fmt::Debug for WorkspaceRoots {
     /// Lists the granted roots and nothing else.
     ///
@@ -706,6 +781,61 @@ mod tests {
         assert_eq!(label, root.as_path());
 
         assert!(granted.read_directory(Path::new("nope")).is_err());
+    }
+
+    /// A walk that has to cover every granted folder lists each root on its own, with the facts it needs, and a link out of the root is
+    /// reported as a link and cannot be listed or opened through the handle.
+    #[test]
+    fn each_root_is_listed_on_its_own_and_a_link_out_is_not_followed() {
+        let directory = TestDirectory::new();
+        let first = directory.make_dir("first");
+        let second = directory.make_dir("second");
+        directory.write("first/one.txt", "1");
+        directory.write("second/two.txt", "22");
+        directory.write("outside/secret.txt", "outside the grant");
+        link_directory(&directory.path().join("outside"), &second.join("escape"));
+
+        let granted = roots(&[first.as_path(), second.as_path()]);
+        let listed_first = granted
+            .list_in_root(0, Path::new("."))
+            .unwrap_or_else(|error| panic!("list: {error}"));
+        assert_eq!(listed_first.len(), 1);
+        assert_eq!(listed_first[0].name.as_deref(), Some("one.txt"));
+        assert!(
+            listed_first[0]
+                .modified_nanos
+                .is_some_and(|nanos| nanos > 0)
+        );
+
+        let listed_second = granted
+            .list_in_root(1, Path::new("."))
+            .unwrap_or_else(|error| panic!("list: {error}"));
+        let two = listed_second
+            .iter()
+            .find(|entry| entry.name.as_deref() == Some("two.txt"))
+            .unwrap_or_else(|| panic!("the second root's file is listed"));
+        assert_eq!(two.len, 2);
+        assert!(!two.is_directory && !two.is_link);
+
+        assert!(
+            granted.list_in_root(1, Path::new("escape")).is_err(),
+            "a link out of the root cannot be listed through its handle"
+        );
+        assert!(
+            granted
+                .open_file_in_root(1, Path::new("escape/secret.txt"))
+                .is_err(),
+            "nor opened"
+        );
+        assert!(
+            granted
+                .open_file_in_root(0, Path::new("../second/two.txt"))
+                .is_err(),
+            "a path cannot climb from one root into another"
+        );
+        assert!(granted.list_in_root(2, Path::new(".")).is_err());
+        assert_eq!(granted.root_label(1), Some(second.as_path()));
+        assert_eq!(granted.root_label(2), None);
     }
 
     /// **Several roots are searched in grant order, and only the resolving one is reported.**

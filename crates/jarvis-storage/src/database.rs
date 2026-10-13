@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Current application-owned SQLite schema version.
-pub const CURRENT_SCHEMA_VERSION: i64 = 24;
+pub const CURRENT_SCHEMA_VERSION: i64 = 25;
 /// Default filename for the canonical local database.
 pub const DEFAULT_DATABASE_FILENAME: &str = "jarvis.sqlite3";
 
@@ -461,6 +461,12 @@ pub enum DatabaseError {
     /// A stored phone call row contradicts the rules (another build, a backup, a hand edit).
     #[error("the stored phone call has an invalid {field}")]
     StoredPhoneCallInvalid {
+        /// Stable field name without the offending value.
+        field: &'static str,
+    },
+    /// A knowledge index entry was refused (an empty or over-long piece of text).
+    #[error("the knowledge index entry's {field} is not acceptable")]
+    InvalidKnowledge {
         /// Stable field name without the offending value.
         field: &'static str,
     },

@@ -35,6 +35,7 @@ jarvis-mcp-transport.workspace = true
 async-trait.workspace = true
 jarvis-observability.workspace = true
 jarvis-protocol.workspace = true
+jarvis-runtimes.workspace = true
 jarvis-storage.workspace = true
 # The tool pipeline is composed here, for the same reason the run executor is: `repository-layout.md`
 # allows no arrow from `jarvis-application` into an adapter crate, so the registry, the policy engine,

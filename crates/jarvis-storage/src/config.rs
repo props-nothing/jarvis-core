@@ -33,6 +33,9 @@ const MAX_PROFILE_NAME_BYTES: usize = 64;
 const MAX_CODE_SANDBOX_ARGUMENT_BYTES: usize = 256;
 /// The most arguments an interpreter command may have.
 const MAX_CODE_SANDBOX_INTERPRETER_ARGUMENTS: usize = 8;
+/// The most arguments a coding agent command may have, and the most extra environment names it may be given.
+const MAX_CODE_AGENT_ARGUMENTS: usize = 12;
+const MAX_CODE_AGENT_ENV_NAMES: usize = 16;
 const MAX_SHUTDOWN_TIMEOUT_SECONDS: u16 = 300;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -232,6 +235,19 @@ pub struct DaemonConfig {
     /// snippet is one argument. The first element's name is also what the model is told the language is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     code_sandbox_interpreter: Vec<String>,
+    /// The command that starts the coding agent `jarvis.code.delegate` hands a task to: a program and its arguments, for an agent that
+    /// speaks the Agent Client Protocol (`["npx", "-y", "@github/copilot", "--acp"]`, `["gemini", "--acp"]`). An argument vector, never
+    /// a shell string. Empty means JARVIS looks for an installed `copilot` or `gemini` (`ADR-0207`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    code_agent: Vec<String>,
+    /// Names of environment variables the coding agent is allowed to inherit **in addition to** the small safe set every child gets
+    /// (`OPENAI_API_KEY`, `GH_TOKEN`). Only names, never values; the agent gets nothing else of JARVIS's environment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    code_agent_env: Vec<String>,
+    /// The sign-in method (as the agent advertises it) JARVIS uses **only when the agent says it needs a sign-in** before a task. Set
+    /// by the "Sign in" button on the coding agent card, which has just run it once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    code_agent_auth: Option<String>,
     /// A **file** whose contents are the speech provider's API key, read once at startup; setting it turns on the
     /// spoken voice (`ADR-0138`). Like [`Self::executor_api_key_ref`] it is a path, never the key, and absolute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -413,6 +429,24 @@ impl DaemonConfig {
     #[must_use]
     pub fn code_sandbox_interpreter(&self) -> &[String] {
         &self.code_sandbox_interpreter
+    }
+
+    /// Returns the command that starts the coding agent, empty when JARVIS should look for an installed one.
+    #[must_use]
+    pub fn code_agent(&self) -> &[String] {
+        &self.code_agent
+    }
+
+    /// Returns the names of the extra environment variables the coding agent may inherit.
+    #[must_use]
+    pub fn code_agent_env(&self) -> &[String] {
+        &self.code_agent_env
+    }
+
+    /// Returns the sign-in method to use when the coding agent asks for one, if the owner chose one.
+    #[must_use]
+    pub fn code_agent_auth(&self) -> Option<&str> {
+        self.code_agent_auth.as_deref()
     }
 
     /// Returns the file holding the speech provider's key, when the spoken voice is configured.
@@ -611,6 +645,9 @@ impl Default for DaemonConfig {
             mcp_serve_port: None,
             code_sandbox_image: None,
             code_sandbox_interpreter: Vec::new(),
+            code_agent: Vec::new(),
+            code_agent_env: Vec::new(),
+            code_agent_auth: None,
             speech_api_key_ref: None,
             speech_voice_id: None,
             speech_model: None,
@@ -966,6 +1003,7 @@ impl Config {
         self.validate_phone()?;
         self.validate_push()?;
         self.validate_code_sandbox()?;
+        self.validate_code_agent()?;
         self.validate_speech()?;
         self.validate_policy()?;
         Ok(())
@@ -1094,6 +1132,40 @@ impl Config {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Validates the coding agent settings: a short command of non-blank arguments, and a short list of variable names that are
+    /// plain identifiers and never one of JARVIS's own (`JARVIS_*`).
+    fn validate_code_agent(&self) -> Result<(), ConfigError> {
+        let usable = |value: &str| {
+            !value.trim().is_empty()
+                && value.len() <= MAX_CODE_SANDBOX_ARGUMENT_BYTES
+                && !value.chars().any(char::is_control)
+        };
+        let command = &self.daemon.code_agent;
+        let names = &self.daemon.code_agent_env;
+        let name_ok = |name: &String| {
+            let mut characters = name.chars();
+            characters
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+                && name.len() <= 64
+                && !name.to_ascii_uppercase().starts_with("JARVIS_")
+        };
+        if command.len() > MAX_CODE_AGENT_ARGUMENTS
+            || !command.iter().all(|argument| usable(argument))
+            || names.len() > MAX_CODE_AGENT_ENV_NAMES
+            || !names.iter().all(name_ok)
+            || self
+                .daemon
+                .code_agent_auth
+                .as_deref()
+                .is_some_and(|method| !usable(method) || method.len() > 80)
+        {
+            return Err(ConfigError::InvalidCodeAgent);
+        }
+        Ok(())
     }
 
     /// Validates the code sandbox pair: both or neither, and each a usable value.
@@ -1462,6 +1534,12 @@ pub enum ConfigError {
          daemon.code_sandbox_interpreter a short list of non-blank arguments"
     )]
     InvalidCodeSandbox,
+    /// The coding agent command or its environment names were unusable.
+    #[error(
+        "daemon.code_agent must be a short command of non-blank arguments, and daemon.code_agent_env a short list of variable names \
+         (letters, digits and _, never starting with JARVIS_)"
+    )]
+    InvalidCodeAgent,
     /// The API key file path was not absolute.
     ///
     /// Refused for the same reason the configuration path is: a relative path resolves against the
@@ -1636,6 +1714,9 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "mcp_serve_port",
                 "code_sandbox_image",
                 "code_sandbox_interpreter",
+                "code_agent",
+                "code_agent_env",
+                "code_agent_auth",
                 "speech_api_key_ref",
                 "speech_voice_id",
                 "speech_model",
@@ -3102,6 +3183,49 @@ shutdown_timeout_seconds = 20
             matches!(empty, Err(ConfigError::InvalidEnvironmentValue { .. })),
             "{empty:?}"
         );
+    }
+
+    /// The coding agent is a command and a list of variable names; a blank argument, a variable that is not a plain name, and any of
+    /// JARVIS's own variables are refused.
+    #[test]
+    fn the_coding_agent_settings_are_validated() {
+        let with = |body: &str| {
+            Config::parse_with_environment(
+                &V1_CONFIG.replace("[daemon]", &format!("[daemon]\n{body}")),
+                std::iter::empty::<(&str, &str)>(),
+            )
+        };
+        let loaded = with("code_agent = [\"npx\", \"-y\", \"@github/copilot\", \"--acp\"]\ncode_agent_env = [\"OPENAI_API_KEY\", \"GH_TOKEN\"]")
+            .unwrap_or_else(|error| panic!("a usable agent must load: {error}"));
+        assert_eq!(
+            loaded.config().daemon().code_agent(),
+            ["npx", "-y", "@github/copilot", "--acp"]
+        );
+        assert_eq!(
+            loaded.config().daemon().code_agent_env(),
+            ["OPENAI_API_KEY", "GH_TOKEN"]
+        );
+        assert!(
+            Config::parse_with_environment(V1_CONFIG, std::iter::empty::<(&str, &str)>())
+                .is_ok_and(|loaded| loaded.config().daemon().code_agent().is_empty()
+                    && loaded.config().daemon().code_agent_env().is_empty()),
+            "unset means empty: JARVIS then looks for an installed agent"
+        );
+
+        for bad in [
+            "code_agent = [\"gemini\", \"  \"]",
+            "code_agent = [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\", \"i\", \"j\", \"k\", \"l\", \"m\"]",
+            "code_agent_env = [\"NOT A NAME\"]",
+            "code_agent_env = [\"JARVIS_API_KEY\"]",
+            "code_agent_env = [\"jarvis_lower\"]",
+            "code_agent_env = [\"1STARTS_WITH_DIGIT\"]",
+        ] {
+            assert!(
+                matches!(with(bad), Err(ConfigError::InvalidCodeAgent)),
+                "{bad}: {:?}",
+                with(bad)
+            );
+        }
     }
     #[cfg(unix)]
     fn non_unicode_os_string() -> OsString {

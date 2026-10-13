@@ -953,6 +953,62 @@ async fn rig_without_agent() -> Arc<PhoneService> {
     rig("", None).await.phone
 }
 
+/// **A trusted tool may skip the console question only while every open conversation is from the owner** (`ADR-0207`). Falsified by
+/// ignoring a stranger, an empty line, an unreadable list, the setting, the risk or the phone tools.
+#[tokio::test]
+async fn the_owner_alone_on_the_line_needs_the_setting_a_low_risk_and_nobody_else_speaking() {
+    let rig = ready("phone_approves = true").await;
+    assert!(
+        !rig.phone
+            .owner_alone_on_line("jarvis.schedule.add", 1)
+            .await,
+        "nobody is on the line"
+    );
+
+    rig.fake.on_the_line("owner_1", "in-progress", Some(OWNER));
+    assert!(
+        rig.phone
+            .owner_alone_on_line("jarvis.schedule.add", 1)
+            .await
+    );
+    assert!(
+        !rig.phone.owner_alone_on_line("jarvis.gmail.send", 3).await,
+        "a risk above the phone's ceiling"
+    );
+    assert!(
+        !rig.phone.owner_alone_on_line("jarvis.voice.call", 1).await,
+        "a phone call never approves the next one"
+    );
+
+    rig.fake.on_the_line("stranger", "in-progress", Some(OTHER));
+    assert!(
+        !rig.phone
+            .owner_alone_on_line("jarvis.schedule.add", 1)
+            .await,
+        "one stranger among others"
+    );
+
+    rig.fake.hang_up_everyone();
+    rig.fake.on_the_line("owner_2", "in-progress", Some(OWNER));
+    rig.fake.line_down.store(true, Ordering::SeqCst);
+    assert!(
+        !rig.phone
+            .owner_alone_on_line("jarvis.schedule.add", 1)
+            .await,
+        "an unreadable line is not an empty one"
+    );
+    rig.fake.line_down.store(false, Ordering::SeqCst);
+
+    let off = ready("").await;
+    off.fake.on_the_line("owner_3", "in-progress", Some(OWNER));
+    assert!(
+        !off.phone
+            .owner_alone_on_line("jarvis.schedule.add", 1)
+            .await,
+        "the owner's yes on the phone is off"
+    );
+}
+
 #[tokio::test]
 async fn calling_other_people_is_off_until_the_owner_allows_it_and_then_places_one_call_with_an_ai_opening()
  {
@@ -1253,6 +1309,83 @@ async fn the_door_route_answers_200_403_and_401_and_nothing_else_is_reachable_th
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// **A call from the owner is told how to get a callback** (the phone agent has no phone tool, so it hands the job to a sub-agent), and
+/// nothing changes at the provider to say so: with the override not allowed, or the agent unreadable, the call goes on as it is.
+#[tokio::test]
+async fn an_inbound_call_from_the_owner_is_briefed_only_when_the_agent_may_be_overridden() {
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    let rig = ready("phone_screen_callers = true").await;
+    rig.fake.prompt_allowed.store(false, Ordering::SeqCst);
+    assert_eq!(rig.phone.inbound_brief().await, None);
+    assert!(
+        rig.fake.patches().is_empty(),
+        "the door never switches the override on"
+    );
+
+    rig.fake.prompt_allowed.store(true, Ordering::SeqCst);
+    let brief = rig
+        .phone
+        .inbound_brief()
+        .await
+        .unwrap_or_else(|| panic!("a brief"));
+    assert!(
+        brief.starts_with("You are JARVIS, a phone assistant."),
+        "{brief}"
+    );
+    assert!(brief.contains("jarvis.agent.delegate"), "{brief}");
+    assert!(brief.contains("jarvis.schedule.add"), "{brief}");
+    assert!(brief.contains("Never ask whether"), "{brief}");
+    assert!(brief.contains(" UTC, so work"), "{brief}");
+    assert!(brief.contains("jarvis.voice.call"), "{brief}");
+
+    rig.fake.agent_down.store(true, Ordering::SeqCst);
+    assert_eq!(rig.phone.inbound_brief().await, None);
+    rig.fake.agent_down.store(false, Ordering::SeqCst);
+
+    let access = Arc::new(crate::mcp_access::McpAccess::open(rig.paths.config()));
+    access
+        .approvals()
+        .set_phone_approval(Arc::clone(&rig.phone) as Arc<dyn PhoneApproval>);
+    let secret = door_secret(&rig);
+    let ask = |caller: &str| {
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(DOOR_PATH)
+            .header("authorization", format!("Bearer {secret}"))
+            .body(Body::from(format!(r#"{{"caller_id":"{caller}"}}"#)))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let app = door_routes(Arc::clone(&access));
+        async move {
+            let response = app
+                .oneshot(request)
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 16384)
+                .await
+                .unwrap_or_default();
+            (status, String::from_utf8_lossy(&bytes).into_owned())
+        }
+    };
+    let (status, body) = ask(OWNER).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let answer: Value = serde_json::from_str(&body).unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        answer["conversation_config_override"]["agent"]["prompt"]["prompt"]
+            .as_str()
+            .is_some_and(|prompt| prompt.contains("jarvis.agent.delegate")),
+        "{body}"
+    );
+    let (status, body) = ask(OTHER).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        !body.contains("jarvis.agent.delegate"),
+        "a stranger is told nothing"
+    );
 }
 
 fn url_of(patch: &(String, Value)) -> &str {

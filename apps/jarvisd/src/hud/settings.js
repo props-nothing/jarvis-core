@@ -138,7 +138,7 @@ window.JarvisSettings = function (context) {
     function tabState(id) {
       if (id === "brain") return settingIsSet("daemon.executor_model_name") ? "ok" : "todo";
       if (id === "voice") return keyIsSet("voice") || keyIsSet("search") ? "ok" : "";
-      if (id === "files") return settingIsSet("daemon.tool_workspace_roots") || settingIsSet("daemon.code_sandbox_image") ? "ok" : "";
+      if (id === "files") return settingIsSet("daemon.tool_workspace_roots") || settingIsSet("daemon.code_sandbox_image") || settingIsSet("daemon.code_agent") ? "ok" : "";
       if (id === "google") return settingIsSet("daemon.google_client_id") && keyIsSet("google") ? "ok" : "todo";
       if (id === "telegram") return keyIsSet("telegram") ? "ok" : "todo";
       if (id === "phone") return settingIsSet("daemon.phone_agent_id") && settingIsSet("daemon.phone_number_id") && settingIsSet("daemon.phone_owner_numbers") ? "ok" : "todo";
@@ -666,6 +666,145 @@ window.JarvisSettings = function (context) {
       row2.appendChild(acts);
       card.appendChild(row);
       card.appendChild(row2);
+      return card;
+    }
+    // The coding agent: which one JARVIS hands a bigger coding task to, tested from here. Saves apply at once (no restart): the daemon reads
+    // the setting each time a task starts. Nothing here runs a task; Test only starts the agent in an empty folder and says what it found.
+    function codingAgentCard() {
+      var card = el("div", "card");
+      var title = el("h4", "", "Coding agent");
+      var badge = el("span", "badge off", "off");
+      title.appendChild(badge);
+      card.appendChild(title);
+      card.appendChild(el("p", "lead", "Hands a bigger coding task to an agent you already use (ChatGPT/Codex, Claude, Copilot, Gemini and others). It works in its own copy of your repository on a new branch, so your own files are not touched; JARVIS asks you first and never merges or pushes. It needs a folder above and git."));
+      var holder = el("div");
+      card.appendChild(holder);
+      var out = el("p", "help", "");
+      function say(text, bad) { out.className = "help" + (bad ? " bad" : ""); out.textContent = text; }
+      function store(changes, done) {
+        putJson("/settings", "PUT", { changes: changes }).then(function () { settingsNote("Coding agent saved. It applies at once."); loadSettings(); },
+          function (error) { say(explain(error, "That was refused."), true); });
+      }
+      function paint(info) {
+        holder.replaceChildren();
+        var chosen = info.selected || (info.custom ? "custom" : null);
+        var ready = !!(chosen || info.detected);
+        badge.className = "badge " + (ready ? "on" : "off");
+        badge.textContent = ready ? "ready to choose" : "off";
+        if (chosen === "custom") badge.textContent = "custom";
+        else if (chosen) badge.textContent = "chosen";
+        holder.appendChild(checklist([
+          { done: info.needs.folder, text: "A folder is granted (above), with your repository in it." },
+          { done: info.needs.git, text: info.needs.git ? "git is installed." : "git is not installed: install git first." },
+          { done: ready, text: chosen ? "An agent is chosen." : info.detected ? "No agent is chosen; JARVIS will use the installed " + info.detected + "." : "Choose an agent below." }
+        ]));
+        var list = el("div");
+        info.presets.forEach(function (preset) {
+          var row = el("div", "set-row");
+          var name = el("span", "name", preset.name);
+          row.appendChild(name);
+          var middle = el("div");
+          middle.appendChild(el("span", "help", preset.summary));
+          middle.appendChild(el("span", "help" + (preset.available ? "" : " bad"), " " + (preset.via === "installed" ? "Found on this computer."
+            : preset.via === "npx" ? "Not installed; it will be downloaded with npx the first time (needs Node)."
+            : "Not found: install it" + (info.needs.node ? "" : ", or install Node so it can be run with npx") + ".")));
+          row.appendChild(middle);
+          var acts = el("div", "acts");
+          var use = el("button", preset.selected ? "" : "yes", preset.selected ? "In use" : "Use");
+          use.type = "button";
+          use.disabled = !!preset.selected || !preset.available;
+          use.addEventListener("click", function () { use.disabled = true; store([{ key: "daemon.code_agent", values: preset.command }]); });
+          acts.appendChild(use);
+          row.appendChild(acts);
+          list.appendChild(row);
+        });
+        holder.appendChild(list);
+        var picked = info.presets.filter(function (preset) { return preset.selected; })[0];
+        if (picked) holder.appendChild(el("p", "lead", "To sign in: " + picked.sign_in));
+        // Names of environment variables the agent may use (never values).
+        var envRow = el("div", "set-row");
+        envRow.appendChild(el("span", "name", "Environment names"));
+        var envField = el("input");
+        envField.type = "text"; envField.autocomplete = "off"; envField.spellcheck = false;
+        envField.value = (info.env || []).join(" ");
+        envField.placeholder = picked && picked.env.length ? picked.env.join(" ") : "OPENAI_API_KEY";
+        envRow.appendChild(envField);
+        var envActs = el("div", "acts");
+        var envSave = el("button", "", "Save names");
+        envSave.type = "button";
+        envSave.addEventListener("click", function () {
+          var names = envField.value.split(/[\s,]+/).filter(Boolean);
+          store([{ key: "daemon.code_agent_env", values: names.length ? names : null }]);
+        });
+        envActs.appendChild(envSave);
+        envRow.appendChild(envActs);
+        holder.appendChild(envRow);
+        holder.appendChild(el("p", "secthint", "Only the names of variables, never their values. The agent gets a small safe set (path, home, temp) and the names you list here, and nothing else of JARVIS's; most agents keep their own sign-in and need none."));
+        // Any other agent that speaks ACP.
+        var more = el("details");
+        more.open = chosen === "custom";
+        more.appendChild(el("summary", "", "Another agent (a command)"));
+        var customRow = el("div", "set-row");
+        customRow.appendChild(el("span", "name", "Command"));
+        var customField = el("input");
+        customField.type = "text"; customField.autocomplete = "off"; customField.spellcheck = false;
+        customField.value = chosen === "custom" ? (info.command || []).join(" ") : "";
+        customField.placeholder = "e.g. npx -y @github/copilot@1.0.96 --acp";
+        customRow.appendChild(customField);
+        var customActs = el("div", "acts");
+        var customSave = el("button", "", "Save command");
+        customSave.type = "button";
+        customSave.addEventListener("click", function () {
+          var words = splitCommand(customField.value.trim());
+          if (!words.length) { say("Type the command that starts the agent in ACP mode.", true); return; }
+          store([{ key: "daemon.code_agent", values: words }]);
+        });
+        customActs.appendChild(customSave);
+        customRow.appendChild(customActs);
+        more.appendChild(customRow);
+        more.appendChild(el("p", "secthint", "Any agent that speaks the Agent Client Protocol over standard input and output works. It is started with this command, no shell, in a copy of your repository."));
+        holder.appendChild(more);
+        var buttons = el("div", "acts");
+        var test = el("button", "yes", "Test");
+        test.type = "button";
+        var signIns = el("div", "acts");
+        test.addEventListener("click", function () {
+          test.disabled = true; signIns.replaceChildren();
+          say("Starting the agent (a first start through npx may download it)...");
+          putJson("/code-agents/test", "POST", {}).then(function (reply) {
+            test.disabled = false;
+            say((reply.ok ? "\u2713 " : "") + (reply.message || "No answer."), !reply.ok);
+            if (!(reply.methods || []).length) return;
+            (reply.methods || []).forEach(function (method) {
+              var button = el("button", "", "Sign in with " + method.name);
+              button.type = "button";
+              if (method.description) button.title = method.description;
+              button.addEventListener("click", function () {
+                signIns.querySelectorAll("button").forEach(function (other) { other.disabled = true; });
+                say("Signing in. A page may open in your browser; this waits up to 5 minutes...");
+                putJson("/code-agents/sign-in", "POST", { method_id: method.id }).then(function (done) {
+                  say((done.ok ? "\u2713 " : "") + (done.message || "No answer."), !done.ok);
+                  signIns.querySelectorAll("button").forEach(function (other) { other.disabled = false; });
+                  if (done.ok) { signIns.replaceChildren(); loadSettings(); }
+                }, function (error) { signIns.querySelectorAll("button").forEach(function (other) { other.disabled = false; }); say(explain(error, "The sign-in failed."), true); });
+              });
+              signIns.appendChild(button);
+            });
+          }, function (error) { test.disabled = false; say(explain(error, "The test failed."), true); });
+        });
+        buttons.appendChild(test);
+        if (chosen) {
+          var automatic = el("button", "", "Choose automatically");
+          automatic.type = "button";
+          automatic.title = "Stop using the saved choice; JARVIS then looks for an installed Copilot or Gemini.";
+          automatic.addEventListener("click", function () { store([{ key: "daemon.code_agent", values: null }, { key: "daemon.code_agent_auth", values: null }]); });
+          buttons.appendChild(automatic);
+        }
+        holder.appendChild(buttons);
+        holder.appendChild(signIns);
+        holder.appendChild(out);
+      }
+      api("/code-agents").then(paint, function () { holder.appendChild(el("p", "help bad", "The coding agents could not be listed.")); });
       return card;
     }
     var POSTURES = [["default", "Default (the rules decide)"], ["ask", "Always ask first"], ["trusted", "Run without asking"], ["off", "Off"]];
@@ -1558,6 +1697,7 @@ window.JarvisSettings = function (context) {
         body.appendChild(keyRow("search", "Search key"));
       } else if (sview.tab === "files") {
         body.appendChild(foldersCard());
+        if (byKey("daemon.code_agent")) body.appendChild(codingAgentCard());
         if (byKey("daemon.code_sandbox_image")) body.appendChild(codeCard());
       } else if (sview.tab === "connect") {
         connectPanel(body);

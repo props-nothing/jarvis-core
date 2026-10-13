@@ -1535,6 +1535,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jarvis-runtimes"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "jarvis-core",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "jarvis-sandbox"
 version = "0.1.0"
 dependencies = [
@@ -1621,6 +1632,7 @@ dependencies = [
  "jarvis-models",
  "jarvis-observability",
  "jarvis-protocol",
+ "jarvis-runtimes",
  "jarvis-sandbox",
  "jarvis-storage",
  "jarvis-tools",

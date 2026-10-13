@@ -540,9 +540,9 @@ impl ToolExecutor for CommandRunTool {
 }
 
 /// Kills a process and everything it started when dropped, unless disarmed.
-struct TreeGuard {
-    pid: u32,
-    armed: bool,
+pub(crate) struct TreeGuard {
+    pub(crate) pid: u32,
+    pub(crate) armed: bool,
 }
 
 impl Drop for TreeGuard {
@@ -557,7 +557,7 @@ impl Drop for TreeGuard {
 ///
 /// A build tool starts others (`npm` starts `node`, which starts the compiler), and killing only the first leaves the rest
 /// running and holding the output pipes, which is what a time limit is supposed to prevent.
-fn kill_tree(pid: u32) {
+pub(crate) fn kill_tree(pid: u32) {
     if pid == 0 {
         return;
     }
@@ -580,7 +580,7 @@ fn kill_tree(pid: u32) {
 }
 
 /// Strips the `\\?\` prefix Windows adds to a canonical path, which `cmd.exe` and several tools do not understand.
-fn plain(path: &Path) -> PathBuf {
+pub(crate) fn plain(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),

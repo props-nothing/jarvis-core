@@ -6,6 +6,7 @@ mod database;
 mod embedding_repository;
 mod identity_repository;
 mod inspect;
+mod knowledge_repository;
 mod memory_repository;
 mod message_repository;
 mod paths;
@@ -61,6 +62,11 @@ pub use identity_repository::{
     LOCAL_USER_ID, LOCAL_WORKSPACE_ID, LocalIdentity, load_local_identity,
 };
 pub use inspect::{DaemonInstanceRow, DatabaseInspection, DatabaseState, inspect_database};
+pub use knowledge_repository::{
+    KnowledgeChunkInput, KnowledgeFileInput, KnowledgeFileState, KnowledgeHit, KnowledgeKind,
+    KnowledgeStats, MAX_CHUNK_CHARS, clear_knowledge, knowledge_manifest, knowledge_stats,
+    remove_knowledge_file, replace_knowledge_file, search_knowledge,
+};
 pub use memory_repository::{
     EntityKind, EntityStatus, MemoryTransition, NewEntity, StoredAlias, StoredEntity, StoredMemory,
     StoredRelation, TASK_LIKE_PREDICATES, apply_memory_transition, count_entity_memory_links,

@@ -722,6 +722,81 @@ async fn a_tool_set_to_always_ask_first_ignores_a_yes_on_the_phone() {
     assert_eq!(adapter.calls(), 0);
 }
 
+/// A phone that has no call JARVIS placed and says only whether the owner alone is on the line.
+struct OwnerAlone(bool);
+
+#[async_trait::async_trait]
+impl crate::phone_service::PhoneApproval for OwnerAlone {
+    async fn approves(&self, _tool: &str, _risk: u8) -> Option<crate::phone_service::PhoneYes> {
+        None
+    }
+
+    async fn owner_alone_on_line(&self, _tool: &str, _risk: u8) -> bool {
+        self.0
+    }
+}
+
+/// **A tool the owner trusted by name runs for the owner's own phone call without a second question** (`ADR-0207`): the call the owner
+/// made to JARVIS is not one JARVIS placed, so the console used to ask even for what they had set to run without asking. Falsified by
+/// dropping the trust condition (the untrusted case would run) or the line condition (the stranger case would run).
+#[tokio::test]
+async fn a_trusted_tool_runs_without_a_second_question_only_while_the_owner_alone_is_on_the_line() {
+    let id = || must(jarvis_tools::ToolId::new(APPROVAL_TOOL));
+
+    let (runner, approvals, adapter, _root) =
+        approval_runner_under(WorkspacePolicy::default().trusting(id())).await;
+    approvals.set_phone_approval(Arc::new(OwnerAlone(true)));
+    let result = must(
+        runner
+            .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+            .await
+            .map_err(|error| error.to_string()),
+    );
+    assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+    assert_eq!(adapter.calls(), 1);
+    assert!(approvals.list().is_empty());
+
+    // Not trusted: the owner has not said it runs without asking.
+    let (runner, approvals, adapter, _root) =
+        approval_runner_under(WorkspacePolicy::default()).await;
+    approvals.set_phone_approval(Arc::new(OwnerAlone(true)));
+    assert!(
+        runner
+            .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(adapter.calls(), 0);
+
+    // Trusted, but the owner is not alone on the line (or it could not be told).
+    let (runner, approvals, adapter, _root) =
+        approval_runner_under(WorkspacePolicy::default().trusting(id())).await;
+    approvals.set_phone_approval(Arc::new(OwnerAlone(false)));
+    assert!(
+        runner
+            .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(adapter.calls(), 0);
+
+    // Trusted and then pinned to "always ask": the tighter choice outranks.
+    let (runner, approvals, adapter, _root) = approval_runner_under(
+        WorkspacePolicy::default()
+            .trusting(id())
+            .requiring(id(), jarvis_tools::ApprovalPolicy::Ask),
+    )
+    .await;
+    approvals.set_phone_approval(Arc::new(OwnerAlone(true)));
+    assert!(
+        runner
+            .run(APPROVAL_TOOL, call_arguments(), CorrelationId::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(adapter.calls(), 0);
+}
+
 /// **The phone agent cannot place the next call**: the phone tools are not served to other apps at all.
 #[test]
 fn the_phone_tools_are_not_served_to_other_apps() {

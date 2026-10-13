@@ -39,6 +39,14 @@ Limits that remain:
 
 Do not put `{{jarvis_reason}}` or another custom variable in the agent's prompt: an inbound call does not supply it and ElevenLabs refuses a conversation with an undefined variable. For the reason of a call JARVIS places, turn on **JARVIS writes the opening line** instead (the agent needs its *First message* override on, which it has).
 
+## Asking JARVIS to call you back
+
+During a call you make to JARVIS the agent has **no phone tool**: a call cannot start a call, so a loop cannot keep your phone ringing (`ADR-0200`). It can still do it the long way round (`ADR-0206`): JARVIS tells the agent (in the brief it adds to your call) to arrange it with a scheduled or background task that rings you later. Say "call me back in two minutes" or "do this and call me back with the result", wait until it says it is arranged, then hang up.
+
+- **To make it hands-free**, trust the call tool: Settings, Permissions, Phone, set *Call the owner on the phone* to trusted. Otherwise the helper waits for your yes in the console or Telegram before it rings.
+- It follows the same limits as any call (quiet hours, calls an hour and a day, one call at a time). If you are still on the phone when the work ends, the call is refused and the result stays in Recent runs.
+- The brief needs the agent's prompt override switched on (it is once JARVIS has placed a call). If it is off or ElevenLabs does not answer in time, your call still connects, just without the note.
+
 ## JARVIS ringing other people
 
 Switch on **JARVIS may call other people** (Settings, Phone, or `jarvis config set phone_call_anyone on`) and JARVIS gets a third tool, *call a number*, for things like "call the restaurant and book a table for two". It is a separate tool so that letting JARVIS ring *you* unasked never lets it ring anyone else unasked.
@@ -69,6 +77,8 @@ Without any setting, a tool the phone agent asks for waits for your click in the
 - never to the phone tools themselves, and never to a tool you set to *Always ask first*.
 
 JARVIS cannot see whether the agent really asked you. With this on and the agent set to *No Approval* at ElevenLabs, the agent can use those tools without asking anyone while you are on the call, and whoever answers your phone is treated as you. Set the agent to ask first.
+
+**When you ring JARVIS yourself** (`ADR-0207`): with the same switch on, a tool you set to *Run without asking* in Settings, Permissions runs without a console question while only your own numbers are on the phone line (same risk limit, never the phone tools, never one set to *Always ask first*). Tools you left at the default still ask. Caller ID can be forged, so keep anything with big consequences at *Always ask first*.
 
 ## What is kept
 

@@ -4,6 +4,8 @@
 
 mod build_info;
 mod clock;
+mod code_agents;
+mod code_delegate;
 mod code_run;
 mod command_run;
 mod contacts_service;
@@ -26,6 +28,8 @@ mod hud;
 mod image_store;
 mod inbound_approvals;
 mod key_test;
+mod knowledge_index;
+mod knowledge_tool;
 mod mail_mime;
 mod mcp_abilities;
 mod mcp_access;
@@ -198,6 +202,13 @@ enum DaemonError {
         #[source]
         source: crate::memory_search::MemorySearchToolError,
     },
+    /// The knowledge search tool could not state its own contract.
+    #[error("the knowledge search tool could not be defined")]
+    KnowledgeTool {
+        /// Which part was rejected, named by the variant.
+        #[source]
+        source: crate::knowledge_tool::KnowledgeToolError,
+    },
     /// The web search tool could not state its own contract.
     #[error("the web search tool could not be defined")]
     WebSearchTool {
@@ -288,6 +299,13 @@ enum DaemonError {
         /// Which part was rejected, named by the variant.
         #[source]
         source: crate::command_run::CommandRunToolError,
+    },
+    /// The code delegation tool could not state its own contract.
+    #[error("the code delegation tool could not be defined")]
+    CodeDelegateTool {
+        /// Which part was rejected, named by the variant.
+        #[source]
+        source: crate::code_delegate::CodeDelegateToolError,
     },
     /// The configured workspace policy was self-contradictory.
     ///
@@ -1032,15 +1050,7 @@ async fn compose_tools(
         ],
         Arc::clone(&skill_tool) as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
-    additional.push((
-        vec![
-            crate::memory_search::MemorySearchTool::definition()
-                .map_err(|source| DaemonError::MemorySearchTool { source })?,
-        ],
-        Arc::new(crate::memory_search::MemorySearchTool::new(Arc::clone(
-            &database,
-        ))) as Arc<dyn jarvis_tools::ToolExecutor>,
-    ));
+    push_memory_search_tool(&database, &mut additional)?;
     // Finds the tools of big MCP servers, which are held back from the model until it asks (`ADR-0176`).
     let tool_search = Arc::new(crate::tool_search::ToolSearchTool::new());
     additional.push((
@@ -1053,8 +1063,9 @@ async fn compose_tools(
     push_search_tool(config, &mut additional)?;
     push_google_tools(config, paths, &database, &mut additional)?;
     push_document_tool(config, &mut additional)?;
+    push_knowledge_tool(config, &database, &mut additional).await?;
     push_code_tool(config, &mut additional)?;
-    push_command_tool(config, &mut additional)?;
+    push_command_tool(config, paths, &mut additional)?;
     // Delegation needs a model to drive a sub-agent with, so it is composed only when the daemon has an executor.
     let agent = executor.map(|executor| {
         Arc::new(crate::delegate::AgentTool::new(
@@ -1143,6 +1154,68 @@ fn push_document_tool(
                 .map_err(|source| DaemonError::WriteDocumentTool { source })?,
         ],
         Arc::new(document_write_tool::WriteDocumentTool::new(roots))
+            as Arc<dyn jarvis_tools::ToolExecutor>,
+    ));
+    Ok(())
+}
+
+/// Adds the tool the model looks things up in memory with.
+///
+/// # Errors
+///
+/// Returns [`DaemonError::MemorySearchTool`] when the tool's own contract is rejected.
+fn push_memory_search_tool(
+    database: &Arc<jarvis_storage::SqliteDatabase>,
+    additional: &mut Vec<(
+        Vec<jarvis_tools::ToolDefinition>,
+        Arc<dyn jarvis_tools::ToolExecutor>,
+    )>,
+) -> Result<(), DaemonError> {
+    additional.push((
+        vec![
+            crate::memory_search::MemorySearchTool::definition()
+                .map_err(|source| DaemonError::MemorySearchTool { source })?,
+        ],
+        Arc::new(crate::memory_search::MemorySearchTool::new(Arc::clone(
+            database,
+        ))) as Arc<dyn jarvis_tools::ToolExecutor>,
+    ));
+    Ok(())
+}
+
+/// Adds the search over the owner's own files, when a folder is granted, and starts keeping its index up to date (`ADR-0206`).
+///
+/// With no folder granted there is nothing to search, and the index is emptied: what it held came from folders the owner has since taken
+/// back.
+///
+/// # Errors
+///
+/// Returns [`DaemonError::KnowledgeTool`] when the tool's own contract is rejected.
+async fn push_knowledge_tool(
+    config: &jarvis_storage::Config,
+    database: &Arc<jarvis_storage::SqliteDatabase>,
+    additional: &mut Vec<(
+        Vec<jarvis_tools::ToolDefinition>,
+        Arc<dyn jarvis_tools::ToolExecutor>,
+    )>,
+) -> Result<(), DaemonError> {
+    let Some(roots) = open_granted_folders(config, "knowledge search") else {
+        if let Err(error) = knowledge_index::purge_when_ungranted(database).await {
+            tracing::warn!(%error, "the knowledge index could not be emptied");
+        }
+        return Ok(());
+    };
+    let index = Arc::new(knowledge_index::KnowledgeIndex::new(
+        Arc::clone(database),
+        roots,
+    ));
+    knowledge_index::spawn_passes(&index);
+    additional.push((
+        vec![
+            knowledge_tool::KnowledgeSearchTool::definition()
+                .map_err(|source| DaemonError::KnowledgeTool { source })?,
+        ],
+        Arc::new(knowledge_tool::KnowledgeSearchTool::new(index))
             as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
     Ok(())
@@ -1303,6 +1376,7 @@ fn push_search_tool(
 /// Returns [`DaemonError::CommandRunTool`] when the tool's own contract is rejected.
 fn push_command_tool(
     config: &jarvis_storage::Config,
+    paths: &AppPaths,
     additional: &mut Vec<(
         Vec<jarvis_tools::ToolDefinition>,
         Arc<dyn jarvis_tools::ToolExecutor>,
@@ -1312,7 +1386,23 @@ fn push_command_tool(
     if roots.is_empty() {
         return Ok(());
     }
-    let paths: Vec<std::path::PathBuf> = roots.iter().map(std::path::PathBuf::from).collect();
+    let paths_of_roots: Vec<std::path::PathBuf> =
+        roots.iter().map(std::path::PathBuf::from).collect();
+    // The coding agent is offered beside the command tool for the same reason: it needs a granted folder to work from (`ADR-0207`).
+    if let Ok(delegate) = crate::code_delegate::CodeDelegateTool::new(
+        &paths_of_roots,
+        paths.data().join("worktrees"),
+        crate::code_delegate::AgentSource::Saved(paths.clone()),
+    ) {
+        additional.push((
+            vec![
+                crate::code_delegate::CodeDelegateTool::definition()
+                    .map_err(|source| DaemonError::CodeDelegateTool { source })?,
+            ],
+            Arc::new(delegate) as Arc<dyn jarvis_tools::ToolExecutor>,
+        ));
+    }
+    let paths = paths_of_roots;
     match crate::command_run::CommandRunTool::new(&paths) {
         Ok(tool) => {
             additional.push((

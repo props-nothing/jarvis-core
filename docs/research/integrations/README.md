@@ -14,6 +14,7 @@ Every external integration requires a dated record based on current official sou
 | Writing Office files (`rust_xlsxwriter`, `docx-rs`) | not applicable (crates); ECMA-376 | [office-writers.md](office-writers.md) | `P11-010` implemented; opened in the real Excel and Word; PDF and PowerPoint not built |
 | Telegram Bot API | no index; https://core.telegram.org/bots/api (Bot API 10.3) | [telegram.md](telegram.md) | `P11-005` implemented and run against a stand-in for the Bot API; **not** run against real Telegram |
 | ElevenLabs | https://elevenlabs.io/docs/llms.txt | [elevenlabs.md](elevenlabs.md) | architecture researched; both custom-brain transports and turn-taking config recorded; not implemented |
+| Agent Client Protocol (coding agents) | https://agentclientprotocol.com/llms.txt | [acp.md](acp.md) | v1 selected, v2 draft refused; client over stdio, no SDK; sign-in implemented; **handshake run live against `@agentclientprotocol/codex-acp@2.2.2`**; a task has not yet been run against a real agent |
 | Twilio | no usable single index; official TwiML/Media Streams/pricing pages | [twilio.md](twilio.md) | architecture researched; not implemented |
 | Deepgram (Flux) | https://developers.deepgram.com/llms.txt | [deepgram.md](deepgram.md) | architecture researched; not implemented |
 | Document reading (`lopdf`, `zip`, `roxmltree`) | none of the crates publishes `llms.txt`; crates.io metadata | [document-reading-crates.md](document-reading-crates.md) | `ADR-0158` implemented; tested on documents built in memory, not on files from Office or LibreOffice |
