@@ -239,18 +239,26 @@
   }
   function renderEmpty() {
     var empty = el("div", "empty");
-    empty.appendChild(el("p", "", "Type, press the microphone (M), or enable the wake word and say \u201CJarvis, \u2026\u201D. Answer questions with yes or no; \u201CJarvis, stop\u201D cancels everything running."));
+    empty.appendChild(el("span", "eyebrow", currentChat.project ? "Project workspace" : "A little less busywork"));
+    empty.appendChild(el("h2", "", currentChat.project ? "Move your project forward." : "What shall we work on?"));
+    empty.appendChild(el("p", "", "Turn a question into a plan, a useful answer, or a next step. You decide what happens."));
     var ideas = currentChat.project
-      ? ["Where does this project stand?", "Plan the next steps and start on the first", "Research this and give me sources"]
-      : ["What can you do for me?", "Research the latest news on AI agents and give me sources", "Help me plan a project"];
+      ? [["Check project progress", "Where does this project stand?"], ["Plan the next steps", "Plan the next steps and start on the first"], ["Find sources", "Research this and give me sources"]]
+      : [["Explore your capabilities", "What can you do for me?"], ["Research a topic", "Research the latest news on AI agents and give me sources"], ["Plan a project", "Help me plan a project"]];
     var row = el("div", "suggest");
-    ideas.forEach(function (idea) {
-      var button = el("button", "", idea);
+    ideas.forEach(function (idea, index) {
+      var button = el("button");
       button.type = "button";
-      button.addEventListener("click", function () { send(idea); });
+      button.appendChild(el("span", "suggest-index", "0" + (index + 1)));
+      button.appendChild(el("span", "", idea[0]));
+      var arrow = el("span", "suggest-arrow", "\u2197");
+      arrow.setAttribute("aria-hidden", "true");
+      button.appendChild(arrow);
+      button.addEventListener("click", function () { $("input").value = idea[1]; $("input").focus(); });
       row.appendChild(button);
     });
     empty.appendChild(row);
+    empty.appendChild(el("p", "empty-help", "Pick a starting point, then edit and send. Type / to focus the message. Use the microphone to talk; approvals stay one yes or no."));
     chat.appendChild(empty);
   }
   function renderChat() {
@@ -538,6 +546,7 @@
   async function send(text) {
     text = String(text || "").trim();
     if (!text || busy) return;
+    if (S.offline) { say(token ? "Reconnect to JARVIS before sending. Your draft stays here." : "Open the console with `jarvis hud` before sending."); return; }
     interruptSpeech();
     clearEmpty();
     show("user", text);
@@ -557,6 +566,7 @@
     if (window.JarvisMission) JarvisMission.begin();
     busy = true;
     S.thinking = 1;
+    paintHeader();
     try {
       var body = { objective: text };
       if (S.session) body.session_id = S.session;
@@ -595,6 +605,7 @@
     } finally {
       busy = false;
       S.thinking = 0;
+      paintHeader();
       refresh();
     }
   }
@@ -603,6 +614,7 @@
     event.preventDefault();
     var input = $("input");
     var text = input.value;
+    if (!text.trim() || busy || S.offline) return;
     input.value = "";
     send(text);
   });
@@ -1223,7 +1235,9 @@
   });
 
   document.addEventListener("keydown", function (event) {
-    var typing = document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.type === "text";
+    var focused = document.activeElement;
+    var typing = focused && (/^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName) || focused.isContentEditable);
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || document.querySelector(".overlay:not([hidden])")) return;
     if (event.key === "Escape") {
       if (!$("ops").hidden) { setOps(false); return; }
       if (!$("chats").hidden) { closeChats(); return; }
@@ -1867,9 +1881,6 @@
   $("project-new").addEventListener("click", function () { openProject(null); });
   $("project-close").addEventListener("click", closeProject);
   $("project-sheet").addEventListener("click", function (event) { if (event.target === $("project-sheet")) closeProject(); });
-  document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape" && !$("project-sheet").hidden) { closeProject(); event.stopPropagation(); }
-  }, true);
   loadProjects();
 
   // ---- things JARVIS offers to remember --------------------------------------------------------------------------------
@@ -2040,7 +2051,53 @@
     api("/tools").then(function (result) { renderAbilities(result.tools || []); }, function () { abilitiesAt = 0; });
   }
 
-  // ---- settings: five tabs, the permissions, and Google sign-in live in settings.js ----------------------------------------------
+  // Dialogs share a focus boundary, including a project opened above Operations.
+  var overlays = [$("ops"), $("settings"), $("project-sheet")], activeOverlay = null;
+  var returnFocus = new Map();
+  function dialogControls(overlay) {
+    return Array.from(overlay.querySelectorAll("button, input, select, textarea, a[href], [tabindex]"))
+      .filter(function (node) { return !node.disabled && node.tabIndex >= 0 && node.getClientRects().length > 0; });
+  }
+  function syncDialogs() {
+    var next = overlays.filter(function (overlay) { return !overlay.hidden; }).pop() || null;
+    var focused = document.activeElement;
+    $("app").inert = !!next;
+    document.body.classList.toggle("modal-open", !!next);
+    overlays.forEach(function (overlay) { overlay.inert = overlay !== next; });
+    $("open-ops").setAttribute("aria-expanded", String(!$("ops").hidden));
+    $("open-settings").setAttribute("aria-expanded", String(!$("settings").hidden));
+    if (next === activeOverlay) return;
+    var previous = activeOverlay;
+    activeOverlay = next;
+    if (previous && previous.hidden) {
+      var restore = returnFocus.get(previous);
+      returnFocus.delete(previous);
+      if (restore && restore.isConnected && restore.getClientRects().length && (!next || next.contains(restore))) { restore.focus(); return; }
+    }
+    if (next) {
+      if (!returnFocus.has(next)) returnFocus.set(next, focused);
+      var controls = dialogControls(next);
+      (controls[0] || next.querySelector('[role="dialog"]')).focus();
+    }
+  }
+  new MutationObserver(syncDialogs).observe(document.body, { attributes: true, attributeFilter: ["hidden"], subtree: true });
+  window.addEventListener("keydown", function (event) {
+    if (!activeOverlay) return;
+    if (event.key === "Escape") {
+      if (activeOverlay.id === "settings" && activeOverlay.querySelector(".combo-list:not([hidden])")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      var close = activeOverlay.id === "ops" ? "ops-close" : activeOverlay.id === "settings" ? "settings-close" : "project-close";
+      $(close).click();
+    } else if (event.key === "Tab") {
+      var controls = dialogControls(activeOverlay);
+      var at = controls.indexOf(document.activeElement);
+      if (!controls.length) { event.preventDefault(); activeOverlay.querySelector('[role="dialog"]').focus(); }
+      else if (event.shiftKey && at <= 0) { event.preventDefault(); controls[controls.length - 1].focus(); }
+      else if (!event.shiftKey && (at < 0 || at === controls.length - 1)) { event.preventDefault(); controls[0].focus(); }
+    }
+  }, true);
+  syncDialogs();
   JarvisSettings({ $: $, el: el, api: api, putJson: putJson, explain: explain, families: families, familyLabel: familyLabel });
   // ---- header and caption ---------------------------------------------------------------------------------------
   function uiState() {
@@ -2074,11 +2131,33 @@
     wait.className = "pill" + (S.needYou > 0 ? " wait" : "");
     wait.lastChild.textContent = S.needYou + " waiting";
     $("stop").hidden = active + S.needYou === 0;
+    $("stage").dataset.state = mode;
+    $("presence-work-value").textContent = S.offline ? "\u2014" : String(active).padStart(2, "0");
+    $("presence-wait-value").textContent = S.offline ? "\u2014" : String(S.needYou).padStart(2, "0");
+    $("presence-work-detail").textContent = S.offline ? "Link unavailable" : active ? "Follow the work" : "Standing by";
+    $("presence-wait-detail").textContent = S.offline ? "Link unavailable" : S.needYou ? "Your yes or no" : "Nothing waiting";
+    $("stage-talk").disabled = !Recognition;
+    $("stage-state").textContent = preparing ? "Preparing voice" : { offline: "Offline", idle: "Ready when you are", working: "Working", listening: "Listening", speaking: "Speaking", waiting: "Your decision" }[mode];
+    $("stage-detail").textContent = S.offline ? (token ? "Daemon unavailable. Reconnecting…" : "Open with jarvis hud to connect.")
+      : S.needYou ? S.needYou + (S.needYou === 1 ? " decision waiting. You stay in command." : " decisions waiting. You stay in command.")
+      : active ? active + (active === 1 ? " active task. Follow its progress in Operations." : " active tasks. Follow their progress in Operations.")
+      : "Your rules. Your control. Ready for the next step.";
+    var status = $("composer-status");
+    var statusText = S.offline ? (token ? "Offline · your draft stays here until JARVIS reconnects." : "Open with jarvis hud to connect. You can draft a message here.")
+      : busy ? "Answering · you can draft your next message." : "Enter to send · / to focus · you approve the actions that need it.";
+    if (status.textContent !== statusText) status.textContent = statusText;
+    status.className = "composer-status" + (S.offline ? " bad" : "");
+    $("send").disabled = S.offline || busy;
+    $("quiet").hidden = !(S.speaking || S.voiceBusy);
     document.title = (S.needYou > 0 ? "(" + S.needYou + ") " : "") + "JARVIS";
   }
-  setInterval(function () {
-    $("clock").textContent = new Date().toLocaleTimeString([], { hour12: false });
-  }, 1000);
+  $("quiet").addEventListener("click", interruptSpeech);
+  $("stage-write").addEventListener("click", function () { $("input").focus(); });
+  $("stage-talk").addEventListener("click", function () { $("mic").click(); });
+  ["stage-ops", "presence-work", "presence-wait"].forEach(function (id) { $(id).addEventListener("click", function () { setOps(true); }); });
+  function paintClock() { $("clock").textContent = new Date().toLocaleTimeString([], { hour12: false }); }
+  paintClock();
+  setInterval(paintClock, 1000);
 
   // ---- asking out loud -------------------------------------------------------------------------------------------
   var WORDS = {
@@ -2238,12 +2317,17 @@
   var ctx = canvas.getContext("2d");
   var W = 0, H = 0;
   var palette = {
-    idle: [94, 227, 255], working: [94, 227, 255], listening: [107, 226, 160],
-    speaking: [159, 184, 255], waiting: [255, 180, 84], offline: [90, 100, 115]
+    idle: [104, 231, 224], working: [104, 231, 224], listening: [165, 214, 160],
+    speaking: [181, 183, 236], waiting: [239, 192, 120], offline: [120, 136, 130]
   };
-  var current = palette.idle.slice();
+  var accentPalette = { mint: [104, 231, 224], ice: [125, 211, 252], amethyst: [196, 181, 253] };
+  function colorForState(mode) {
+    return mode === "idle" || mode === "working" ? accentPalette[document.documentElement.dataset.accent] || accentPalette.mint : palette[mode];
+  }
+  var current = colorForState("idle").slice();
   var energy = 0.12;
-  var calm = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var motionQuery = window.matchMedia ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+  var calm = false;
   // The face is not steered by the pointer. It has a mind of its own (head.js): it looks about, changes expression, blinks and
   // reacts to what is happening. The console only tells it what happened (JarvisHead.emote, nod, shake, mood).
 
@@ -2274,40 +2358,83 @@
     return "rgba(" + Math.round(current[0]) + "," + Math.round(current[1]) + "," + Math.round(current[2]) + "," + alpha + ")";
   }
 
-  // The face stands alone. No rings, no frame, no text on the canvas: the face, a soft light behind it, a few motes of dust that drift
-  // faster when it is busy, a thin line of voice under it while someone is talking, and, while it works, the constellation of what it
-  // is doing (mission.js). Colour and tempo carry the state.
-  var FACE = 0.5;           // the face's size, as a share of the room it has
+  // The orbit is atmosphere, not a progress meter; only daemon state drives the labels and task counts.
+  var FACE = 0.56;
   var motes = [];
   for (var moteIndex = 0; moteIndex < 42; moteIndex += 1) {
     motes.push({ a: moteIndex * 2.399, r: 0.55 + ((moteIndex * 0.618) % 1) * 1.1, sp: (moteIndex % 2 ? 1 : -1) * (0.01 + (moteIndex % 5) * 0.004), size: 0.8 + (moteIndex % 3) * 0.5 });
   }
   var voiceShow = 0, captionAt = "";
 
+  function drawPresenceOrbit(cx, cy, size, t, speed, quiet) {
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = rgba(quiet ? 0.06 : 0.12);
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.7, 0, TAU);
+    ctx.stroke();
+    if (quiet) { ctx.restore(); return; }
+    var turn = calm ? 0 : t * 0.035 * speed;
+    ctx.shadowColor = rgba(0.35);
+    ctx.shadowBlur = 8;
+    for (var segment = 0; segment < 12; segment += 1) {
+      var angle = turn + segment * TAU / 12;
+      ctx.strokeStyle = rgba(segment % 3 === 0 ? 0.42 : 0.16);
+      ctx.lineWidth = segment % 3 === 0 ? 2 : 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, size * 0.75, angle, angle + TAU / 12 * 0.58);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    for (var tick = 0; tick < 60; tick += 1) {
+      var a = tick * TAU / 60;
+      var inner = size * (tick % 5 === 0 ? 0.79 : 0.81);
+      ctx.strokeStyle = rgba(tick % 5 === 0 ? 0.32 : 0.12);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+      ctx.lineTo(cx + Math.cos(a) * size * 0.83, cy + Math.sin(a) * size * 0.83);
+      ctx.stroke();
+    }
+    for (var node = 0; node < 4; node += 1) {
+      var at = -turn * 0.5 + node * TAU / 4;
+      ctx.fillStyle = rgba(0.6);
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(at) * size * 0.7, cy + Math.sin(at) * size * 0.7, 2, 0, TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function draw(t, mode) {
     ctx.clearRect(0, 0, W, H);
     // While the live view is up, the face makes room for it and moves to the right.
     var room = window.JarvisMission ? Math.min(350, W * 0.38) * JarvisMission.dock(W) : 0;
     var avail = W - room;
-    var size = Math.min(avail, H) * FACE;
-    var cx = room + avail / 2, cy = H * 0.46;
+    var top = W < 600 ? 116 : 40, bottom = W < 600 ? 104 : 84;
+    var usable = Math.max(120, H - top - bottom);
+    var size = Math.min(avail * FACE, (usable - 28) / 1.75);
+    var cx = room + avail / 2, cy = top + usable / 2;
+    var quiet = document.documentElement.dataset.atmosphere === "quiet";
     var reach = size * 0.5;
     if (reach < 30) return;
     var speed = calm ? 0.2 : (mode === "working" ? 1.8 : mode === "waiting" ? 1.2 : mode === "offline" ? 0.1 : mode === "idle" ? 0.5 : 1);
 
     // light, wide and faint, so the stage has a presence without an edge
     var halo = ctx.createRadialGradient(cx, cy, size * 0.1, cx, cy, size * 1.5);
-    halo.addColorStop(0, rgba(0.1 + energy * 0.14));
-    halo.addColorStop(0.5, rgba(0.03 + energy * 0.04));
+    halo.addColorStop(0, rgba((0.12 + energy * 0.18) * (quiet ? 0.3 : 1)));
+    halo.addColorStop(0.5, rgba((0.04 + energy * 0.05) * (quiet ? 0.3 : 1)));
     halo.addColorStop(1, rgba(0));
     ctx.fillStyle = halo;
     ctx.fillRect(0, 0, W, H);
 
+    drawPresenceOrbit(cx, cy, size, t, speed, quiet);
+
     // dust drifting round the face
-    motes.forEach(function (mote, index) {
+    if (!quiet) motes.forEach(function (mote, index) {
       var angle = mote.a + (calm ? 0 : t * mote.sp * speed);
       var x = cx + Math.cos(angle) * mote.r * size * 0.95, y = cy + Math.sin(angle) * mote.r * size * 0.72;
-      var twinkle = 0.5 + 0.5 * Math.sin(t * 1.3 + index);
+      var twinkle = calm ? 0.5 : 0.5 + 0.5 * Math.sin(t * 1.3 + index);
       ctx.fillStyle = rgba((0.05 + 0.16 * twinkle) * (0.5 + energy));
       ctx.beginPath();
       ctx.arc(x, y, mote.size, 0, TAU);
@@ -2335,7 +2462,7 @@
       for (var b = 0; b < bars; b += 1) {
         var u = b / (bars - 1);
         var bell = Math.sin(Math.PI * u);
-        var wave = Math.abs(Math.sin(b * 0.9 + t * 7.3) * Math.sin(b * 0.37 - t * 3.1));
+        var wave = calm ? 0.35 : Math.abs(Math.sin(b * 0.9 + t * 7.3) * Math.sin(b * 0.37 - t * 3.1));
         var len = (1.5 + wave * energy * size * 0.12) * (0.25 + 0.75 * bell);
         var x = cx - half + u * half * 2;
         ctx.strokeStyle = rgba((0.18 + 0.6 * bell) * voiceShow);
@@ -2350,11 +2477,11 @@
     if (window.JarvisMission) JarvisMission.draw(ctx, cx, cy, reach, t, current, calm, W, H, room);
 
     // the caption sits just under the face, wherever the face is
-    var place = Math.round(cy + size * 0.8) + "|" + Math.round(room);
+    var place = Math.round(cy + size * 0.87) + "|" + Math.round(room);
     if (place !== captionAt) {
       captionAt = place;
       var label = $("caption");
-      label.style.top = Math.round(cy + size * 0.8) + "px";
+      label.style.top = Math.round(cy + size * 0.87) + "px";
       label.style.bottom = "auto";
       label.style.left = Math.round(room) + "px";
     }
@@ -2362,12 +2489,13 @@
 
   function frame(stamp) {
     var t = stamp / 1000;
+    calm = document.documentElement.dataset.motion === "reduced" || !!(motionQuery && motionQuery.matches);
     var mode = uiState();
-    var target = palette[mode];
+    var target = colorForState(mode);
     for (var i = 0; i < 3; i += 1) current[i] += (target[i] - current[i]) * 0.08;
     readLevel();
     readVoiceLevel();
-    energy += (targetEnergy(mode, t) - energy) * 0.12;
+    energy += (targetEnergy(mode, calm ? 0 : t) - energy) * 0.12;
     draw(t, mode);
     requestAnimationFrame(frame);
   }

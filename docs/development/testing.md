@@ -70,6 +70,17 @@ Two properties are worth preserving if this gate is edited:
   stderr while it runs blocks on EOF that arrives only at exit, which hangs the gate
   instead of failing it.
 
+## Browser console regressions
+
+The embedded HUD has dependency-free Node tests for configuration-overview honesty, settings search and tab focus, offline appearance migration/reset, storage failures, stale loads, restart availability, draft safety, live-counter truthfulness, accent-independent approval colors, shortcut boundaries, dialog focus restoration, quiet atmosphere and stationary reduced-motion orbits:
+
+```text
+node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs
+cargo test -p jarvisd hud::tests --lib
+```
+
+CI runs the JavaScript tests and syntax checks on Windows, macOS and Linux. The Node tests use controlled DOM shims; the Rust tests check the production asset and content-security boundaries. Neither proves a real provider connection or microphone path. For visual changes, additionally open the actual HUD assets in a browser, check narrow and desktop layouts, dialogs, picker Escape behavior, and offline/approval states against isolated fixtures. Do not send test requests through an owner's live model or change their saved permissions.
+
 ## Deterministic Agent Tests
 
 Build a scripted model/runtime that emits a sequence of normalized events. Use it to test:

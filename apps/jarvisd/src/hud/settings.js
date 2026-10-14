@@ -1,21 +1,64 @@
 "use strict";
-// The console's settings: the five tabs, the permissions and Google sign-in (split out of hud.js).
+// The console's settings, permissions and Google sign-in (split out of hud.js).
 //
 // `JarvisSettings(context)` is called once by hud.js at load. It takes the few helpers it shares with the console and wires the
 // settings dialog itself; nothing else in the console calls into it. The same security rules as hud.js hold: every value from the
 // daemon is inserted as text, never as markup, and a key is sent once from a password field and never read back.
+(function () {
+  var appearanceDefaults = { density: "comfortable", motion: "system", accent: "mint", atmosphere: "cinematic" };
+  var appearanceValues = { density: ["comfortable", "compact"], motion: ["system", "reduced"], accent: ["mint", "ice", "amethyst"], atmosphere: ["cinematic", "quiet"] };
+  var appearance = Object.assign({}, appearanceDefaults);
+  var appearanceNote = "Changes apply immediately; no daemon restart is needed.";
+  var appearanceUnsaved = false;
+  function validAppearance(key, value) {
+    return Object.prototype.hasOwnProperty.call(appearanceValues, key) && appearanceValues[key].indexOf(value) >= 0;
+  }
+  try {
+    var stored = JSON.parse(window.localStorage.getItem("jarvis-appearance"));
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      Object.keys(appearanceDefaults).forEach(function (key) {
+        if (validAppearance(key, stored[key])) appearance[key] = stored[key];
+      });
+    }
+  } catch (error) {
+    appearanceNote = "Saved appearance could not be read. Defaults apply for this page; changes apply immediately without a daemon restart.";
+  }
+  function applyAppearance() {
+    Object.keys(appearanceDefaults).forEach(function (key) {
+      document.documentElement.dataset[key] = appearance[key];
+    });
+  }
+  function persistAppearance(reset) {
+    // Persist only this validated, browser-local schema; never capture settings fields or key drafts.
+    var preferences = {};
+    Object.keys(appearanceDefaults).forEach(function (key) {
+      preferences[key] = validAppearance(key, appearance[key]) ? appearance[key] : appearanceDefaults[key];
+    });
+    appearance = preferences;
+    applyAppearance();
+    try {
+      window.localStorage.setItem("jarvis-appearance", JSON.stringify(preferences));
+      appearanceUnsaved = false;
+      appearanceNote = (reset ? "Appearance reset to defaults in this browser." : "Appearance saved in this browser.") + " Applied immediately; no daemon restart is needed.";
+    } catch (error) {
+      appearanceUnsaved = true;
+      appearanceNote = "Appearance applied for this page, but browser storage is unavailable. It will not be remembered after a reload.";
+    }
+  }
+  // Apply before the settings dialog is wired, and leave system motion to the browser's media preference.
+  applyAppearance();
 window.JarvisSettings = function (context) {
   var $ = context.$, el = context.el, api = context.api, putJson = context.putJson, explain = context.explain;
   // Called when needed, not captured now: the tools list helpers are declared in hud.js after the point this is created.
   function families(tools) { return context.families(tools); }
   function familyLabel(group) { return context.familyLabel(group); }
-    // ---- settings: five tabs, each saying what is set, what the default is, and why a setting is off -------------------------
+    // ---- settings: saved configuration and browser-local appearance ------------------------------------------------------
     // The same checks as `jarvis config` and `jarvis keys` (one code path in the daemon). A key is typed into a password field,
     // sent once, and the field is cleared; the daemon never sends it back, only whether it is set.
-    // The tabs are grouped in a side list. Each has a one-line lead and, where it can be told from the saved settings, a dot:
-    // green when it is set up, amber when it is not.
+    // Sidebar dots describe saved configuration, not runtime availability.
     var NAV = [
       ["JARVIS", [
+        ["overview", "Overview", "Your saved setup at a glance: model, folders, accounts and channels, permissions, and browser appearance. Configuration is not a runtime health check."],
         ["brain", "Brain", "Which model JARVIS thinks with, and a second one for when the first is limited or down."],
         ["voice", "Voice & search", "How JARVIS sounds, and how it searches the web. Both are optional."],
         ["files", "Folders & code", "What JARVIS may touch on this computer. Both are off until you turn them on, so nothing is reachable by accident."],
@@ -30,12 +73,14 @@ window.JarvisSettings = function (context) {
         ["connect", "Connect apps", "Let your other AI apps (Claude Code, Cursor, VS Code, your own scripts) and cloud agents hand JARVIS a task. They connect with a key only you have."]
       ]],
       ["System", [
+        ["console", "Console", "Make this console yours: accent, cinematic or quiet atmosphere, comfortable or compact density, and system or reduced motion. Browser-local, immediate and available offline."],
         ["alerts", "Alerts", "How JARVIS reaches you when the console is closed, and when it keeps quiet."],
         ["advanced", "Advanced", "Ports and other technical settings. The defaults are right for almost everyone."]
       ]]
     ];
     var TABS = NAV.reduce(function (all, group) { return all.concat(group[1]); }, []);
-    var sview = { reply: null, tools: [], tab: "brain" };
+    var sview = { reply: null, tools: [], tab: "overview", error: "", toolsError: "", toolsLoaded: false };
+    var navGroups = [], navButtons = {}, settingsLoad = 0;
     function settingsNote(text, bad) {
       var note = $("settings-note");
       note.textContent = text || "";
@@ -45,13 +90,14 @@ window.JarvisSettings = function (context) {
       settingsNote("Could not do that (" + (error.status || "no reply") + ")", true);
     }
     // Changes that only take effect after a restart are listed in the footer, so it is always clear whether one is waiting.
-    var pendingRestart = [];
+    var pendingRestart = [], restartInFlight = false;
     function paintRestart() {
       var hint = $("settings-hint"), button = $("settings-restart");
       var waiting = pendingRestart.length > 0;
       hint.textContent = waiting ? "Waiting for a restart: " + pendingRestart.join(", ") + "." : "Nothing is waiting for a restart.";
       hint.className = "dim" + (waiting ? " hot" : "");
       button.className = waiting ? "hot" : "";
+      button.disabled = !waiting || !sview.reply || !!sview.error || restartInFlight;
     }
     function needsRestart(what) {
       var name = String(what || "A change").replace(/[\s:;]+$/, "").replace(/ (removed|turned off)$/, "");
@@ -63,7 +109,19 @@ window.JarvisSettings = function (context) {
       needsRestart(what);
       loadSettings();
     }
-    function goTab(id) { sview.tab = id; settingsNote(""); renderSettings(); }
+    function focusSettingsTab() {
+      var button = navButtons[sview.tab];
+      if (button && !button.hidden) button.focus(); else $("settings-body").focus();
+    }
+    function goTab(id) {
+      if (!TABS.some(function (tab) { return tab[0] === id; })) return;
+      if (sview.tab !== id) {
+        sview.tab = id;
+        settingsNote("");
+        renderSettings();
+      } else settingsNav();
+      focusSettingsTab();
+    }
     // The first sentence of a long explanation is shown; the rest is one click away. A person reads what a setting does at a glance and
     // opens the details only when they want them.
     function helpNode(text, extraClass) {
@@ -136,12 +194,20 @@ window.JarvisSettings = function (context) {
     }
     // The dot beside a tab. Only what the saved settings can tell is used; nothing here calls out.
     function tabState(id) {
-      if (id === "brain") return settingIsSet("daemon.executor_model_name") ? "ok" : "todo";
+      if (id === "brain") return byKey("daemon.executor_model_name") ? (settingIsSet("daemon.executor_model_name") ? "ok" : "todo") : "";
       if (id === "voice") return keyIsSet("voice") || keyIsSet("search") ? "ok" : "";
       if (id === "files") return settingIsSet("daemon.tool_workspace_roots") || settingIsSet("daemon.code_sandbox_image") || settingIsSet("daemon.code_agent") ? "ok" : "";
-      if (id === "google") return settingIsSet("daemon.google_client_id") && keyIsSet("google") ? "ok" : "todo";
-      if (id === "telegram") return keyIsSet("telegram") ? "ok" : "todo";
-      if (id === "phone") return settingIsSet("daemon.phone_agent_id") && settingIsSet("daemon.phone_number_id") && settingIsSet("daemon.phone_owner_numbers") ? "ok" : "todo";
+      var keys = (sview.reply && sview.reply.keys) || {};
+      if (id === "google") {
+        if (settingIsSet("daemon.google_client_id") && keyIsSet("google")) return "ok";
+        return byKey("daemon.google_client_id") && keys.google && keys.google.state === "unset" ? "todo" : "";
+      }
+      if (id === "telegram") return keyIsSet("telegram") ? "ok" : keys.telegram && keys.telegram.state === "unset" ? "todo" : "";
+      if (id === "phone") {
+        var phoneKeys = ["daemon.phone_agent_id", "daemon.phone_number_id", "daemon.phone_owner_numbers"];
+        if (phoneKeys.every(settingIsSet)) return "ok";
+        return phoneKeys.every(function (key) { return !!byKey(key); }) ? "todo" : "";
+      }
       if (id === "connect") return settingIsSet("daemon.mcp_serve_port") ? "ok" : "";
       return "";
     }
@@ -197,9 +263,18 @@ window.JarvisSettings = function (context) {
     function afterSave(setting, live, what) {
       if (live) { settingsNote(what + " saved."); loadSettings(); } else saved(what);
     }
+    var controlNumber = 0;
+    function describeControl(field, label, help) {
+      if (!field.id) field.id = "settings-field-" + (++controlNumber);
+      label.setAttribute("for", field.id);
+      if (help) {
+        help.id = field.id + "-help";
+        field.setAttribute("aria-describedby", help.id);
+      }
+    }
     function settingRow(setting, label, live) {
       var row = el("div", "set-row");
-      var name = el("span", "name", labelFor(setting, label));
+      var name = el("label", "name", labelFor(setting, label));
       name.title = setting.key;
       name.appendChild(stateBadge(setting));
       var field = el("input");
@@ -226,16 +301,19 @@ window.JarvisSettings = function (context) {
         });
         acts.appendChild(unset);
       }
+      var help = helpNode(isSetting(setting) ? setting.help : setting.unset_means);
+      describeControl(field, name, help);
+      save.setAttribute("aria-label", "Save " + labelFor(setting, label));
       row.appendChild(name);
       row.appendChild(field);
       row.appendChild(acts);
-      row.appendChild(helpNode(isSetting(setting) ? setting.help : setting.unset_means));
+      row.appendChild(help);
       return row;
     }
     // An on/off setting is a switch that saves as soon as it is flipped. The state shown is the one in force: what was saved, or the default.
     function toggleRow(setting, label, live) {
       var row = el("div", "set-row toggle");
-      var name = el("span", "name", labelFor(setting, label));
+      var name = el("label", "name", labelFor(setting, label));
       name.title = setting.key;
       var on = isSetting(setting) ? /^(on|true|yes)$/i.test(String(setting.value)) : /^(on|true|yes)$/i.test(String(setting.default || "off"));
       var wrap = el("label", "switch");
@@ -262,13 +340,14 @@ window.JarvisSettings = function (context) {
       var short = SHORT[setting.key];
       var long = isSetting(setting) ? setting.help : setting.unset_means;
       var help = helpNode(short ? short + " " + long : long);
+      describeControl(box, name, help);
       row.appendChild(help);
       return row;
     }
     // A setting with a few fixed answers is a list to pick from, not a box to type a word into.
     function choiceRow(setting, label, options, live) {
       var row = el("div", "set-row");
-      var name = el("span", "name", labelFor(setting, label));
+      var name = el("label", "name", labelFor(setting, label));
       name.title = setting.key;
       name.appendChild(stateBadge(setting));
       var select = el("select");
@@ -281,10 +360,12 @@ window.JarvisSettings = function (context) {
         request.then(function () { afterSave(setting, live, labelFor(setting, label)); },
           function (error) { settingsNote(explain(error, "That was refused."), true); loadSettings(); });
       });
+      var help = helpNode(isSetting(setting) ? setting.help : setting.unset_means);
+      describeControl(select, name, help);
       row.appendChild(name);
       row.appendChild(select);
       row.appendChild(el("span"));
-      row.appendChild(helpNode(isSetting(setting) ? setting.help : setting.unset_means));
+      row.appendChild(help);
       return row;
     }
     // Any setting in the right shape for its kind.
@@ -294,12 +375,15 @@ window.JarvisSettings = function (context) {
     function keyRow(which, label) {
       var state = sview.reply && sview.reply.keys && sview.reply.keys[which] ? sview.reply.keys[which].state : "unknown";
       var row = el("div", "set-row");
-      var name = el("span", "name", label);
+      var name = el("label", "name", label);
       name.appendChild(el("span", "badge " + (state === "set" ? "on" : "off"), state));
       var field = el("input");
       field.type = "password";
+      field.id = "settings-key-" + which;
       field.autocomplete = "off";
-      field.placeholder = state === "set" ? "set; paste a new key to replace it" : "paste a key";
+      field.spellcheck = false;
+      field.setAttribute("autocapitalize", "none");
+      field.placeholder = state === "set" ? "Saved key hidden; paste a replacement" : "Paste a key; never shown after saving";
       var acts = el("div", "acts");
       var save = el("button", "", "Save key");
       save.addEventListener("click", function () {
@@ -342,7 +426,10 @@ window.JarvisSettings = function (context) {
         fallback: "The key of the different provider you gave above for the fallback model. Stored in a private file and never shown again; when the main model is limited, what the run is saying is sent to that provider. Check it with `jarvis keys test fallback`.",
         search: "An Ollama API key; a free account at ollama.com can make one. It turns on web search; what JARVIS searches for is sent to ollama.com. The key is stored in a private file and never shown again. Press Test to check it."
       };
-      row.appendChild(helpNode(helps[which] || ""));
+      var help = helpNode(helps[which] || "Keys are write-only and never displayed after saving.");
+      describeControl(field, name, help);
+      save.setAttribute("aria-label", "Save " + label);
+      row.appendChild(help);
       row.appendChild(result);
       return row;
     }
@@ -356,9 +443,11 @@ window.JarvisSettings = function (context) {
       var found = all.filter(function (p) { return p.url && normUrl(p.url) === normUrl(url); })[0];
       return found || all.filter(function (p) { return p.id === "custom"; })[0];
     }
-    function providerRow(label, control, acts, help) {
+    function providerRow(label, control, acts, help, field) {
       var row = el("div", "set-row");
-      row.appendChild(el("span", "name", label));
+      var name = el("label", "name", label);
+      describeControl(field || control, name, help);
+      row.appendChild(name);
       row.appendChild(control);
       row.appendChild(acts || el("span"));
       if (help) row.appendChild(help);
@@ -373,6 +462,7 @@ window.JarvisSettings = function (context) {
       var toggle = el("button", "combo-toggle", "\u25BE");
       toggle.type = "button";
       toggle.title = "Show the models";
+      toggle.setAttribute("aria-label", "Show model choices");
       var menu = el("ul", "combo-list");
       menu.hidden = true;
       wrap.appendChild(input);
@@ -459,17 +549,26 @@ window.JarvisSettings = function (context) {
       card.appendChild(title);
       card.appendChild(el("p", "lead", fallback
         ? "Asked instead when the main model is rate limited, overloaded, down or out of credit. A different provider keeps JARVIS working through an outage; what a run is saying is then sent to that provider."
-        : "The model JARVIS thinks with. Pick a provider, paste its key, load the list of models, and test before saving."));
+        : "Choose a provider and model. Loading models and testing are optional, explicit provider requests. A submitted key is cleared; paste it again when saving if it is not already on file."));
 
       var select = el("select");
+      select.id = "settings-model-" + slot + "-provider";
       presets.forEach(function (p) { var option = el("option", "", p.name); option.value = p.id; select.appendChild(option); });
       var address = el("input");
+      address.id = "settings-model-" + slot + "-address";
       address.type = "text";
+      address.spellcheck = false;
       var keyBox = el("input");
+      keyBox.id = "settings-model-" + slot + "-key";
       keyBox.type = "password";
       keyBox.autocomplete = "off";
+      keyBox.spellcheck = false;
+      keyBox.setAttribute("autocapitalize", "none");
       var model = el("input");
+      model.id = "settings-model-" + slot + "-name";
       model.type = "text";
+      model.autocomplete = "off";
+      model.spellcheck = false;
       model.value = modelSetting && modelSetting.value ? String(modelSetting.value) : "";
       model.placeholder = "choose from the list, or type a model name";
       var picker = modelPicker(model);
@@ -498,6 +597,7 @@ window.JarvisSettings = function (context) {
       function say(text, bad) { status.textContent = text; status.className = "help " + (bad ? "bad" : ""); }
       select.addEventListener("change", function () {
         var p = chosen();
+        keyBox.value = "";
         if (p.id !== "custom") address.value = p.url;
         if (p.id === "custom" && !addressChanged()) address.value = "";
         picker.setModels([], false);
@@ -519,6 +619,7 @@ window.JarvisSettings = function (context) {
           if (!model.value.trim()) { say("Choose or type a model to test.", true); return; }
           body.test_model = model.value.trim();
         }
+        keyBox.value = "";
         say(test ? "Asking the model..." : "Asking the provider for its models...");
         putJson("/settings/models", "POST", body).then(function (reply) {
           picker.setModels(reply.models || [], true);
@@ -551,20 +652,21 @@ window.JarvisSettings = function (context) {
           if (isSame() && fallback && keyState === "set") return putJson("/settings/keys/fallback", "DELETE");
           return Promise.resolve();
         };
+        keyBox.value = "";
         putJson("/settings", "PUT", { changes: changes }).then(keyStep).then(function () {
-          keyBox.value = "";
           saved(fallback ? "Fallback model" : "Main model");
         }, function (error) { say(explain(error, "That was refused."), true); });
       });
       var acts = el("div", "acts");
       acts.appendChild(load); acts.appendChild(test); acts.appendChild(save);
 
-      addressRow = providerRow("Address", address);
-      keyRowNode = providerRow("Key" + (keyState === "set" ? " (set)" : ""), keyBox);
+      addressRow = providerRow("Provider address", address);
+      keyRowNode = providerRow("API key" + (keyState === "set" ? " (saved, hidden)" : ""), keyBox, null,
+        helpNode("Write-only: the key is cleared when submitted and is never stored in browser preferences."));
       card.appendChild(providerRow("Provider", select, null, providerHelp));
       card.appendChild(addressRow);
       card.appendChild(keyRowNode);
-      card.appendChild(providerRow("Model", picker.element, acts, status));
+      card.appendChild(providerRow("Model name", picker.element, acts, status, model));
       refreshFields();
       return card;
     }
@@ -596,6 +698,9 @@ window.JarvisSettings = function (context) {
       var field = el("input");
       field.type = "text"; field.autocomplete = "off"; field.spellcheck = false;
       field.placeholder = "Full path, e.g. " + (setting.example || "C:/Users/me/notes").split(";")[0].trim();
+      var pathLabel = el("label", "help", "Folder path");
+      describeControl(field, pathLabel);
+      card.appendChild(pathLabel);
       var go = el("button", "yes", "Add folder");
       function addIt() {
         var path = field.value.trim();
@@ -628,15 +733,19 @@ window.JarvisSettings = function (context) {
       card.appendChild(needs);
       var presets = el("div", "acts");
       var row = el("div", "set-row");
-      row.appendChild(el("span", "name", "Image"));
+      var imageLabel = el("label", "name", "Sandbox image");
+      row.appendChild(imageLabel);
       var imageField = el("input");
       imageField.type = "text"; imageField.value = showFor(image); imageField.placeholder = "e.g. " + image.example;
+      describeControl(imageField, imageLabel);
       row.appendChild(imageField);
       row.appendChild(el("span"));
       var row2 = el("div", "set-row");
-      row2.appendChild(el("span", "name", "Command"));
+      var commandLabel = el("label", "name", "Interpreter command");
+      row2.appendChild(commandLabel);
       var commandField = el("input");
       commandField.type = "text"; commandField.value = showFor(command); commandField.placeholder = "e.g. " + command.example;
+      describeControl(commandField, commandLabel);
       [["Node", "node:22-alpine", "node -e"], ["Python", "python:3.13-alpine", "python -c"]].forEach(function (preset) {
         var button = el("button", "", "Use " + preset[0]);
         button.addEventListener("click", function () { imageField.value = preset[1]; commandField.value = preset[2]; });
@@ -837,6 +946,9 @@ window.JarvisSettings = function (context) {
       var bar = el("div", "permtools");
       var search = el("input");
       search.type = "search"; search.placeholder = "Find a tool, for example mail or browser"; search.value = permFilter.text; search.autocomplete = "off";
+      var searchLabel = el("label", "help", "Find a tool");
+      describeControl(search, searchLabel);
+      bar.appendChild(searchLabel);
       var only = el("input"); only.type = "checkbox"; only.checked = permFilter.changedOnly;
       var onlyLabel = el("label", "", " Only the ones I changed (" + changedCount + ")");
       onlyLabel.insertBefore(only, onlyLabel.firstChild);
@@ -880,8 +992,10 @@ window.JarvisSettings = function (context) {
     function permissionRow(tool, postures) {
       var row = el("div", "perm");
       var label = el("div");
-      label.appendChild(el("div", "tname", tool.title || tool.id));
-      label.appendChild(el("div", "tid", tool.id + "  \u2022  risk " + tool.risk + (tool.asks_first ? "  \u2022  asks by default" : "  \u2022  runs by default")));
+      var name = el("label", "tname", tool.title || tool.id);
+      var detail = el("div", "tid", tool.id + "  \u2022  risk " + tool.risk + (tool.asks_first ? "  \u2022  asks by default" : "  \u2022  runs by default"));
+      label.appendChild(name);
+      label.appendChild(detail);
       var select = el("select");
       POSTURES.forEach(function (option) {
         var node = el("option", "", option[1]);
@@ -889,6 +1003,7 @@ window.JarvisSettings = function (context) {
         select.appendChild(node);
       });
       select.value = postures[tool.id] || "default";
+      describeControl(select, name, detail);
       // A saved "run without asking" that the rules still hold must say so, rather than look ignored.
       if (select.value === "trusted" && tool.asks_first) label.appendChild(el("div", "tid bad", "still asks: a stricter rule applies to it"));
       var outward = (tool.effects || []).indexOf("external_communication") >= 0;
@@ -1434,6 +1549,7 @@ window.JarvisSettings = function (context) {
           }
           holder.appendChild(mcpAddForm(reload));
           if (reply.restart_needed) {
+            needsRestart("Programs");
             var banner = el("div", "card");
             banner.appendChild(el("p", "lead", "A restart switches your changes on."));
             var go = el("button", "yes", "Restart now");
@@ -1597,6 +1713,7 @@ window.JarvisSettings = function (context) {
           card.appendChild(acts);
           holder.appendChild(card);
           if (info.restart_needed) {
+            needsRestart("Connect apps");
             var banner = el("div", "card");
             banner.appendChild(el("p", "lead", "One restart switches this on or off."));
             var go = el("button", "yes", "Restart now");
@@ -1654,33 +1771,294 @@ window.JarvisSettings = function (context) {
       }
       reload();
     }
+    // Original local line icons. No markup or external assets enter the settings DOM.
+    var SVG = "http:" + "//www.w3.org/2000/svg";
+    var ICON_PATHS = {
+      overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
+      brain: "M12 3v18 M12 5C8 1 4 4 5 8C1 10 2 15 5 16C4 20 9 23 12 19 M12 5C16 1 20 4 19 8C23 10 22 15 19 16C20 20 15 23 12 19 M5 8l3 2 M19 8l-3 2 M5 16l3-2 M19 16l-3-2",
+      voice: "M4 9v6 M8 5v14 M12 2v20 M16 5v14 M20 9v6",
+      files: "M3 6h7l2 3h9v12H3z M3 6V3h7l2 3h6v3",
+      permissions: "M12 2l8 3v7c0 5-8 10-8 10S4 17 4 12V5z M8 12l3 3 5-6",
+      google: "M16 7a4 4 0 1 1-8 0a4 4 0 1 1 8 0 M4 21v-3c0-5 16-5 16 0v3 M17 4l3 3 2-3",
+      telegram: "M3 5h18v12H11l-6 4v-4H3z M7 9h10 M7 13h6",
+      phone: "M5 3h4l2 5-3 2c2 4 3 5 6 6l2-3 5 2v4c-9 4-22-9-16-16z",
+      connect: "M8 4H3v7h5z M21 13h-5v7h5z M8 7h5v10h3 M10 4l3 3-3 3 M14 14l3 3-3 3",
+      console: "M3 3h18v14H3z M9 21h6 M12 17v4 M7 7l3 3-3 3 M12 13h5",
+      alerts: "M5 17h14l-2-4V8a5 5 0 0 0-10 0v5z M9 20c1 2 5 2 6 0 M12 1v2",
+      advanced: "M3 5h18 M3 12h18 M3 19h18 M7 2v6 M17 9v6 M10 16v6"
+    };
+    function settingsIcon(id, className) {
+      var svg = document.createElementNS(SVG, "svg");
+      svg.setAttribute("class", className);
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("width", "18");
+      svg.setAttribute("height", "18");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "1.6");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("focusable", "false");
+      var path = document.createElementNS(SVG, "path");
+      path.setAttribute("d", ICON_PATHS[id] || ICON_PATHS.overview);
+      svg.appendChild(path);
+      return svg;
+    }
+    function settingsHero(tab) {
+      var hero = el("div", "settings-hero");
+      hero.appendChild(settingsIcon(tab[0], "settings-hero-icon"));
+      var copy = el("div", "settings-hero-copy");
+      copy.appendChild(el("h3", "", tab[1]));
+      copy.appendChild(el("p", "", tab[2]));
+      hero.appendChild(copy);
+      return hero;
+    }
+    function overviewPanel(body) {
+      var known = !!sview.reply && !sview.error;
+      var summary = el("p", "help overview-safety" + (sview.error ? " bad" : ""), known
+        ? "Saved setup only. Runtime availability has not been checked."
+        : sview.error || "Loading saved daemon configuration. Setup is unknown until it loads; Console appearance remains available in this browser.");
+      summary.setAttribute("role", "status");
+      if (known) {
+        var explanation = "Saved settings and key presence do not prove a service is connected or healthy. No provider tests run here.";
+        summary.setAttribute("title", explanation);
+        summary.setAttribute("aria-description", explanation);
+      }
+      body.appendChild(summary);
+      var grid = el("div", "overview-grid");
+      function card(title, state, items, actions) {
+        var node = el("section", "overview-card");
+        node.appendChild(el("h4", "", title));
+        node.appendChild(el("span", "overview-state", state));
+        node.appendChild(checklist(items));
+        var buttons = el("div", "overview-actions");
+        actions.forEach(function (action) {
+          var button = el("button", "", action[1]);
+          button.id = "settings-overview-" + action[0];
+          button.type = "button";
+          button.addEventListener("click", function () { goTab(action[0]); });
+          buttons.appendChild(button);
+        });
+        node.appendChild(buttons);
+        grid.appendChild(node);
+      }
+      function unknown(text) { return [{ done: false, text: text + " Saved configuration is unavailable." }]; }
+      var model = known && byKey("daemon.executor_model_name"), modelSaved = known && settingIsSet("daemon.executor_model_name");
+      card("Model", !known ? "Unknown" : modelSaved ? "Model name saved" : model ? "Choose a model" : "Not reported", known ? [
+        { done: modelSaved, text: modelSaved ? "Main model name is saved." : model ? "Choose the model JARVIS should think with." : "The main model setting was not reported.", tab: "brain", tabLabel: "Choose model" },
+        { done: keyIsSet("model"), text: keyIsSet("model") ? "Main provider key is saved; its value stays hidden." : "No saved main provider key is reported. Local providers may not need one." }
+      ] : unknown("Model and provider key presence are unknown."), [["brain", "Model settings"]]);
+      var folders = known && byKey("daemon.tool_workspace_roots");
+      var roots = folders && settingIsSet(folders.key) ? String(folders.value).split(", ").filter(Boolean).length : 0;
+      var codeSaved = known && (settingIsSet("daemon.code_agent") || settingIsSet("daemon.code_sandbox_image"));
+      card("Folders & code", !known ? "Unknown" : roots ? roots + (roots === 1 ? " folder saved" : " folders saved") : folders ? "No folders saved" : "Not reported", known ? [
+        { done: roots > 0, text: roots ? roots + (roots === 1 ? " folder grant is saved;" : " folder grants are saved;") + " no paths are displayed here." : folders ? "No folder grants are saved. Add only folders you want JARVIS to use." : "Folder grants were not reported.", tab: "files", tabLabel: "Review folders" },
+        { done: codeSaved, text: codeSaved ? "A coding agent or sandbox image is saved; runtime availability is unverified." : "Coding agents and code sandboxes are optional." }
+      ] : unknown("Folder grants and code configuration are unknown."), [["files", "Folders & code"]]);
+      var googleSaved = known && settingIsSet("daemon.google_client_id") && keyIsSet("google");
+      var telegramSaved = known && keyIsSet("telegram");
+      var phoneSaved = known && ["daemon.phone_agent_id", "daemon.phone_number_id", "daemon.phone_owner_numbers"].every(settingIsSet);
+      var accountCount = Number(googleSaved) + Number(telegramSaved) + Number(phoneSaved);
+      card("Accounts & channels", known ? accountCount + (accountCount === 1 ? " saved setup entry" : " saved setup entries") : "Unknown", known ? [
+        { done: googleSaved, text: googleSaved ? "Google client ID and secret are saved; account sign-in is unverified." : "Google client setup is incomplete or not reported.", tab: "google", tabLabel: "Google setup" },
+        { done: telegramSaved, text: telegramSaved ? "Telegram key is saved; chat access is unverified." : "No saved Telegram key is reported.", tab: "telegram", tabLabel: "Telegram setup" },
+        { done: phoneSaved, text: phoneSaved ? "Phone IDs and owner numbers are saved; calling is unverified." : "Phone IDs or owner numbers are missing or not reported.", tab: "phone", tabLabel: "Phone setup" }
+      ] : unknown("Optional account and channel setup is unknown."), [["google", "Google"], ["telegram", "Telegram"], ["phone", "Phone"]]);
+      var postures = known && sview.reply.postures;
+      var overrides = postures ? Object.keys(postures).filter(function (key) { return postures[key] !== "default"; }).length : 0;
+      card("Permissions", !known ? "Unknown" : !postures ? "Not reported" : overrides ? overrides + (overrides === 1 ? " saved override" : " saved overrides") : "Default choices", known ? [
+        { done: !!postures, text: postures ? overrides + (overrides === 1 ? " tool posture override is saved." : " tool posture overrides are saved.") + " Deterministic rules still decide what may run." : "Saved tool posture choices were not reported." },
+        { done: false, text: "Review tool-level choices and approval behavior before widening access.", tab: "permissions", tabLabel: "Review permissions" }
+      ] : unknown("Saved permission choices are unknown; no permissions are changed here."), [["permissions", "Permissions"]]);
+      card("Console", "Browser-local", [
+        { done: true, text: "Accent, atmosphere, density and motion apply immediately, including offline." },
+        { done: !appearanceUnsaved, text: appearanceUnsaved ? "Current appearance applies to this page only; browser storage is unavailable." : "Appearance stays in this browser, separate from daemon configuration." }
+      ], [["console", "Customize Console"]]);
+      body.appendChild(grid);
+    }
+    function settingsNav() {
+      var nav = $("settings-tabs"), search = $("settings-search"), empty = $("settings-search-empty");
+      if (!navGroups.length) {
+        nav.replaceChildren();
+        nav.setAttribute("role", "tablist");
+        nav.setAttribute("aria-orientation", "vertical");
+        if (!nav.getAttribute("aria-label")) nav.setAttribute("aria-label", "Settings sections");
+        NAV.forEach(function (group) {
+          var heading = el("div", "navgroup", group[0]);
+          var entries = [];
+          nav.appendChild(heading);
+          group[1].forEach(function (tab) {
+            var button = el("button");
+            button.id = "settings-tab-" + tab[0];
+            button.type = "button";
+            button.setAttribute("role", "tab");
+            button.setAttribute("aria-controls", "settings-body");
+            button.appendChild(settingsIcon(tab[0], "settings-nav-icon"));
+            button.appendChild(el("span", "settings-nav-label", tab[1]));
+            var dot = el("span", "dot");
+            dot.setAttribute("aria-hidden", "true");
+            button.appendChild(dot);
+            button.addEventListener("click", function () { goTab(tab[0]); });
+            nav.appendChild(button);
+            navButtons[tab[0]] = button;
+            entries.push({ tab: tab, button: button, dot: dot });
+          });
+          navGroups.push({ heading: heading, entries: entries });
+        });
+        nav.addEventListener("keydown", function (event) {
+          if (["ArrowUp", "ArrowDown", "Home", "End"].indexOf(event.key) < 0) return;
+          var visible = settingsNav(), index = visible.indexOf(event.target);
+          if (index < 0) return;
+          event.preventDefault();
+          if (event.key === "Home") index = 0;
+          else if (event.key === "End") index = visible.length - 1;
+          else index = (index + (event.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length;
+          goTab(visible[index].id.replace("settings-tab-", ""));
+        });
+      }
+      var terms = ((search && search.value) || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+      var visible = [];
+      navGroups.forEach(function (group) {
+        var shown = false;
+        group.entries.forEach(function (entry) {
+          var tab = entry.tab, button = entry.button;
+          var text = (tab[1] + " " + tab[2]).toLowerCase();
+          button.hidden = !terms.every(function (term) { return text.indexOf(term) >= 0; });
+          if (!button.hidden) { visible.push(button); shown = true; }
+          var selected = sview.tab === tab[0];
+          button.className = selected ? "on" : "";
+          button.setAttribute("aria-selected", selected ? "true" : "false");
+          var state = sview.reply && !sview.error ? tabState(tab[0]) : "";
+          var status = tab[0] === "console" ? "Local appearance preferences; no daemon connection required."
+            : sview.error ? "Configuration unknown: daemon settings could not be loaded."
+            : !sview.reply ? "Configuration unknown: daemon settings have not loaded."
+            : tab[0] === "overview" ? "Saved configuration overview; runtime availability has not been checked."
+            : state === "ok" ? "Configured in saved settings; runtime availability has not been checked."
+            : state === "todo" ? "Not fully configured in saved settings; runtime availability has not been checked."
+            : "Configuration status unknown; saved settings do not establish runtime availability.";
+          entry.dot.className = "dot" + (state ? " " + state : "");
+          entry.dot.title = status;
+          button.title = tab[2] + " " + status;
+          button.setAttribute("aria-label", tab[1] + ". " + status);
+        });
+        group.heading.hidden = !shown;
+      });
+      var stop = visible.indexOf(navButtons[sview.tab]) >= 0 ? navButtons[sview.tab] : visible[0];
+      TABS.forEach(function (tab) { navButtons[tab[0]].tabIndex = navButtons[tab[0]] === stop ? 0 : -1; });
+      if (empty) {
+        empty.hidden = visible.length > 0;
+        empty.textContent = visible.length ? "" : "No settings sections match your search.";
+      }
+      return visible;
+    }
+    function consolePanel(body) {
+      var card = el("div", "card console-options");
+      card.appendChild(el("div", "secthead", "Appearance"));
+      card.appendChild(el("p", "help", "Stored only in this browser. These preferences do not change providers, permissions or daemon settings, and work while JARVIS is offline."));
+      var preview = el("div", "appearance-preview");
+      preview.setAttribute("role", "group");
+      preview.setAttribute("aria-label", "Live appearance preview");
+      var orbit = el("div", "preview-orbit"), core = el("div", "preview-core"), caption = el("span", "preview-caption");
+      orbit.setAttribute("aria-hidden", "true");
+      core.setAttribute("aria-hidden", "true");
+      preview.appendChild(orbit); preview.appendChild(core); preview.appendChild(caption);
+      card.appendChild(preview);
+      card.appendChild(el("p", "help", "The preview follows your choices. Approval, listening and error colors keep their own meaning."));
+      var note = el("p", "help" + (appearanceUnsaved ? " bad" : ""), appearanceNote);
+      note.setAttribute("role", "status");
+      var controls = {};
+      function updatePreview() {
+        var names = { mint: "Mint", ice: "Ice", amethyst: "Amethyst", cinematic: "Cinematic", quiet: "Quiet", comfortable: "Comfortable", compact: "Compact", system: "System motion", reduced: "Reduced motion" };
+        caption.textContent = [appearance.accent, appearance.atmosphere, appearance.density, appearance.motion].map(function (key) { return names[key]; }).join(" / ");
+        note.className = "help" + (appearanceUnsaved ? " bad" : "");
+        note.textContent = appearanceNote;
+      }
+      function optionRow(key, title, options, hint) {
+        var row = el("div", "set-row"), id = "settings-console-" + key;
+        var label = el("label", "name", title);
+        label.setAttribute("for", id);
+        var select = el("select");
+        select.id = id;
+        controls[key] = select;
+        options.forEach(function (option) {
+          var item = el("option", "", option[1]);
+          item.value = option[0];
+          select.appendChild(item);
+        });
+        select.value = appearance[key];
+        var help = el("span", "help", hint);
+        help.id = id + "-help";
+        select.setAttribute("aria-describedby", help.id);
+        select.addEventListener("change", function () {
+          if (!validAppearance(key, select.value)) {
+            select.value = appearance[key];
+            note.textContent = "That appearance choice is not supported. The previous preference is unchanged.";
+            note.className = "help bad";
+            return;
+          }
+          appearance[key] = select.value;
+          persistAppearance(false);
+          updatePreview();
+        });
+        row.appendChild(label);
+        row.appendChild(select);
+        row.appendChild(help);
+        return row;
+      }
+      card.appendChild(optionRow("accent", "Accent", [["mint", "Mint"], ["ice", "Ice"], ["amethyst", "Amethyst"]], "Tint the console and hologram. Status and approval colors are independent."));
+      card.appendChild(optionRow("atmosphere", "Atmosphere", [["cinematic", "Cinematic"], ["quiet", "Quiet"]], "Cinematic adds ambient detail; quiet softens the background without changing functionality."));
+      card.appendChild(optionRow("density", "Density", [["comfortable", "Comfortable"], ["compact", "Compact"]], "Comfortable gives controls more space; compact fits more on screen."));
+      card.appendChild(optionRow("motion", "Motion", [["system", "Use system preference"], ["reduced", "Reduce motion"]], "System follows your device's reduced-motion preference. Reduce motion always minimizes animation."));
+      var actions = el("div", "acts"), reset = el("button", "", "Reset appearance");
+      reset.id = "settings-console-reset";
+      reset.type = "button";
+      reset.addEventListener("click", function () {
+        appearance = Object.assign({}, appearanceDefaults);
+        persistAppearance(true);
+        Object.keys(controls).forEach(function (key) { controls[key].value = appearance[key]; });
+        updatePreview();
+      });
+      actions.appendChild(reset);
+      card.appendChild(actions);
+      card.appendChild(note);
+      updatePreview();
+      body.appendChild(card);
+    }
     var lastTab = "";
     function renderSettings() {
-      var nav = $("settings-tabs"), body = $("settings-body");
+      var body = $("settings-body");
       // A switch or a save redraws the tab; stay where the person was scrolling instead of jumping to the top.
       var scrolled = lastTab === sview.tab ? body.scrollTop : 0;
+      var focusId = lastTab === sview.tab && sview.tab === "overview" && document.activeElement ? document.activeElement.id : "";
       lastTab = sview.tab;
-      nav.replaceChildren();
+      settingsNav();
       body.replaceChildren();
-      NAV.forEach(function (group) {
-        nav.appendChild(el("div", "navgroup", group[0]));
-        group[1].forEach(function (tab) {
-          var button = el("button", sview.tab === tab[0] ? "on" : "");
-          button.type = "button";
-          button.setAttribute("role", "tab");
-          button.setAttribute("aria-selected", sview.tab === tab[0] ? "true" : "false");
-          button.appendChild(el("span", "", tab[1]));
-          var state = sview.reply ? tabState(tab[0]) : "";
-          var dot = el("span", "dot" + (state ? " " + state : ""));
-          dot.title = state === "ok" ? "Set up" : state === "todo" ? "Not set up yet" : "";
-          button.appendChild(dot);
-          button.addEventListener("click", function () { goTab(tab[0]); });
-          nav.appendChild(button);
-        });
-      });
+      body.setAttribute("role", "tabpanel");
+      body.setAttribute("aria-labelledby", "settings-tab-" + sview.tab);
+      body.tabIndex = 0;
       var current = TABS.filter(function (tab) { return tab[0] === sview.tab; })[0];
-      body.appendChild(el("p", "lead tablead", current[2]));
-      if (!sview.reply) return;
+      var sectionLabel = $("settings-section-label");
+      if (sectionLabel) sectionLabel.textContent = current[1];
+      body.appendChild(settingsHero(current));
+      if (sview.tab === "overview") {
+        overviewPanel(body);
+        body.scrollTop = scrolled;
+        if (focusId.indexOf("settings-overview-") === 0 && $(focusId)) $(focusId).focus();
+        return;
+      }
+      if (sview.tab === "console") {
+        consolePanel(body);
+        body.scrollTop = scrolled;
+        return;
+      }
+      if (!sview.reply || sview.error) {
+        var unavailable = el("p", "help" + (sview.error ? " bad" : ""), sview.error || "Loading daemon settings. Console appearance preferences are available without a daemon connection.");
+        unavailable.setAttribute("role", "status");
+        body.appendChild(unavailable);
+        body.scrollTop = scrolled;
+        return;
+      }
       var settings = sview.reply.settings || [];
       var inGroup = function (name) { return settings.filter(function (s) { return s.group === name && !/(_api_key_ref|_secret_ref)$/.test(s.key); }); };
       if (sview.tab === "brain") {
@@ -1723,7 +2101,11 @@ window.JarvisSettings = function (context) {
       } else if (sview.tab === "connect") {
         connectPanel(body);
       } else if (sview.tab === "permissions") {
-        permissionsPanel(body);
+        if (sview.toolsError || !sview.toolsLoaded) {
+          var toolsNote = el("p", "help" + (sview.toolsError ? " bad" : ""), sview.toolsError || "Loading tool permissions.");
+          toolsNote.setAttribute("role", "status");
+          body.appendChild(toolsNote);
+        } else permissionsPanel(body);
       } else if (sview.tab === "google") {
         googlePanel(body);
       } else if (sview.tab === "telegram") {
@@ -1749,14 +2131,45 @@ window.JarvisSettings = function (context) {
       body.scrollTop = scrolled;
     }
     function loadSettings() {
-      api("/settings").then(function (reply) { sview.reply = reply; renderSettings(); }, failure);
-      api("/tools").then(function (reply) { sview.tools = reply.tools || []; if (sview.tab === "permissions") renderSettings(); }, function () { sview.tools = []; });
+      var request = ++settingsLoad;
+      sview.error = "";
+      sview.toolsError = "";
+      function refresh() {
+        paintRestart();
+        // Daemon replies must not replace a local control while the person is changing it.
+        if (sview.tab === "console") settingsNav(); else renderSettings();
+      }
+      api("/settings").then(function (reply) {
+        if (request !== settingsLoad) return;
+        sview.reply = reply;
+        sview.error = "";
+        refresh();
+      }, function (error) {
+        if (request !== settingsLoad) return;
+        sview.reply = null;
+        sview.error = "Could not load daemon settings (" + ((error && error.status) || "no reply") + "). Configuration is unknown. Console appearance preferences remain available locally.";
+        if (sview.tab !== "console") settingsNote(sview.error, true);
+        refresh();
+      });
+      api("/tools").then(function (reply) {
+        if (request !== settingsLoad) return;
+        sview.tools = reply.tools || [];
+        sview.toolsLoaded = true;
+        if (sview.tab === "permissions") renderSettings();
+      }, function (error) {
+        if (request !== settingsLoad) return;
+        sview.tools = [];
+        sview.toolsLoaded = false;
+        sview.toolsError = "Could not load tool permissions (" + ((error && error.status) || "no reply") + "). Their current configuration is unknown.";
+        if (sview.tab === "permissions") renderSettings();
+      });
     }
     function openSettings() {
       $("settings").hidden = false;
       settingsNote("");
       paintRestart();
       renderSettings();
+      focusSettingsTab();
       loadSettings();
     }
     function closeSettings() { $("settings").hidden = true; }
@@ -1801,6 +2214,12 @@ window.JarvisSettings = function (context) {
     setInterval(checkAttention, 20000);
     $("open-settings").addEventListener("click", openSettings);
     $("settings-close").addEventListener("click", closeSettings);
+    var settingsSearch = $("settings-search"), settingsEmpty = $("settings-search-empty");
+    if (settingsSearch) {
+      settingsSearch.setAttribute("aria-controls", "settings-tabs");
+      settingsSearch.addEventListener("input", settingsNav);
+    }
+    if (settingsEmpty) settingsEmpty.setAttribute("role", "status");
     $("settings").addEventListener("click", function (event) { if (event.target === $("settings")) closeSettings(); });
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape" && !$("settings").hidden) {
@@ -1813,14 +2232,20 @@ window.JarvisSettings = function (context) {
     var restartForce = false;
     $("settings-restart").addEventListener("click", function () {
       var button = $("settings-restart");
+      if (!pendingRestart.length || !sview.reply || sview.error || restartInFlight) return;
+      restartInFlight = true;
+      paintRestart();
       settingsNote("Restarting. This page reconnects by itself in a few seconds.");
       putJson("/restart" + (restartForce ? "?force=true" : ""), "POST").then(function () {
         pendingRestart = [];
+        restartInFlight = false;
         paintRestart();
         restartForce = false;
         button.textContent = "Restart to apply";
         setTimeout(closeSettings, 1500);
       }, function (error) {
+        restartInFlight = false;
+        paintRestart();
         if (error.status === 409) {
           restartForce = true;
           button.textContent = "Restart anyway";
@@ -1830,4 +2255,6 @@ window.JarvisSettings = function (context) {
         }
       });
     });
+    paintRestart();
 };
+}());

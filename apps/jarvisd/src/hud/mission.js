@@ -27,8 +27,8 @@
 
   // ---- what each tool is, in words and colour ------------------------------------------------------------------------
   var COLORS = {
-    web: [94, 227, 255], file: [107, 226, 160], memory: [176, 150, 255], mail: [255, 180, 84],
-    cmd: [255, 138, 92], agent: [255, 120, 214], time: [120, 240, 214], project: [150, 200, 255], tool: [170, 200, 220]
+    web: [104, 231, 224], file: [165, 214, 160], memory: [181, 183, 236], mail: [239, 192, 120],
+    cmd: [250, 160, 123], agent: [225, 159, 198], time: [143, 218, 190], project: [157, 195, 220], tool: [161, 174, 170]
   };
   var TOOLS = {
     "jarvis.web.search": ["web", "Searching the web", "in", "radar"],

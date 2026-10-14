@@ -8,8 +8,8 @@
 </head>
 <body>
 <div id="app">
-  <header>
-    <div class="brand"><span class="logo">J.A.R.V.I.S</span><span class="sub">just a rather very intelligent system</span></div>
+  <header class="app-header">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><div><span class="logo">JARVIS</span><span class="sub">Personal operating system</span></div></div>
     <div class="pills">
       <span class="pill" id="pill-link"><i></i><span>connecting</span></span>
       <span class="pill" id="pill-work"><i></i><span>0 working</span></span>
@@ -17,8 +17,8 @@
     </div>
     <div class="spacer"></div>
     <span id="clock" aria-hidden="true"></span>
-    <button id="open-ops" title="Operations: what is waiting, running and scheduled, and what JARVIS can do (O)">Ops <b id="ops-count" hidden>0</b></button>
-    <button id="open-settings" title="Models, keys, voice, folders and what it may do without asking">Settings</button>
+    <button id="open-ops" aria-controls="ops" aria-expanded="false" title="Operations: what is waiting, running and scheduled, and what JARVIS can do (O)">Operations <b id="ops-count" hidden>0</b></button>
+    <button id="open-settings" aria-controls="settings" aria-expanded="false" title="Models, keys, voice, folders and what it may do without asking">Settings</button>
     <button id="stop" class="danger" hidden title="Cancel everything that is running or waiting">Stop everything</button>
   </header>
 
@@ -26,9 +26,17 @@
   <div id="attention" class="attention" role="alert" hidden></div>
 
   <div id="main">
-    <section id="stage">
+    <section id="stage" aria-label="JARVIS presence and live activity">
       <canvas id="orb" aria-hidden="true"></canvas>
+      <div class="stage-heading"><span class="eyebrow">Personal intelligence / owner controlled</span><h1>At your<br><span>command.</span></h1><p>One intelligence. Your rules.</p></div>
+      <div class="stage-mode"><i aria-hidden="true"></i><span id="stage-state">Connecting</span></div>
+      <div class="presence-rail" aria-label="Live operations shortcuts">
+        <button id="presence-work" class="presence-card" type="button" aria-controls="ops" title="Open active tasks in Operations"><span class="presence-label">Active runs</span><strong id="presence-work-value">—</strong><span class="presence-meta" id="presence-work-detail">Awaiting link</span></button>
+        <button id="presence-wait" class="presence-card" type="button" aria-controls="ops" title="Open decisions waiting for you"><span class="presence-label">Decisions</span><strong id="presence-wait-value">—</strong><span class="presence-meta" id="presence-wait-detail">Awaiting link</span></button>
+        <div class="presence-authority"><i aria-hidden="true"></i><span>You stay<br>in control.</span></div>
+      </div>
       <div id="caption">standing by</div>
+      <div class="stage-footer"><span id="stage-detail">Connecting to your daemon.</span><button id="quiet" type="button" hidden>Silence voice <kbd>Esc</kbd></button><div class="stage-shortcuts" aria-label="Console shortcuts"><button id="stage-write" type="button"><kbd>/</kbd> Write</button><button id="stage-talk" type="button"><kbd>M</kbd> Talk</button><button id="stage-ops" type="button"><kbd>O</kbd> Operations</button></div></div>
       <div id="mission" aria-live="off">
         <div class="mhead"><i></i><span id="mtitle">LIVE</span><b id="mcount"></b><button type="button" id="mclear" title="Put this away (it comes back when JARVIS does something new)" aria-label="Clear">&times;</button></div>
         <div id="mfeed"></div>
@@ -40,9 +48,9 @@
       </div>
     </section>
 
-    <aside id="side">
+    <aside id="side" aria-label="Conversation">
       <div id="chathead">
-        <span class="title">Chat</span>
+        <span class="title">Conversation</span>
         <select id="project-pick" title="The project this conversation belongs to: JARVIS is told its goal and guidance, and keeps its journal" hidden></select>
         <span class="spacer"></span>
         <button type="button" id="chats-btn" title="Earlier conversations">History</button>
@@ -54,9 +62,10 @@
         <button type="button" id="mic" title="Talk (M)" aria-label="Talk">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2z" fill="currentColor"/></svg>
         </button>
-        <input id="input" type="text" placeholder="Ask JARVIS anything   ( / )" maxlength="4000" aria-label="Message">
-        <button type="submit" id="send">Send</button>
+        <input id="input" type="text" placeholder="Ask, plan, or build something…" maxlength="4000" aria-label="Message" aria-describedby="composer-status">
+        <button type="submit" id="send" disabled>Send</button>
       </form>
+      <div id="composer-status" class="composer-status" role="status">Connecting to JARVIS…</div>
       <div id="toggles">
         <label><input type="checkbox" id="speak"> Speak answers</label>
         <label><input type="checkbox" id="wake"> Wake word &ldquo;Jarvis&rdquo;</label>
@@ -67,7 +76,7 @@
 </div>
 
 <div id="ops" class="overlay" hidden>
-  <div class="opsboard" role="dialog" aria-label="Operations">
+  <div class="opsboard" role="dialog" aria-modal="true" aria-label="Operations" tabindex="-1">
     <div class="opshead">
       <h1>Operations</h1>
       <span class="dim">What is waiting on you, what is running, and what JARVIS can do. <kbd>O</kbd> or <kbd>Esc</kbd> to return to the face.</span>
@@ -90,19 +99,24 @@
         <section class="frame"><h2>Last 24 hours</h2><div id="digest"></div></section>
         <section class="frame"><h2>Telemetry</h2><div id="stats"></div></section>
         <section class="frame"><h2>Can do</h2><div id="abilities"></div></section>
-        <p class="note">Anything that needs a yes or no also appears on the face page, bottom left: press Approve or Deny, or just say &ldquo;yes&rdquo; or &ldquo;no&rdquo;. The terminal works too: <code>jarvis approvals</code>.</p>
+        <p class="note">Anything that needs a yes or no also appears in the face page's lower-right tray: press Approve or Deny, or just say &ldquo;yes&rdquo; or &ldquo;no&rdquo;. The terminal works too: <code>jarvis approvals</code>.</p>
       </div>
     </div>
   </div>
 </div>
 <div id="settings" class="overlay" hidden>
-  <div class="sheet wide frame" role="dialog" aria-label="Settings">
-    <h2>Settings</h2>
+  <div class="sheet wide frame" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1">
+    <div class="settings-heading"><div><span class="eyebrow">Your intelligence. Your configuration.</span><h2>Settings <span class="settings-heading-sub">/ Control centre</span></h2></div><span class="settings-context" id="settings-section-label">Overview</span></div>
     <div class="settings-layout">
-      <nav id="settings-tabs" class="sidenav" role="tablist" aria-orientation="vertical"></nav>
+      <div class="settings-navigation">
+        <label class="search-label" for="settings-search">Find a section</label>
+        <input id="settings-search" type="search" placeholder="Search settings…" autocomplete="off" aria-controls="settings-tabs">
+        <p id="settings-search-empty" class="none" role="status" hidden>No matching sections.</p>
+        <nav id="settings-tabs" class="sidenav" role="tablist" aria-label="Settings sections" aria-orientation="vertical"></nav>
+      </div>
       <div class="settings-main">
         <div id="settings-note" role="status"></div>
-        <div id="settings-body"></div>
+        <div id="settings-body" role="tabpanel" tabindex="0"></div>
       </div>
     </div>
     <div class="foot">
@@ -112,7 +126,7 @@
     </div>
   </div>
 </div><div id="project-sheet" class="overlay" hidden>
-  <div class="sheet frame" role="dialog" aria-label="Project">
+  <div class="sheet frame" role="dialog" aria-modal="true" aria-label="Project" tabindex="-1">
     <h2 id="project-title">Project</h2>
     <div id="project-note" role="status"></div>
     <div id="project-body"></div>

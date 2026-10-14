@@ -12,9 +12,28 @@ Change them in the console, or with `jarvis config set KEY VALUE...` / `jarvis k
 `jarvis restart` (the console's **Restart to apply** does it); live settings, including permissions and phone settings, apply immediately as marked below. Every change is checked by the same rules the daemon starts with and
 refused, leaving the file untouched, if it would not start. Keys are stored in a private file and are never shown again.
 
-## Brain
+## Finding settings
 
-In the console, **Settings** is a side list of tabs in four groups: **JARVIS** (Brain, Voice & search, Folders & code, Permissions), **Accounts & channels** (Google, Telegram, Phone), **Connections** (Connect apps) and **System** (Alerts, Advanced). A dot beside a tab shows whether it is set up (green) or still needs setting up (amber). Each setting says what it does in one line; the rest is under **More**. On/off settings are switches that save when flipped, and the footer lists any change that still waits for **Restart to apply**. Settings that take effect at once (the phone settings, permissions) never ask for a restart. The voice and web-search keys have a **Test** button that checks the saved key with its provider straight away. If the internet address, the phone door or Telegram stops working, a banner under the console header says so and leads to the tab that fixes it.
+**Settings** opens on **Overview**, a configuration dashboard with shortcuts to the model, folders, channels, permissions and appearance. Its cards describe saved setup, not a successful provider connection. It groups its tabs into **JARVIS** (Overview, Brain, Voice & search, Folders & code, Permissions), **Accounts & channels** (Google, Telegram, Phone), **Connections** (Connect apps) and **System** (Console, Alerts, Advanced). **Find a section** searches tab names and descriptions without replacing an unsaved form. With a tab focused, use the arrow keys or Home/End to move between visible sections. Dialogs keep keyboard focus inside; Escape closes the current dialog and returns focus to its opener. In a model picker, Escape first closes the list.
+
+Tab dots describe saved configuration, **not a live connection test**. Their accessible labels and tooltips distinguish configured, setup needed and unknown. Each setting says what it does in one line; the rest is under **More**. On/off settings save when flipped, and the footer lists changes waiting for **Restart to apply**. Live settings (phone settings, permissions) never ask for a restart. Voice and web-search keys have a **Test** button that checks the saved key with its provider. A failing internet address, phone door or Telegram shows a banner under the console header leading to its settings.
+
+## Console appearance
+
+**Settings → Console** controls the look of this browser only:
+
+- **Accent:** Mint matches the public site; Ice and Amethyst offer cooler and violet palettes. Approval, listening and offline colors remain meaningful and do not change with the accent.
+- **Atmosphere:** Cinematic adds segmented orbits, markers, particles and soft illumination. Quiet keeps a minimal presence without those decorative effects.
+- **Density:** Comfortable gives controls more room; Compact fits more messages, cards and settings on screen.
+- **Motion:** Use system preference respects the device's reduced-motion setting; Reduce motion keeps the orbit stationary and disables interface transitions and preview animation.
+
+The live preview illustrates your choices without contacting any provider. **Reset appearance** restores only the four local appearance preferences; it does not remove conversations, keys or daemon settings. Existing saved density/motion preferences are kept when the new choices are first introduced.
+
+Changes apply immediately and are saved in this browser's local storage, with no daemon restart. Console preferences remain available while the daemon is offline. If storage is blocked, the change applies only to the current page and the console says so. These controls do not change models, permissions or provider settings.
+
+The charcoal surfaces and default mint accents match the public site. Amber still means a decision needs you; offline, working, listening and speaking remain distinct, named states. The presence rail opens Operations and shows live run/decision counts; when disconnected, it shows an unknown value rather than presenting stale counts as live. The stage's Write, Talk and Operations buttons use the same controls as the keyboard shortcuts. **Restart to apply** is unavailable unless there are pending changes and saved configuration is available. Starting-point cards prepare an editable message rather than starting a run. Sending is unavailable while offline or while the current answer is running, but a draft can still be edited and is not cleared by an unavailable submission.
+
+## Brain
 
 **Settings, Brain** has one card for the **main model** and one for the **fallback**. Pick a provider (Ollama on this computer, Ollama Cloud, OpenAI, Google Gemini, Anthropic, or any other OpenAI-compatible server), paste its key, press **Load models** to choose from what that provider actually offers (you can still type a name), press **Test** to see that the model answers, then **Save** and restart. JARVIS asks the provider itself, so a key you saved is never sent to the page, and a saved key is only ever used with the address it was saved for: changing the address means pasting that provider's key. Test checks that the model answers, not that it uses tools well. Anthropic and Gemini are reached through their OpenAI-compatible endpoints; Anthropic describes its as a way to try Claude rather than a production route (no prompt caching, thinking not returned). Under the cards, **Thinking effort** is a list, and a cheaper model for sub-agents and scheduled runs can be set. The web-search key is in **Voice & search**, beside the ElevenLabs key (which the Phone tab also uses). The table below is the same settings by name, for `jarvis config`.
 
