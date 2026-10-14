@@ -22,6 +22,8 @@
 //! * `stderr`: write a line to the error stream first.
 //! * `unknown`: send an update variant nobody knows.
 //! * `progress`: public tool snapshots plus private and wrong-session updates that a client must not expose as progress.
+//! * `initialize_wait:PATH`: record setup PIDs at PATH and never answer initialization; `initialize_child` adds an idle child.
+//! * `idle`: wait without protocol activity (the descendant in startup-cancellation tests).
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -48,15 +50,36 @@ fn chunk(session: &str, text: &str) {
     );
 }
 
-fn main() {
+fn stalled_setup(marker: &str, with_child: bool) {
+    let child_pid = with_child.then(|| {
+        std::process::Command::new(
+            std::env::current_exe().unwrap_or_else(|error| panic!("{error}")),
+        )
+        .arg("idle")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .id()
+    });
+    let marker_text = json!({"pid":std::process::id(),"child_pid":child_pid}).to_string();
+    std::fs::write(marker, marker_text).unwrap_or_else(|error| panic!("{error}"));
+}
+
+fn script() -> String {
     let cwd = std::env::current_dir()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let script = std::env::args()
+    std::env::args()
         .nth(1)
         .or_else(|| std::env::var("FAKE_ACP").ok())
         .unwrap_or_else(|| "chat".to_owned())
-        .replace("{cwd}", &cwd);
+        .replace("{cwd}", &cwd)
+}
+
+fn main() {
+    let script = script();
     let words: Vec<&str> = script.split(',').collect();
     let has = |word: &str| words.contains(&word);
     let value_of = |prefix: &str| {
@@ -66,6 +89,11 @@ fn main() {
     };
     if has("stderr") {
         eprintln!("fake agent starting");
+    }
+    if has("idle") {
+        loop {
+            std::thread::park();
+        }
     }
 
     let (sender, receiver) = mpsc::channel::<Value>();
@@ -88,6 +116,10 @@ fn main() {
         let id = message.get("id").cloned();
         match (method, id) {
             ("initialize", Some(id)) => {
+                if let Some(marker) = value_of("initialize_wait:") {
+                    stalled_setup(&marker, has("initialize_child"));
+                    continue;
+                }
                 let version: u64 = value_of("version:")
                     .and_then(|text| text.parse().ok())
                     .unwrap_or(1);

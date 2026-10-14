@@ -25,7 +25,7 @@ Out of scope for this record and the first slice: JARVIS acting as an ACP **agen
 | Session setup, v1 | https://agentclientprotocol.com/protocol/v1/session-setup.md | 2026-10-13 | `session/new` |
 | Prompt turn, v1 | https://agentclientprotocol.com/protocol/v1/prompt-turn.md | 2026-10-14 | turn lifecycle, updates, stop reasons |
 | Tool calls, v1 | https://agentclientprotocol.com/protocol/v1/tool-calls.md | 2026-10-14 | partial tool updates, locations and permissions |
-| Cancellation, v1 | https://agentclientprotocol.com/protocol/v1/cancellation.md | 2026-10-13 | `$/cancel_request`, `-32800` |
+| Cancellation, v1 | https://agentclientprotocol.com/protocol/v1/cancellation.md | 2026-10-14 | optional request cancellation, `$/cancel_request`, `-32800` |
 | Transports, v1 | https://agentclientprotocol.com/protocol/v1/transports.md | 2026-10-13 | stdio framing |
 | JSON Schema, v1 | https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/main/schema/v1/schema.json | 2026-10-14 | exact shapes; the v1 tree on main, not a pinned SDK |
 | Updates | https://agentclientprotocol.com/updates.md | 2026-10-14 | v2 remains draft; optional tool names stabilized September 17, 2026 |
@@ -34,6 +34,10 @@ Out of scope for this record and the first slice: JARVIS acting as an ACP **agen
 | Registry entries | https://github.com/agentclientprotocol/registry (`claude-acp`, `codex-acp`, `gemini`, `github-copilot-cli` `agent.json`) | 2026-10-13 | how each agent is launched |
 | Rust library | https://agentclientprotocol.com/libraries/rust.md, https://crates.io/api/v1/crates/agent-client-protocol | 2026-10-13 | SDK choice |
 | changelog | not found as a page; versions are in the schema crate and registry | 2026-10-13 | n/a |
+| Tokio Notify, pinned 1.53.1 | https://docs.rs/tokio/1.53.1/tokio/sync/struct.Notify.html | 2026-10-14 | single stored cancellation permit and waiter lifetime |
+| Tokio select, pinned 1.53.1 | https://docs.rs/tokio/1.53.1/tokio/macro.select.html | 2026-10-14 | biased polling and cancellation of losing futures |
+| Windows tasklist/taskkill | https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/tasklist, https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/taskkill | 2026-10-14 | PID-filtered process checks and `/T` descendant termination |
+| POSIX kill, Issue 8 | https://pubs.opengroup.org/onlinepubs/9799919799/utilities/kill.html | 2026-10-14 | signal-zero process checks and process-group operands |
 
 ## Verified Contract
 
@@ -136,6 +140,21 @@ Falsifying checks: receive a tool update while the prompt future is still unfini
 
 Earlier statements in this record that a real task has not run describe the original first-slice verification. `ADR-0209` subsequently records ordinary and background Codex tasks. That evidence does not verify the new progress delivery path.
 
+## Startup cancellation refresh, 2026-10-14
+
+Scope: make the existing owner Stop control effective before an agent's prompt begins (`P7-008`). The official index, v1 cancellation and prompt-turn guides, updates page, and pinned Tokio 1.53.1 references above were fetched during this task. ACP v1 remains selected; no relevant deprecation was observed. No dependency, credential, permission or wire-protocol change is planned.
+
+Verified facts:
+
+- `session/cancel` cancels an ongoing prompt turn and requires its session id. It cannot be relied on before session setup finishes. Generic `$/cancel_request` support and propagation to nested activities are optional, not process-termination guarantees.
+- A Tokio `notify_one()` issued before its consumer starts stores one permit. The next polled `notified()` consumes it. Two simultaneous cancellation consumers can compete for that one permit.
+- `select!` with `biased;` polls in declaration order. Losing futures are dropped; abandoning an in-flight setup must therefore terminate the child rather than continue using a partially initialized connection.
+- Windows `taskkill /T` targets the selected process and its children. JARVIS must attempt tree termination while the setup future still owns the live parent; dropping that future first triggers `kill_on_drop` and can remove the parent before descendant cleanup. Native process queries are independent evidence, not an assertion that the kill helper returned successfully.
+
+JARVIS decision: check an already-requested Stop before preparing or launching an agent; give cancellation priority during connection setup; keep active-prompt cancellation on the existing ACP path with only one consumer at each phase. Cancellation must remain a cancelled task, not a startup failure or a completed agent turn. Preserve any already-created worktree for review. Existing authentication, environment allowlist, effect/risk/scope declarations, privacy and non-retryable task semantics are unchanged. This does not provide OS confinement, parent-linked cancellation or crash resumption.
+
+Falsifying checks: immediately start and stop a background task before yielding to its worker, then assert durable cancellation and no worktree; stop a scripted process during initialization, prove both its recorded PID and its child's PID were alive, and assert neither remains and the prompt's file write never happened. Include a normal task and existing active-turn cancellation as controls. Real-agent startup/sign-in cancellation and macOS/Linux process cleanup need separate live/native evidence and are not claimed by these tests.
+
 ## Verification Log
 
 | Date | Versions checked | Relevant change or no-change evidence | Researcher |
@@ -143,3 +162,4 @@ Earlier statements in this record that a real task has not run describe the orig
 | 2026-10-13 | ACP v1 docs and schema (main), v2 migration guide, registry entries listed above, crate 3.3.0 | first record; v2 draft; v1 selected | JARVIS agent |
 | 2026-10-13 | v1 authentication page, codex-acp and claude-agent-acp READMEs, registry entries for opencode, goose, cursor, qwen-code, kimi, cline; live handshake with `@agentclientprotocol/codex-acp@2.2.2` | authentication implemented; presets for ten agents; the real Codex adapter completes the handshake through the JARVIS client (version 1, two sign-in methods, session made without a sign-in). The launch commands of the other agents were read from the registry and **not run** | JARVIS agent |
 | 2026-10-14 | live official index, v1 prompt-turn and tool-call guides, v1 schema on main, updates page | partial tool updates and session scoping rechecked; v2 remains draft; public progress excludes internal reasoning and raw payloads; new progress delivery not yet verified live | JARVIS agent |
+| 2026-10-14 | official ACP index, v1 cancellation/prompt-turn guides, updates; Tokio 1.53.1 Notify/select; Windows tasklist/taskkill and POSIX Issue 8 kill | startup cancellation contract refreshed; 18 delegation tests passed on Windows; deleting the setup tree kill left a child alive and failed the regression, restored guard passed; real-agent and macOS/Linux startup cleanup not verified | JARVIS agent |

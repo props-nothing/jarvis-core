@@ -32,3 +32,13 @@ The existing authenticated `GET /api/v1/code-agents/tasks` response now uses the
 An agent's completed turn is not independent verification. The review labels recorded results **Not independently verified** and makes absent results explicit. This adds no test runner, resume, merge, push, cancellation or approval path. No ACP behavior, permissions, persisted schema or external integration changes.
 
 Evidence: an authenticated-router test over real SQLite, three focused UI tests (including hostile markup and failed refresh), both console suites (78 tests), and responsive geometry checks at 1440, 390 and 320 pixels. Formatting and workspace Clippy passed. The unfiltered workspace test gate remains blocked by three unchanged phone-service AI-disclosure tests; the remaining workspace tests pass with those three cases explicitly skipped. No new live-provider verification is claimed.
+
+## Startup cancellation correction, 2026-10-14
+
+Decision 3 describes cancellation of an active prompt. Previously, a Stop issued before the background worker started was only consumed after repository preparation, agent launch and ACP setup. A regression proved that such an agent could write a file before its task was recorded as cancelled. A stalled initialization also ignored Stop until the handshake deadline.
+
+Cancellation is now checked before preparation and at startup effect boundaries. Connection setup races the existing Stop signal with cancellation first. The setup future is pinned and remains alive until the cancellation handler attempts process-tree termination: dropping it first invokes the child's `kill_on_drop`, which can leave descendants alive on Windows before the existing tree guard runs. Already-created worktrees are retained; no task prompt is sent after setup cancellation. Active-prompt ACP cancellation, permissions, risk, authentication and the existing durable task states are unchanged.
+
+Evidence: 18 focused delegation tests passed on Windows, including a queued-stop regression and a synchronized initialization test over a real scripted parent and child. The latter independently queries both PIDs before and after Stop, checks retained worktree state and proves the prompt write did not occur. Disabling the setup tree kill made that test fail with a surviving child; restoring the guard passed. Workspace Clippy passed. Final broader validation is recorded in `TODO.md`.
+
+This is a cancellation reliability slice of `P7-008`, not OS confinement, parent-linked cancellation, independent verification or crash resumption. Real-agent setup/sign-in cancellation and macOS/Linux native cleanup remain unverified. No owner daemon was stopped or restarted, and the phone prompt is unchanged.

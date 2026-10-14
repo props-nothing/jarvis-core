@@ -54,6 +54,12 @@ These are the agent's reports, not proof that its tools succeeded. Some agents r
 
 **Completed means the agent ended its turn, not that tests passed.** Reviews say **Not independently verified**, even when the agent's own report says tests passed. Interrupted tasks explicitly report a missing final result; an early interruption may leave no recorded worktree path. This view does not resume, merge, push or independently test the work.
 
+## Stopping during startup
+
+Ask JARVIS to stop a background coding task even while its agent is starting. A Stop received before the worker begins records cancellation without starting an agent or creating a worktree. During ACP connection setup, JARVIS terminates the agent's process tree and keeps any worktree already created for review; it does not send the task prompt. During an active prompt, the existing ACP cancellation and termination path applies. A stopped task remains available in the task list.
+
+Startup cancellation is tested on Windows with a scripted agent and a real child process. Cancellation during a real agent's sign-in flow and native cleanup on macOS/Linux still need separate verification. This does not add a sandbox, parent-linked cancellation or crash resumption.
+
 ## Limits, said plainly
 
 - **This is not a sandbox.** The agent's own tools run on your computer with your privileges and JARVIS does not see them. The worktree and the rules above contain a well-behaved agent and make a misbehaving one visible; they do not stop it. JARVIS compares your own checkout before and after, and says so if the agent wrote there.

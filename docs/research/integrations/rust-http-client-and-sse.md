@@ -1,10 +1,10 @@
 ---
 integration: rust-http-client-and-sse
 status: researched
-last_verified: 2026-09-21
+last_verified: 2026-10-14
 owners: []
-selected_spec_version: reqwest 0.13.5, eventsource-stream 0.2.3
-selected_sdk: reqwest 0.13.5 (rustls backend), eventsource-stream 0.2.3
+selected_spec_version: reqwest 0.13.5, rustls 0.23.46, eventsource-stream 0.2.3
+selected_sdk: reqwest 0.13.5 (rustls 0.23.46 backend), eventsource-stream 0.2.3
 ---
 
 # Rust HTTP Client And SSE Parser
@@ -26,6 +26,29 @@ itself is owned by [openai-compatible-model-api.md](openai-compatible-model-api.
 | `eventsource-stream` metadata | `cargo info eventsource-stream` -> 0.2.3 | 2026-09-21 | version, license, features |
 | `futures-util` metadata | `cargo info futures-util` -> 0.3.34 | 2026-09-21 | version, license, MSRV |
 | `cargo-deny` policy | repository `deny.toml` | 2026-09-21 | allowed license set and ban rules |
+| Rustls AI index attempt | https://rustls.dev/llms.txt | 2026-10-14 | returned 404; official versioned docs and release notes used instead |
+| Rustls tagged changelog | https://raw.githubusercontent.com/rustls/rustls/v/0.23.46/CHANGELOG.md | 2026-10-14 | directs readers to official release notes |
+| Rustls release 0.23.46 | https://github.com/rustls/rustls/releases/tag/v%2F0.23.46 | 2026-10-14 | all four security fixes and other patch hardening |
+| Rustls versioned API | https://docs.rs/rustls/0.23.46/rustls/ | 2026-10-14 | TLS, certificate verification, crypto-provider features and MSRV |
+| Rustls published metadata | https://crates.io/api/v1/crates/rustls/0.23.46 | 2026-10-14 | exact version, checksum, license, MSRV and feature metadata |
+| RustSec advisories | https://rustsec.org/advisories/RUSTSEC-2026-0346, https://rustsec.org/advisories/RUSTSEC-2026-0347, https://rustsec.org/advisories/RUSTSEC-2026-0348, https://rustsec.org/advisories/RUSTSEC-2026-0349 | 2026-10-14 | affected configurations and patched version |
+
+## Rustls Security Follow-up, 2026-10-14
+
+The freshness update above covers this transitive TLS patch only; the earlier reqwest and SSE research retains its original source dates. While validating `P7-008`, `cargo deny check` found four advisories against the existing locked `rustls 0.23.45`. The official 0.23.46 release and RustSec records agree that 0.23.46 fixes all four:
+
+- `RUSTSEC-2026-0346`: formatting TLS client session values with custom `Debug` logging can expose key material. Built-in session-cache and ordinary connection Debug output are not affected.
+- `RUSTSEC-2026-0347`: enabled ECH plus application data buffered before handshake completion can send that data to the authenticated outer server after ECH rejection. GREASE ECH is not affected.
+- `RUSTSEC-2026-0348`: the non-default Brotli certificate decompressor can accept a peer-selected history window requiring up to 1 GiB before authentication. Configurations without the Brotli feature are not affected.
+- `RUSTSEC-2026-0349`: recording a key-exchange hint before server authentication can cause later connections to use only a classical key share. This is not an authentication bypass; exposure depends on session caching and server policy.
+
+These conditions are upstream facts, not evidence that a JARVIS profile was exploited or that every conditional feature is enabled. The patch also includes other TLS hardening documented in the release notes. The published crate has MSRV 1.71; compatibility with this workspace is checked by compilation rather than inferred from the version number.
+
+Decision (`P1-002` security maintenance): select exactly 0.23.46 with `cargo update -p rustls --precise 0.23.46`, retaining the existing reqwest 0.13.5 pin and all manifest features, transport/authentication settings, proxy/redirect restrictions and certificate verification. No new provider operation, credential, scope, retry behavior, webhook, application data flow or SDK boundary is introduced. This is a library security patch, not a TLS configuration redesign. Keep the existing license/source policy and do not suppress advisory findings. Existing running binaries are not patched in place or restarted.
+
+Cheapest falsifying check: `cargo deny check` must no longer report these advisories against the updated lockfile. Inspect the lockfile diff for unrelated dependency churn. Then run the model-adapter tests, workspace Clippy, rebuild binaries and run workspace tests, explicitly retaining the three independently recorded phone-disclosure failures as a separate baseline issue. Direct reproduction of the four upstream exploits, real-provider calls and native macOS/Linux behavior are not claimed by a Windows compatibility run.
+
+Verification: the update changed only rustls's version and checksum in `Cargo.lock`; the checksum matches the published 0.23.46 metadata. `cargo deny check` changed from four vulnerability errors to **advisories ok, bans ok, licenses ok, sources ok**, retaining existing duplicate-version warnings. `cargo test -p jarvis-models --locked` passed 113 unit tests, 27 adapter integration tests and two doctests. Locked, all-targets/all-features workspace Clippy and build passed. The locked workspace suite passed with only the three exact, previously failing phone-disclosure assertions excluded; the daemon target reported 697 passed, one ignored and three filtered out. The earlier unfiltered workspace run failed only those phone assertions, whose source and behavior are unchanged. No CI suppression or advisory ignore was added. The running release and installed owner binaries were neither replaced nor restarted; their eventual rebuild/update is separate from this debug-build verification.
 
 ## Verified Contract
 

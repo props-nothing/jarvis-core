@@ -56,7 +56,10 @@ async fn rig(script: &str) -> (Scratch, Arc<SqliteDatabase>, AsyncCodeDelegateTo
             &[root.clone()],
             root.join("trees"),
             AgentSource::Fixed(AgentSettings {
-                command: vec![fake().to_string_lossy().into_owned(), script.into()],
+                command: vec![
+                    fake().to_string_lossy().into_owned(),
+                    script.replace("{root}", &root.to_string_lossy()),
+                ],
                 ..AgentSettings::default()
             }),
         )
@@ -76,6 +79,27 @@ async fn wait(manager: &AsyncCodeDelegateTool, id: &str) -> Value {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     panic!("task did not end")
+}
+
+#[cfg(windows)]
+fn process_running(pid: u32) -> bool {
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+}
+
+#[cfg(unix)]
+fn process_running(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-s", "0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
 }
 
 #[tokio::test]
@@ -158,6 +182,79 @@ async fn stop_cancels_the_agent_and_keeps_a_durable_record() {
     let done = wait(&m, &id).await;
     assert_eq!(done["status"], "cancelled");
     assert!(m.stop(&json!({"task_id":id})).is_err());
+}
+
+#[tokio::test]
+async fn stop_before_the_worker_starts_creates_no_worktree() {
+    let (scratch, db, manager) = rig("write:{cwd}/done.txt,say:finished").await;
+    let started = manager
+        .start(&json!({"repository":"repo","task":"add done","minutes":20}))
+        .await
+        .unwrap();
+    let id = started["task_id"].as_str().unwrap();
+    assert_eq!(
+        manager.stop(&json!({"task_id":id})).unwrap()["outcome"],
+        "stop_requested"
+    );
+    let done = wait(&manager, id).await;
+    assert!(
+        !scratch.0.join("trees").exists(),
+        "a task stopped before its worker starts must not create a worktree: {done}"
+    );
+    assert_eq!(done["status"], "cancelled");
+    assert_eq!(done["result"]["outcome"], "cancelled");
+    assert!(done["worktree"].is_null());
+    assert!(done["finished_at"].is_string());
+    assert!(done["activity"].as_array().unwrap().is_empty());
+    assert!(manager.stop(&json!({"task_id":id})).is_err());
+    db.close().await;
+}
+
+#[tokio::test]
+async fn stop_during_initialization_terminates_the_agent_and_its_child() {
+    let (scratch, db, manager) =
+        rig("initialize_wait:{root}/setup.json,initialize_child,write:{cwd}/done.txt").await;
+    let marker = scratch.0.join("setup.json");
+    let started = manager
+        .start(&json!({"repository":"repo","task":"add done","minutes":20}))
+        .await
+        .unwrap();
+    let id = started["task_id"].as_str().unwrap();
+    let setup: Value = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&marker)
+                && let Ok(setup) = serde_json::from_str(&text)
+            {
+                break setup;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid = u32::try_from(setup["pid"].as_u64().unwrap()).unwrap();
+    let child_pid = u32::try_from(setup["child_pid"].as_u64().unwrap()).unwrap();
+    let _parent_cleanup = crate::command_run::TreeGuard { pid, armed: true };
+    let _child_cleanup = crate::command_run::TreeGuard {
+        pid: child_pid,
+        armed: true,
+    };
+    assert!(process_running(pid));
+    assert!(process_running(child_pid));
+    manager.stop(&json!({"task_id":id})).unwrap();
+    let done = wait(&manager, id).await;
+    assert!(!process_running(pid), "the setup process survived Stop");
+    assert!(
+        !process_running(child_pid),
+        "the setup process's child survived Stop"
+    );
+    assert_eq!(done["status"], "cancelled");
+    assert_eq!(done["result"]["outcome"], "cancelled");
+    let worktree = Path::new(done["worktree"].as_str().unwrap());
+    assert!(worktree.exists());
+    assert!(!worktree.join("done.txt").exists());
+    assert!(done["activity"].as_array().unwrap().is_empty());
+    db.close().await;
 }
 
 #[test]

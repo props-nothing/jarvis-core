@@ -370,6 +370,9 @@ impl CodeDelegateTool {
         cancel: &Notify,
         activity: Option<mpsc::Sender<ToolActivity>>,
     ) -> Result<Value, AdapterError> {
+        if stop_requested(cancel).await {
+            return Ok(cancelled_setup(None));
+        }
         let directory = self
             .folders
             .resolve_directory(&arguments.repository)
@@ -394,10 +397,16 @@ impl CodeDelegateTool {
         let before = worktree::snapshot(repository.top())
             .await
             .map_err(|error| refused(&error.to_string()))?;
+        if stop_requested(cancel).await {
+            return Ok(cancelled_setup(None));
+        }
         let id = unique_id();
         let tree = worktree::create(&repository, &self.worktrees, &arguments.task, &id)
             .await
             .map_err(|error| refused(&error.to_string()))?;
+        if stop_requested(cancel).await {
+            return Ok(cancelled_setup(Some(&tree)));
+        }
 
         let child = match code_agents::spawn(&program, &program_arguments, &tree.path, &environment)
         {
@@ -415,15 +424,27 @@ impl CodeDelegateTool {
             turn: Duration::from_secs(arguments.minutes * 60),
             ..self.limits.clone()
         };
-        let mut connection =
-            match Connection::open(child, &tree.path, limits, settings.sign_in.as_deref()).await {
-                Ok(connection) => connection,
-                Err(error) => {
+        let opened = {
+            let opening = Connection::open(child, &tree.path, limits, settings.sign_in.as_deref());
+            tokio::pin!(opening);
+            tokio::select! {
+                biased;
+                () = cancel.notified() => {
                     kill_tree(pid);
-                    let _ = worktree::discard(&repository, &tree).await;
-                    return Err(refused(&code_agents::describe_error(&error)));
+                    None
                 }
-            };
+                connection = &mut opening => Some(connection),
+            }
+        };
+        let mut connection = match opened {
+            Some(Ok(connection)) => connection,
+            Some(Err(error)) => {
+                kill_tree(pid);
+                let _ = worktree::discard(&repository, &tree).await;
+                return Err(refused(&code_agents::describe_error(&error)));
+            }
+            None => return Ok(cancelled_setup(Some(&tree))),
+        };
         if let Some(sender) = activity {
             connection.set_activity_sender(sender);
         }
@@ -445,6 +466,30 @@ impl CodeDelegateTool {
             after.is_some_and(|after| after != before),
         ))
     }
+}
+
+async fn stop_requested(cancel: &Notify) -> bool {
+    tokio::select! {
+        biased;
+        () = cancel.notified() => true,
+        () = std::future::ready(()) => false,
+    }
+}
+
+fn cancelled_setup(tree: Option<&Worktree>) -> Value {
+    let mut answer = json!({
+        "outcome": "cancelled",
+        "next": "No coding agent or worktree was started.",
+    });
+    if let Some(tree) = tree {
+        answer["branch"] = json!(tree.branch);
+        answer["worktree"] = json!(tree.path.to_string_lossy());
+        answer["base_commit"] = json!(tree.base);
+        answer["next"] = json!(
+            "The coding task stopped before its prompt began. Its worktree is kept for review; nothing was merged or pushed."
+        );
+    }
+    answer
 }
 
 fn unique_id() -> String {
