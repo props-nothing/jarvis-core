@@ -558,7 +558,7 @@ pub async fn tasks(State(state): State<GatewayState>) -> Response {
     };
     let shown: Vec<Value> = tasks
         .into_iter()
-        .map(|task| crate::code_delegate_async::render(&task))
+        .map(|task| crate::code_delegate_async::render_console(&task))
         .collect();
     (StatusCode::OK, Json(json!({ "tasks": shown }))).into_response()
 }

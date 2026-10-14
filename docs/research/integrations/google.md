@@ -1,13 +1,56 @@
 ---
 integration: google
 status: researched
-last_verified: 2026-10-11
+last_verified: 2026-10-14
 owners: []
 selected_spec_version: "Gmail API v1; Calendar API v3 (both unversioned REST revisions, last updated 2026-09-03..18 per page footers)"
 selected_sdk: none selected — this record assumes direct HTTP and did NOT check Google's client-library list for a Rust SDK
 ---
 
 # Google Workspace: identity, Gmail, Calendar, push notifications, quotas, restricted scopes
+
+## 2026-10-14 refresh: recoverable message deletion
+
+**Scope:** move ONE Gmail message to trash, never permanently delete or delete a thread. Direct HTTP with the existing
+`GoogleAccount` and pinned reqwest dependency; no Google SDK is introduced.
+
+Live official sources accessed 2026-10-14 UTC:
+
+- https://developers.google.com/llms.txt returned 404 (no usable index).
+- https://gmail.googleapis.com/$discovery/rest?version=v1, revision **20261005**, specifies
+  `POST gmail/v1/users/{userId}/messages/{id}/trash`, no request body, response `Message`.
+- https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/trash confirms an empty body,
+  `userId=me` and `gmail.modify` (or the unnecessarily broad `mail.google.com`) authorization scope.
+- https://developers.google.com/workspace/gmail/api/auth/scopes classes `gmail.modify` restricted; it permits mailbox
+  modification but not immediate permanent deletion bypassing trash.
+- https://developers.google.com/workspace/gmail/api/reference/quota: trash costs 20 units; project 1,200,000/minute,
+  user/project 6,000/minute; 80,000,000 daily project units before future billing applies.
+- https://developers.google.com/workspace/gmail/api/guides/handle-errors: 401 credentials, 403 permission/quota,
+  404 missing resource, 429 rate limiting, 5xx server failure.
+- https://raw.githubusercontent.com/googleapis/google-api-python-client/main/docs/dyn/gmail_v1.users.messages.html
+  independently confirms `trash` and recommends it instead of irreversible `delete`; used as contract evidence only.
+- https://developers.google.com/workspace/gmail/release-notes: latest entry June 24, 2026; May 1 quota update already
+  reflected above. No relevant trash endpoint deprecation observed.
+
+**Decisions:** user approved bundling `gmail.modify` into the existing optional Google actions consent, not a new switch.
+Existing grants continue to read/send as before, but trash fails closed until sign-in again grants modify. Settings must
+explain the extra mailbox permission. Token placement/refresh/revocation stay inside `GoogleAccount`; bearer header,
+no redirects, no tokens in receipts. `jarvis.gmail.delete` means **move to Gmail Trash** and asks approval by default
+(risk 3, destructive effect, `google.act`, no blind retries); the owner explicitly chose to permit standing trust,
+as for existing editing tools. No new approval-policy bypass is added. Validate message id and scope before network access; require
+response id to match and `labelIds` to contain `TRASH` before claiming confirmation. Network loss, 5xx or malformed 2xx
+are ambiguous effects, never a false claim that nothing changed. Provider error bodies are not returned to the model.
+Message content remains at Google, subject to Gmail's trash retention rules; JARVIS stores only ordinary tool receipts.
+No pagination, webhook, send, thread operation, hard delete or new retention store is added.
+
+**Falsification plan:** local HTTP stand-in checks POST path, empty body, bearer header; wrong/missing permission and bad
+ids cause zero requests. Missing TRASH, wrong id, 5xx or invalid response must never confirm deletion; 401/403/404/429
+must fail clearly. Live Gmail trash/restore requires owner approval and is NOT run by this task. No copied SDK code.
+
+**Verification observed:** `cargo test -p jarvisd google_ --lib` passed 37 tests, including empty-body POST/bearer
+checks, confirmation shape, missing modify grant, invalid ids, and provider errors. `cargo test -p jarvis-connectors
+google:: --lib` passed 333 tests after matching the research freshness metadata. Gmail trash/restore itself remains
+**not run live**; no owner's message was altered.
 
 ## 2026-10-11 refresh: polling a Gmail query for `P6-012`
 

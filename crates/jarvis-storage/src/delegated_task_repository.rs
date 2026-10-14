@@ -7,6 +7,17 @@ use sqlx::Row;
 
 use crate::{DatabaseError, SqliteDatabase};
 
+pub const MAX_TASK_ACTIVITY_RETAINED: u64 = 128;
+pub const MAX_TASK_ACTIVITY_SHOWN: i64 = 32;
+pub const MAX_TASK_ACTIVITY_CHARS: usize = 1600;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredDelegatedTaskActivity {
+    pub sequence: u64,
+    pub summary: String,
+    pub created_at: UtcTimestamp,
+}
+
 /// A new task, before its process starts.
 pub struct NewDelegatedTask<'a> {
     pub workspace_id: &'a str,
@@ -34,6 +45,7 @@ pub struct StoredDelegatedTask {
     pub created_at: UtcTimestamp,
     pub updated_at: UtcTimestamp,
     pub finished_at: Option<UtcTimestamp>,
+    pub activity: Vec<StoredDelegatedTaskActivity>,
 }
 
 fn sqlite(operation: &'static str) -> impl FnOnce(sqlx::Error) -> DatabaseError {
@@ -94,6 +106,7 @@ fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<StoredDelegatedTask, Database
                     .map_err(|_| DatabaseError::StoredDelegatedTaskInvalid)
             })
             .transpose()?,
+        activity: Vec::new(),
     })
 }
 macro_rules! columns {
@@ -130,7 +143,9 @@ pub async fn find_delegated_task(
     .await
     .map_err(sqlite("read a delegated task"))?
     .ok_or(DatabaseError::DelegatedTaskNotFound)?;
-    decode(&row)
+    let mut task = decode(&row)?;
+    task.activity = read_activity(db, workspace, id).await?;
+    Ok(task)
 }
 
 pub async fn list_delegated_tasks(
@@ -148,7 +163,86 @@ pub async fn list_delegated_tasks(
     .fetch_all(db.pool())
     .await
     .map_err(sqlite("list delegated tasks"))?;
-    rows.iter().map(decode).collect()
+    let mut tasks: Vec<StoredDelegatedTask> = rows.iter().map(decode).collect::<Result<_, _>>()?;
+    for task in &mut tasks {
+        task.activity = read_activity(db, workspace, &task.id).await?;
+    }
+    Ok(tasks)
+}
+
+async fn read_activity(
+    db: &SqliteDatabase,
+    workspace: &str,
+    id: &str,
+) -> Result<Vec<StoredDelegatedTaskActivity>, DatabaseError> {
+    let rows = sqlx::query("SELECT sequence,summary,created_at FROM delegated_task_activity WHERE workspace_id=?1 AND task_id=?2 ORDER BY sequence DESC LIMIT ?3")
+        .bind(workspace).bind(id).bind(MAX_TASK_ACTIVITY_SHOWN)
+        .fetch_all(db.pool()).await.map_err(sqlite("read delegated task activity"))?;
+    rows.iter()
+        .rev()
+        .map(|row| {
+            Ok(StoredDelegatedTaskActivity {
+                sequence: u64::try_from(
+                    row.try_get::<i64, _>("sequence")
+                        .map_err(sqlite("read delegated task activity"))?,
+                )
+                .map_err(|_| DatabaseError::StoredDelegatedTaskInvalid)?,
+                summary: row
+                    .try_get("summary")
+                    .map_err(sqlite("read delegated task activity"))?,
+                created_at: parse_time(row, "created_at")?,
+            })
+        })
+        .collect()
+}
+
+pub async fn append_delegated_task_activity(
+    db: &SqliteDatabase,
+    workspace: &str,
+    id: &str,
+    sequence: u64,
+    summary: &str,
+    now: UtcTimestamp,
+) -> Result<bool, DatabaseError> {
+    let position = i64::try_from(sequence)
+        .ok()
+        .filter(|position| *position > 0)
+        .ok_or(DatabaseError::StoredDelegatedTaskInvalid)?;
+    if summary.is_empty()
+        || summary.chars().count() > MAX_TASK_ACTIVITY_CHARS
+        || summary
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+    {
+        return Err(DatabaseError::StoredDelegatedTaskInvalid);
+    }
+    let mut transaction = db
+        .pool()
+        .begin()
+        .await
+        .map_err(sqlite("record delegated task activity"))?;
+    let changed = sqlx::query("INSERT INTO delegated_task_activity (task_id,workspace_id,sequence,summary,created_at) SELECT id,workspace_id,?3,?4,?5 FROM delegated_tasks WHERE workspace_id=?1 AND id=?2 AND status='running' AND ?3 > COALESCE((SELECT max(sequence) FROM delegated_task_activity WHERE task_id=?2),0)")
+        .bind(workspace).bind(id).bind(position).bind(summary).bind(now.to_string())
+        .execute(&mut *transaction).await.map_err(sqlite("record delegated task activity"))?.rows_affected();
+    if changed == 1 {
+        let before = i64::try_from(sequence.saturating_sub(MAX_TASK_ACTIVITY_RETAINED))
+            .map_err(|_| DatabaseError::StoredDelegatedTaskInvalid)?;
+        sqlx::query("DELETE FROM delegated_task_activity WHERE workspace_id=?1 AND task_id=?2 AND sequence<=?3")
+            .bind(workspace).bind(id).bind(before).execute(&mut *transaction)
+            .await.map_err(sqlite("bound delegated task activity"))?;
+        sqlx::query("UPDATE delegated_tasks SET updated_at=?3 WHERE workspace_id=?1 AND id=?2")
+            .bind(workspace)
+            .bind(id)
+            .bind(now.to_string())
+            .execute(&mut *transaction)
+            .await
+            .map_err(sqlite("update delegated task activity time"))?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(sqlite("record delegated task activity"))?;
+    Ok(changed == 1)
 }
 
 pub async fn mark_delegated_task_running(

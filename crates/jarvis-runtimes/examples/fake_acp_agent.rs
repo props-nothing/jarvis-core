@@ -21,6 +21,7 @@
 //! * `request:METHOD`: send the client a request for METHOD and report whether it was refused.
 //! * `stderr`: write a line to the error stream first.
 //! * `unknown`: send an update variant nobody knows.
+//! * `progress`: public tool snapshots plus private and wrong-session updates that a client must not expose as progress.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -144,6 +145,40 @@ fn main() {
     }
 }
 
+fn emit_progress(session: &str) {
+    let path = std::env::current_dir().unwrap_or_default().join("a.txt");
+    update(
+        session,
+        json!({"sessionUpdate":"agent_thought_chunk", "content":{"type":"text","text":"private thought"}}),
+    );
+    update(
+        "sess_unrelated",
+        json!({"sessionUpdate":"tool_call", "toolCallId":"other-call", "title":"unrelated session", "kind":"read", "status":"pending"}),
+    );
+    update(
+        session,
+        json!({"sessionUpdate":"tool_call", "toolCallId":"thinking-call", "title":"Internal planning", "kind":"think", "status":"in_progress"}),
+    );
+    update(
+        session,
+        json!({"sessionUpdate":"tool_call", "toolCallId":"live-call", "title":"Read config", "kind":"read", "status":"pending", "locations":[{"path":path.to_string_lossy()}], "rawInput":{"secret":"private input"}, "rawOutput":"private output"}),
+    );
+    update(
+        session,
+        json!({"sessionUpdate":"tool_call_update", "toolCallId":"live-call", "status":"in_progress"}),
+    );
+}
+
+fn wait_for_cancel(receiver: &mpsc::Receiver<Value>, session: &str, id: &Value) {
+    chunk(session, "working");
+    while let Ok(message) = receiver.recv() {
+        if message.get("method").and_then(Value::as_str) == Some("session/cancel") {
+            send(&json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": "cancelled"}}));
+            return;
+        }
+    }
+}
+
 fn prompt(
     words: &[&str],
     receiver: &mpsc::Receiver<Value>,
@@ -224,20 +259,18 @@ fn prompt(
             }
         }
     }
+    if has("progress") {
+        emit_progress(session);
+    }
     if has("wait") {
-        chunk(session, "working");
-        while let Ok(message) = receiver.recv() {
-            if message.get("method").and_then(Value::as_str) == Some("session/cancel") {
-                send(&json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": "cancelled"}}));
-                return;
-            }
-        }
+        wait_for_cancel(receiver, session, id);
         return;
     }
     if !words.iter().any(|word| {
         word.starts_with("permission:")
             || word.starts_with("write:")
             || word.starts_with("request:")
+            || *word == "progress"
     }) {
         chunk(session, "Hello ");
         chunk(session, "world");

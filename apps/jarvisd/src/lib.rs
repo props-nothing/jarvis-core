@@ -1054,7 +1054,7 @@ async fn compose_tools(
             &database,
         ))) as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
-    push_project_tool(&database, phone, &mut additional)?;
+    push_project_tool(config, &database, phone, &mut additional)?;
     // The model can propose a skill; the owner approves it in the console (`skill_tool`).
     let skill_tool = Arc::new(crate::skill_tool::SkillProposeTool::new(Arc::clone(
         &database,
@@ -1167,6 +1167,8 @@ fn push_document_tool(
     additional.push((
         vec![
             document_write_tool::WriteDocumentTool::definition()
+                .map_err(|source| DaemonError::WriteDocumentTool { source })?,
+            document_write_tool::EditSpreadsheetTool::definition()
                 .map_err(|source| DaemonError::WriteDocumentTool { source })?,
         ],
         Arc::new(document_write_tool::WriteDocumentTool::new(roots))
@@ -1305,6 +1307,7 @@ fn push_google_tools(
 ///
 /// Returns [`DaemonError::ProjectTool`] (or the matching variant) when a tool's own contract is rejected.
 fn push_project_tool(
+    config: &jarvis_storage::Config,
     database: &Arc<SqliteDatabase>,
     phone: &Arc<crate::phone_service::PhoneService>,
     additional: &mut Vec<(
@@ -1324,12 +1327,20 @@ fn push_project_tool(
         Arc::new(crate::project_tool::ProjectTool::new(Arc::clone(database)))
             as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
+    let contact_roots = open_granted_folders(config, "contact import");
+    let mut contact_definitions = crate::contacts_tool::ContactsTool::definitions()
+        .map_err(|source| DaemonError::ContactsTool { source })?;
+    if contact_roots.is_none() {
+        contact_definitions
+            .retain(|definition| definition.id().to_string() != crate::contacts_tool::IMPORT_TOOL);
+    }
+    let contacts = match contact_roots {
+        Some(roots) => crate::contacts_tool::ContactsTool::with_roots(Arc::clone(database), roots),
+        None => crate::contacts_tool::ContactsTool::new(Arc::clone(database)),
+    };
     additional.push((
-        crate::contacts_tool::ContactsTool::definitions()
-            .map_err(|source| DaemonError::ContactsTool { source })?,
-        Arc::new(crate::contacts_tool::ContactsTool::new(Arc::clone(
-            database,
-        ))) as Arc<dyn jarvis_tools::ToolExecutor>,
+        contact_definitions,
+        Arc::new(contacts) as Arc<dyn jarvis_tools::ToolExecutor>,
     ));
     // Correcting and forgetting a memory ask the owner, and are composed beside the projects because both are the model keeping the
     // owner's long-lived state straight.
@@ -2316,6 +2327,34 @@ shutdown_timeout_seconds = 30
         jarvis_storage::Config::parse_with_environment(&document, Vec::<(String, String)>::new())
             .unwrap_or_else(|error| panic!("the fixture document must load: {error}"))
             .into_config()
+    }
+
+    #[test]
+    fn workbook_editing_is_registered_only_with_granted_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "jarvis-document-composition-{}",
+            jarvis_core::scratch_tag()
+        ));
+        std::fs::create_dir_all(&root).unwrap_or_else(|e| panic!("{e}"));
+        let literal =
+            serde_json::to_string(&root.to_string_lossy()).unwrap_or_else(|e| panic!("{e}"));
+        let config = config_with_policy(&format!("tool_workspace_roots = [{literal}]"));
+        let mut adapters = Vec::new();
+        push_document_tool(&config, &mut adapters).unwrap_or_else(|e| panic!("{e}"));
+        let expected = document_write_tool::EditSpreadsheetTool::definition()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            adapters
+                .iter()
+                .flat_map(|(definitions, _)| definitions)
+                .any(|definition| definition.id() == expected.id())
+        );
+        let mut without_folders = Vec::new();
+        push_document_tool(&config_with_policy(""), &mut without_folders)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(without_folders.is_empty());
+        drop(adapters);
+        jarvis_core::remove_scratch_dir(&root);
     }
 
     fn tool_id(value: &str) -> jarvis_tools::ToolId {

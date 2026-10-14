@@ -228,3 +228,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0207](0207-coding-tasks-go-to-an-acp-agent-in-its-own-git-worktree-and-its-permission-requests-are-answered-by-policy.md) | Coding tasks go to an ACP agent in its own git worktree, and its permission requests are answered by policy | Accepted |
 | [0208](0208-the-coding-agent-is-chosen-tested-and-signed-in-from-the-console-and-the-choice-applies-at-once.md) | The coding agent is chosen, tested and signed in from the console, and the choice applies at once | Accepted |
 | [0209](0209-background-coding-tasks-return-immediately-keep-durable-status-and-notify-the-owner.md) | Background coding tasks return immediately, keep durable status and notify the owner | Accepted |
+| [0210](0210-coding-task-activity-is-bounded-durable-and-not-a-result.md) | Coding-task activity is bounded, durable and not a result | Accepted |
+| [0211](0211-recoverable-cleanup-and-bounded-data-editing-tools.md) | Recoverable cleanup and bounded data editing tools | Accepted |
+| [0212](0212-browser-reading-is-explicit-bounded-and-literal.md) | Browser reading is explicit, bounded and literal | Accepted |
+| [0213](0213-discovery-enumerates-the-full-registry-before-deferring-tools.md) | Discovery enumerates the full registry before deferring tools | Accepted |

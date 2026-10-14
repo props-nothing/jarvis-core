@@ -1,9 +1,10 @@
-//! The tools a **model** keeps its contact list with: `jarvis.contacts.save`, `search` and `stats` (`ADR-0155`).
+//! The tools a **model** keeps its contact list with: save, search, stats, duplicates, merge, delete and CSV import.
+//! Deleting or importing contacts asks for approval by default; deletion cannot erase do-not-contact suppression.
 //!
 //! A prospecting project that keeps its leads in a spreadsheet loses them whenever the file is rewritten, and a run cannot ask "who have we
 //! already contacted?". These tools read and write the local contact list; nothing here sends anything to anyone.
 //!
-//! # Why they do not ask
+//! # Why ordinary saves do not ask
 //!
 //! Saving a contact is writing a row in the owner's own database, the same class of effect as a project journal entry, and it is only data:
 //! a later run reads it back fenced as data, never as an instruction. The one rule that matters is enforced in storage rather than in a
@@ -19,12 +20,20 @@ use jarvis_tools::{
     ProviderEvidence, RetryDeclaration, SchemaError, Scope, ScopeError, ScopeSet, ToolCallResult,
     ToolDefinition, ToolDefinitionError, ToolDefinitionParts, ToolEffect, ToolExecutionRequest,
     ToolExecutor, ToolId, ToolIdError, ToolOutcomeRecord, ToolSchema, ToolSensitivity, ToolSource,
+    WorkspaceRoots,
 };
 use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::project_context::site_of_call;
 
+#[path = "contact_import.rs"]
+mod contact_import;
+
+/// Removes one contact, without lifting do-not-contact.
+pub const DELETE_TOOL: &str = "jarvis.contacts.delete";
+/// Imports contacts atomically from a CSV in a granted folder.
+pub const IMPORT_TOOL: &str = "jarvis.contacts.import";
 /// Saves or updates one contact.
 pub const SAVE_TOOL: &str = "jarvis.contacts.save";
 /// Searches the contacts.
@@ -94,6 +103,26 @@ const MERGE_INPUT: &str = r#"{
   }
 }"#;
 
+const DELETE_INPUT: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The contact id from jarvis.contacts.search. Contacts marked do_not_contact cannot be deleted by a model, even with approval." }
+  }
+}"#;
+
+const IMPORT_INPUT: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path"],
+  "properties": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 260, "description": "Relative CSV path inside a granted folder. UTF-8 (optional BOM), comma-separated, with a company header and optional person, role, email, phone, status, notes, source. At most 1,000 rows and 2 MiB. All rows succeed or nothing changes." }
+  }
+}"#;
+
 const OUTPUT: &str = r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object"
@@ -123,6 +152,7 @@ pub enum ContactsToolError {
 /// The adapter behind the contact tools.
 pub struct ContactsTool {
     database: Arc<SqliteDatabase>,
+    roots: Option<Arc<WorkspaceRoots>>,
 }
 
 struct Spec {
@@ -140,7 +170,18 @@ impl ContactsTool {
     /// Builds the adapter over the daemon's database.
     #[must_use]
     pub const fn new(database: Arc<SqliteDatabase>) -> Self {
-        Self { database }
+        Self {
+            database,
+            roots: None,
+        }
+    }
+
+    /// Builds the adapter with the granted folders from which CSV contacts may be imported.
+    #[must_use]
+    pub fn with_roots(database: Arc<SqliteDatabase>, roots: Arc<WorkspaceRoots>) -> Self {
+        let mut tool = Self::new(database);
+        tool.roots = Some(roots);
+        tool
     }
 
     /// The tools' definitions.
@@ -208,6 +249,26 @@ impl ContactsTool {
                 scope: WRITE_SCOPE,
                 approval: ApprovalPolicy::Ask,
             },
+            Spec {
+                id: DELETE_TOOL,
+                title: "Delete a contact",
+                description: "Removes one contact from JARVIS only; it does not delete anything from email or external address books. Asks for approval by default, under the owner's normal standing-trust policy. A contact marked do_not_contact cannot be deleted by a model, because removing and importing it again must not undo the owner's suppression.",
+                input: DELETE_INPUT,
+                effect: ToolEffect::Destructive,
+                risk: 3,
+                scope: WRITE_SCOPE,
+                approval: ApprovalPolicy::Ask,
+            },
+            Spec {
+                id: IMPORT_TOOL,
+                title: "Import contacts from CSV",
+                description: "Imports up to 1,000 contacts from a UTF-8 CSV file in a granted folder, asking for approval by default. The CSV has company and optional person, role, email, phone, status, notes and source headers; quoted commas and newlines are supported. Matching uses the same rules as save. Nothing is changed unless every row is valid; do_not_contact cannot be lifted. Pass a bounded path, not CSV text.",
+                input: IMPORT_INPUT,
+                effect: ToolEffect::Write,
+                risk: 2,
+                scope: WRITE_SCOPE,
+                approval: ApprovalPolicy::Ask,
+            },
         ];
         specs.iter().map(Self::definition).collect()
     }
@@ -222,7 +283,11 @@ impl ContactsTool {
             output_schema: ToolSchema::parse(OUTPUT)?,
             effects: EffectSet::single(spec.effect),
             risk: spec.risk,
-            required_scopes: ScopeSet::single(Scope::new(spec.scope)?),
+            required_scopes: if spec.id == IMPORT_TOOL {
+                ScopeSet::new([Scope::new(spec.scope)?, Scope::new("files.read")?])
+            } else {
+                ScopeSet::single(Scope::new(spec.scope)?)
+            },
             approval: spec.approval,
             timeout_seconds: TIMEOUT_SECONDS,
             // A retry would write twice.
@@ -378,6 +443,69 @@ impl ContactsTool {
         }))
     }
 
+    async fn delete(&self, arguments: &Value) -> Result<Value, AdapterError> {
+        let id = arguments
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 64 && !id.chars().any(char::is_control))
+            .ok_or_else(|| refused("a contact id from jarvis.contacts.search is required"))?;
+        let workspace = self.workspace().await?;
+        let deleted = jarvis_storage::delete_contact_for_model(&self.database, &workspace, id)
+            .await
+            .map_err(|error| match error {
+                DatabaseError::InvalidContact { field: "status" } => refused(
+                    "a do_not_contact contact cannot be deleted by a model, even with approval; only the owner can lift that suppression",
+                ),
+                _ => refused("the contact could not be deleted"),
+            })?;
+        Ok(json!({ "id": id, "deleted": deleted }))
+    }
+
+    async fn import(
+        &self,
+        call_id: &str,
+        arguments: &Value,
+        now: UtcTimestamp,
+    ) -> Result<Value, AdapterError> {
+        let path = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| refused("a CSV path inside a granted folder is required"))?;
+        let roots = self
+            .roots
+            .as_ref()
+            .ok_or_else(|| refused("no folders have been granted for contact import"))?;
+        let inputs = contact_import::read(roots, path)?;
+        let workspace = self.workspace().await?;
+        let project = site_of_call(&self.database, call_id)
+            .await
+            .and_then(|site| site.project)
+            .map(|project| project.id);
+        let imported = jarvis_storage::import_contacts(
+            &self.database,
+            &workspace,
+            project.as_deref(),
+            &inputs,
+            false,
+            now,
+        )
+        .await
+        .map_err(|error| {
+            let reason = storage_refusal(&error);
+            match reason {
+                AdapterError::RefusedBeforeReaching { reason } => {
+                    refused(&format!("{reason}; nothing was imported"))
+                }
+                other => other,
+            }
+        })?;
+        Ok(json!({
+            "imported": inputs.len(),
+            "created": imported.created,
+            "updated": imported.updated,
+        }))
+    }
+
     async fn stats(&self) -> Result<Value, AdapterError> {
         let workspace = self.workspace().await?;
         let counts = jarvis_storage::contact_stats(&self.database, &workspace)
@@ -470,6 +598,8 @@ impl ToolExecutor for ContactsTool {
             STATS_TOOL => self.stats().await?,
             DUPLICATES_TOOL => self.duplicates(arguments).await?,
             MERGE_TOOL => self.merge(arguments, now).await?,
+            DELETE_TOOL => self.delete(arguments).await?,
+            IMPORT_TOOL => self.import(call, arguments, now).await?,
             _ => return Err(AdapterError::NotImplemented { tool }),
         };
         let evidence = ProviderEvidence::new("contacts:store").ok();

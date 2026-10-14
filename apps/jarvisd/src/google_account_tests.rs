@@ -15,6 +15,7 @@ type Routes = Arc<StdMutex<HashMap<String, (u16, String)>>>;
 pub(crate) struct Fixture {
     pub(crate) base: String,
     requests: Recorded,
+    wire_requests: Recorded,
     routes: Routes,
 }
 
@@ -26,11 +27,14 @@ pub(crate) async fn fixture() -> Fixture {
         .local_addr()
         .unwrap_or_else(|error| panic!("address: {error}"));
     let requests: Recorded = Arc::new(StdMutex::new(Vec::new()));
+    let wire_requests: Recorded = Arc::new(StdMutex::new(Vec::new()));
+    let wires = Arc::clone(&wire_requests);
     let routes: Routes = Arc::new(StdMutex::new(HashMap::new()));
     let (seen, table) = (Arc::clone(&requests), Arc::clone(&routes));
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let (seen, table) = (Arc::clone(&seen), Arc::clone(&table));
+            let wires = Arc::clone(&wires);
             tokio::spawn(async move {
                 let mut received = Vec::new();
                 let mut buffer = vec![0_u8; 16 * 1024];
@@ -72,6 +76,10 @@ pub(crate) async fn fixture() -> Fixture {
                 seen.lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push((path.clone(), body));
+                wires
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((path.clone(), text));
                 let (status, reply) = {
                     let routes = table
                         .lock()
@@ -93,11 +101,22 @@ pub(crate) async fn fixture() -> Fixture {
     Fixture {
         base: format!("http://{address}"),
         requests,
+        wire_requests,
         routes,
     }
 }
 
 impl Fixture {
+    pub(crate) fn wire_requests(&self, path: &str) -> Vec<String> {
+        self.wire_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(seen, _)| seen == path)
+            .map(|(_, request)| request.clone())
+            .collect()
+    }
+
     pub(crate) fn answer(&self, path: &str, status: u16, body: &str) {
         self.routes
             .lock()
@@ -531,15 +550,15 @@ async fn actions_add_the_write_scopes_and_hold_the_grant_to_them() {
         .begin(PORT)
         .unwrap_or_else(|error| panic!("{error}"));
     let scopes = query(&url, "scope");
-    assert_eq!(scopes.split(' ').count(), 5, "{scopes}");
+    assert_eq!(scopes.split(' ').count(), 6, "{scopes}");
     assert!(
         scopes.contains(SCOPE_GMAIL_SEND)
             && scopes.contains(SCOPE_GMAIL_COMPOSE)
             && scopes.contains(SCOPE_CALENDAR_EVENTS)
     );
     assert!(
-        !scopes.contains("gmail.modify") && !scopes.contains("mail.google.com"),
-        "no broader mail scope is ever asked for"
+        scopes.contains(SCOPE_GMAIL_MODIFY) && !scopes.contains("mail.google.com"),
+        "trash needs modify, never permanent-deletion permission"
     );
 
     // Google grants only the two read scopes (the owner unticked the rest): refused and withdrawn.

@@ -65,6 +65,8 @@ pub const SCOPE_GMAIL_SEND: &str = "https://www.googleapis.com/auth/gmail.send";
 /// Managing drafts (Google says "Manage drafts and send emails" and classes it restricted), asked for only when the owner turns actions on,
 /// so a draft can be saved for the owner to review (`ADR-0161`). Sending still uses the narrower send scope.
 pub const SCOPE_GMAIL_COMPOSE: &str = "https://www.googleapis.com/auth/gmail.compose";
+/// Mailbox changes including recoverable trash; only requested with optional Google actions.
+pub const SCOPE_GMAIL_MODIFY: &str = "https://www.googleapis.com/auth/gmail.modify";
 /// Creating and changing calendar events, asked for only when the owner turns actions on.
 pub const SCOPE_CALENDAR_EVENTS: &str = "https://www.googleapis.com/auth/calendar.events";
 
@@ -145,7 +147,7 @@ pub struct Status {
     pub email: Option<String>,
     /// A sign-in was started and has not been answered yet.
     pub pending: bool,
-    /// The owner turned on sending mail and creating events.
+    /// The owner enabled sends, drafts, mailbox changes and calendar actions.
     pub actions: bool,
     /// The signed-in grant covers sending and event creation.
     pub can_act: bool,
@@ -266,7 +268,7 @@ impl GoogleAccount {
         &self.client
     }
 
-    /// The scopes a sign-in asks for now: the two read scopes, plus sending and event creation when the owner turned actions on.
+    /// The read scopes, plus sends, drafts, mailbox changes and calendar actions when enabled.
     fn wanted_scopes(&self) -> Vec<String> {
         let actions = ConfigStore::from_paths(&self.paths)
             .load()
@@ -275,6 +277,7 @@ impl GoogleAccount {
         if actions {
             scopes.push(SCOPE_GMAIL_SEND.to_owned());
             scopes.push(SCOPE_GMAIL_COMPOSE.to_owned());
+            scopes.push(SCOPE_GMAIL_MODIFY.to_owned());
             scopes.push(SCOPE_CALENDAR_EVENTS.to_owned());
         }
         scopes
@@ -344,6 +347,7 @@ impl GoogleAccount {
             actions: wanted.len() > SCOPES.len(),
             can_act: self.has_scope(SCOPE_GMAIL_SEND)
                 && self.has_scope(SCOPE_GMAIL_COMPOSE)
+                && self.has_scope(SCOPE_GMAIL_MODIFY)
                 && self.has_scope(SCOPE_CALENDAR_EVENTS),
         }
     }

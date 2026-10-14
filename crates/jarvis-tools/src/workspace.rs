@@ -314,6 +314,83 @@ impl WorkspaceRoots {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no workspace root")))
     }
 
+    /// Moves one regular file into recoverable workspace-local trash.
+    ///
+    /// Returns the recovery path and owning root. This never permanently removes file content.
+    ///
+    /// # Errors
+    ///
+    /// Refuses directories, symlinks, non-relative paths and deletion from trash. Resolution and
+    /// rename stay relative to directory handles; an unsuccessful rename leaves the source intact.
+    pub fn trash_file(&self, relative: &Path) -> Result<(PathBuf, &Path), io::Error> {
+        use std::path::Component;
+
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+            || relative.components().any(|part| {
+                part.as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(".jarvis-trash")
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "use a relative file path outside .jarvis-trash",
+            ));
+        }
+        let name = relative.file_name().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "a file name is required")
+        })?;
+        for root in &self.roots {
+            let metadata = match root.handle.symlink_metadata(relative) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "only regular files can be trashed",
+                ));
+            }
+            match root.handle.create_dir(".jarvis-trash") {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            if root
+                .handle
+                .symlink_metadata(".jarvis-trash")?
+                .file_type()
+                .is_symlink()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "trash cannot be a symlink",
+                ));
+            }
+            let trash = root.handle.open_dir(".jarvis-trash")?;
+            let token = jarvis_core::CorrelationId::new().to_string();
+            trash.create_dir(&token)?;
+            let destination = trash.open_dir(&token)?;
+            if let Err(error) = root.handle.rename(relative, &destination, name) {
+                drop(destination);
+                let _ = trash.remove_dir(&token);
+                return Err(error);
+            }
+            return Ok((
+                PathBuf::from(".jarvis-trash").join(token).join(name),
+                root.label.as_path(),
+            ));
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no granted root holds that file",
+        ))
+    }
+
     /// Creates a file, or appends to one, beneath the granted roots. It can **never destroy content**.
     ///
     /// An existing file lives in exactly one root, so each root is asked whether it holds the path: if one does,
@@ -390,6 +467,73 @@ impl WorkspaceRoots {
         let mut file = target.handle.open_with(relative, &options)?;
         file.write_all(bytes)?;
         Ok((true, target.label.as_path()))
+    }
+
+    /// Atomically replaces a bounded existing regular file with a validated binary edit.
+    ///
+    /// # Errors
+    ///
+    /// Refuses oversized input/output, non-regular files and paths outside the grant. The edit is
+    /// completed before any write; a unique create-new sibling is flushed and renamed only on success.
+    pub fn replace_bytes(
+        &self,
+        relative: &Path,
+        max_bytes: u64,
+        edit: impl FnOnce(&[u8]) -> Result<Vec<u8>, io::Error>,
+    ) -> Result<&Path, io::Error> {
+        use std::io::{Read, Write};
+
+        for root in &self.roots {
+            let file = match root.handle.open(relative) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let metadata = file.metadata()?;
+            if !metadata.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "only regular files can be edited",
+                ));
+            }
+            let mut bytes = Vec::new();
+            file.take(max_bytes.saturating_add(1))
+                .read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > max_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the file is too large to edit",
+                ));
+            }
+            let replaced = edit(&bytes)?;
+            if replaced.len() as u64 > max_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the edited file exceeds the size limit",
+                ));
+            }
+            let temporary = relative
+                .with_file_name(format!(".jarvis-{}.tmp", jarvis_core::CorrelationId::new()));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            let mut output = root.handle.open_with(&temporary, &options)?;
+            let written = output
+                .set_permissions(metadata.permissions())
+                .and_then(|()| output.write_all(&replaced))
+                .and_then(|()| output.sync_all());
+            drop(output);
+            if let Err(error) =
+                written.and_then(|()| root.handle.rename(&temporary, &root.handle, relative))
+            {
+                let _ = root.handle.remove_file(&temporary);
+                return Err(error);
+            }
+            return Ok(root.label.as_path());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no granted root holds that file",
+        ))
     }
 
     /// Replaces the text of an existing file by a function of its current text, atomically.
@@ -593,6 +737,66 @@ mod tests {
         fn drop(&mut self) {
             jarvis_core::remove_scratch_dir(&self.0);
         }
+    }
+
+    #[test]
+    fn binary_edits_are_bounded_atomic_and_do_not_touch_predictable_siblings() {
+        let directory = TestDirectory::new();
+        let root = directory.make_dir("root");
+        directory.write("root/book.xlsx", "original");
+        directory.write("root/.book.xlsx.jarvis-tmp", "unrelated");
+        let roots = roots(&[&root]);
+        assert!(
+            roots
+                .replace_bytes(Path::new("book.xlsx"), 20, |_| Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "bad workbook"
+                )))
+                .is_err()
+        );
+        assert!(
+            roots
+                .replace_bytes(Path::new("book.xlsx"), 20, |_| Ok(vec![0; 21]))
+                .is_err()
+        );
+        assert!(
+            roots
+                .replace_bytes(Path::new("book.xlsx"), 3, |_| panic!(
+                    "oversized input must not reach editor"
+                ))
+                .is_err()
+        );
+        assert!(
+            roots
+                .replace_bytes(Path::new("../outside.xlsx"), 20, |_| panic!(
+                    "outside must not reach editor"
+                ))
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(root.join("book.xlsx")).unwrap_or_default(),
+            b"original"
+        );
+        roots
+            .replace_bytes(Path::new("book.xlsx"), 20, |bytes| {
+                assert_eq!(bytes, b"original");
+                Ok(vec![0, 255, 1, 2])
+            })
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fs::read(root.join("book.xlsx")).unwrap_or_default(),
+            vec![0, 255, 1, 2]
+        );
+        assert_eq!(
+            fs::read(root.join(".book.xlsx.jarvis-tmp")).unwrap_or_default(),
+            b"unrelated"
+        );
+        assert_eq!(
+            fs::read_dir(&root)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .count(),
+            2
+        );
     }
 
     /// Creates a directory link at `link` pointing at `target`.

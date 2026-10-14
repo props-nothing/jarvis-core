@@ -79,7 +79,7 @@ pub use executor::{
     ToolExecutor,
 };
 pub use files::{
-    EDIT_TOOL, FilesystemTool, FilesystemToolError, LIST_TOOL, MAX_EDIT_FIND_CHARS,
+    DELETE_TOOL, EDIT_TOOL, FilesystemTool, FilesystemToolError, LIST_TOOL, MAX_EDIT_FIND_CHARS,
     MAX_LISTED_ENTRIES, MAX_PATH_ARGUMENT_CHARS, MAX_WRITE_CHARS, MOVE_TOOL, READ_TOOL, WRITE_TOOL,
 };
 pub use identifier::{

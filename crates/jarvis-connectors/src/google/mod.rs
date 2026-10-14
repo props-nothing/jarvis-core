@@ -3,7 +3,7 @@
 //! # Where every value in this file came from
 //!
 //! Every number, scope string, quota figure and URL here is transcribed from
-//! `docs/research/integrations/google.md`, which was refreshed from live official sources on **2026-10-11**
+//! `docs/research/integrations/google.md`, which was refreshed from live official sources on **2026-10-14**
 //! (the pages themselves carry "last updated" dates of 2026-09-03 through 2026-09-18). Nothing in this file
 //! is recalled, and nothing is inferred from the shape of another vendor's API.
 //!
@@ -92,7 +92,7 @@ pub const RESEARCH_RECORD: &str = "docs/research/integrations/google.md";
 /// The same date as the record's own `last_verified`, and the two are asserted equal by
 /// `the_manifest_points_at_a_record_that_exists_at_the_declared_date` — a manifest whose pointer and record
 /// disagree about the date would let a stale contract read as a fresh one.
-pub const RESEARCH_VERIFIED_ON: &str = "2026-10-11";
+pub const RESEARCH_VERIFIED_ON: &str = "2026-10-14";
 
 /// Gmail's **restricted** read-and-organise scope.
 ///

@@ -34,6 +34,7 @@ use async_trait::async_trait;
 use jarvis_core::{IsolatedText, Sensitivity, SystemClock, UtcTimestamp};
 use jarvis_runtimes::acp::{
     Connection, Decision, Ended, Limits, PermissionPolicy, PermissionRequest, Report, StopReason,
+    ToolActivity,
 };
 use jarvis_runtimes::worktree::{self, Outcome, Repository, Worktree};
 use jarvis_storage::AppPaths;
@@ -45,7 +46,7 @@ use jarvis_tools::{
 };
 use serde_json::{Value, json};
 use thiserror::Error;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 
 use crate::code_agents::{self, AgentSettings};
 use crate::command_run::{CommandRunTool, TreeGuard, kill_tree, plain};
@@ -360,6 +361,15 @@ impl CodeDelegateTool {
         arguments: &Arguments,
         cancel: &Notify,
     ) -> Result<Value, AdapterError> {
+        self.run_observing(arguments, cancel, None).await
+    }
+
+    pub(crate) async fn run_observing(
+        &self,
+        arguments: &Arguments,
+        cancel: &Notify,
+        activity: Option<mpsc::Sender<ToolActivity>>,
+    ) -> Result<Value, AdapterError> {
         let directory = self
             .folders
             .resolve_directory(&arguments.repository)
@@ -414,6 +424,9 @@ impl CodeDelegateTool {
                     return Err(refused(&code_agents::describe_error(&error)));
                 }
             };
+        if let Some(sender) = activity {
+            connection.set_activity_sender(sender);
+        }
         let policy = WorktreePolicy::new(&tree.path, arguments.allow_commands);
         let report = connection
             .prompt(&framed_task(&tree, arguments), &policy, cancel)
@@ -558,6 +571,9 @@ fn describe(
         "agent_tool_calls": fenced_pieces(&activity),
         "agent_requests": fenced_pieces(&asked),
         "stray_output_lines": report.stray_lines,
+        "activity_updates": report.activity_updates,
+        "activity_dropped": report.activity_dropped,
+        "tool_notes_dropped": report.tools_dropped,
     });
     let object = answer.as_object_mut();
     let Some(object) = object else { return answer };

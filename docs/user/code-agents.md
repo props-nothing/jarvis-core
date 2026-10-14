@@ -44,6 +44,14 @@ To review: `git diff <base>..<branch>` in the repository (JARVIS gives the exact
 
 For background tasks, open **Settings, Folders & code, Background coding tasks** and expand a task. The review shows its recorded branch, worktree, commits, changed files, agent report, activity, permission decisions and diff preview. A truncated preview is labelled. **Refresh coding tasks** reloads status without running an agent or command, and keeps expanded tasks open. Failed refreshes keep the last loaded review visible and show an error.
 
+### While a background task works
+
+The review shows **Agent-reported activity** as tool updates arrive: the tool's title, kind, status and any reported file paths. While a task is queued or running and this Settings card is open, it checks for updates every two seconds. Updates preserve open reviews, keyboard focus and an unsaved custom-agent command. Closing Settings or leaving Folders & code stops the automatic checks; completion stops them too.
+
+Activity is recorded separately from the final result, so reopening the console can show what was retained even if the task was interrupted. The database retains at most the latest 128 sequence positions and the console shows the latest 32 entries; **Some activity was not retained** warns about omitted or dropped updates. A failed refresh keeps the last loaded history visible and reports the error.
+
+These are the agent's reports, not proof that its tools succeeded. Some agents report fewer actions than others, and silence does not prove that an agent is idle. This progress view excludes internal reasoning, thinking-tool metadata, raw tool input/output, tool content and message chunks. The synchronous `jarvis.code.delegate` path still returns its activity in its final result; this live view is for background tasks. No new live-provider verification is claimed for progress delivery.
+
 **Completed means the agent ended its turn, not that tests passed.** Reviews say **Not independently verified**, even when the agent's own report says tests passed. Interrupted tasks explicitly report a missing final result; an early interruption may leave no recorded worktree path. This view does not resume, merge, push or independently test the work.
 
 ## Limits, said plainly

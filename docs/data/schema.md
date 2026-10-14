@@ -56,6 +56,14 @@ Client/workspace capability scopes, resource constraints, policy ceiling, validi
 
 ## Conversations And Runs
 
+### `delegated_tasks`
+
+Workspace-owned background coding tasks: approved task intent, repository, command permission, time limit, queued/running/terminal status, final branch/worktree/result/error and timestamps (`ADR-0209`). Activity is separate from the final result.
+
+### `delegated_task_activity`
+
+SQLite schema 27 (`ADR-0210`): task/workspace composite foreign key, increasing positive sequence, summary (1 to 1600 characters) and UTC timestamp. Only a running task accepts newer activity through the repository. Retention keeps at most the latest 128 sequence positions; reads return the latest 32 rows in ascending order. Gaps or omitted history must be disclosed. Agent-reported activity is untrusted workspace-private data, not a verified outcome or full audit log; no raw tool payloads or internal reasoning belong here.
+
 ### `sessions`
 
 `id`, workspace/user/channel, title, status, active runtime/model policy, created/updated/archived timestamps, version.

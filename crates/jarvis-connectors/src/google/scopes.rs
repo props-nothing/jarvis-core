@@ -4,7 +4,7 @@
 //!
 //! Google classifies every scope as **non-sensitive**, **sensitive**, or **restricted**, and the category —
 //! not the scope string — decides what a deployment must do before it may ship. From the Gmail scopes page
-//! rechecked on 2026-10-11:
+//! rechecked on 2026-10-14:
 //!
 //! > Non-sensitive: These scopes provide the smallest scope of authorization and only require basic OAuth App
 //! > Verification.
@@ -50,7 +50,7 @@ use std::fmt;
 ///
 /// The same date the research record's own `last_verified` carries, and asserted equal to it — a table dated
 /// differently from the record it came from would let a recategorisation look like it had been accounted for.
-pub const SCOPE_CATEGORIES_RECORDED_ON: &str = "2026-10-11";
+pub const SCOPE_CATEGORIES_RECORDED_ON: &str = "2026-10-14";
 
 /// Google's classification of one scope string.
 ///

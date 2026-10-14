@@ -79,6 +79,55 @@ async fn wait(manager: &AsyncCodeDelegateTool, id: &str) -> Value {
 }
 
 #[tokio::test]
+async fn live_activity_is_persisted_before_completion_and_fenced_for_models() {
+    let (_scratch, db, manager) = rig("progress,wait").await;
+    let started = manager
+        .start(&json!({"repository":"repo", "task":"read config", "minutes":20}))
+        .await
+        .unwrap();
+    let id = started["task_id"].as_str().unwrap();
+    let mut observed = None;
+    for _ in 0..100 {
+        let task = jarvis_storage::find_delegated_task(&db, &manager.workspace, id)
+            .await
+            .unwrap();
+        if !task.activity.is_empty() {
+            observed = Some(task);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let task = observed.unwrap_or_else(|| panic!("activity must be visible before the agent ends"));
+    assert_eq!(task.status, "running");
+    assert!(task.result_json.is_none());
+    assert!(task.activity[0].summary.contains("a.txt"));
+    assert!(
+        task.activity
+            .iter()
+            .all(|entry| !entry.summary.contains("private")
+                && !entry.summary.contains("unrelated")
+                && !entry.summary.contains("Internal planning"))
+    );
+    let model = manager.status(&json!({"task_id":id})).await.unwrap();
+    let console = render_console(&task);
+    assert_eq!(console["activity"][0]["summary"], task.activity[0].summary);
+    assert_eq!(
+        model["activity"][0]["summary"],
+        IsolatedText::new(&task.activity[0].summary)
+            .unwrap()
+            .render()
+    );
+    assert_eq!(console["activity"][0]["sequence"], 1);
+    manager.stop(&json!({"task_id":id})).unwrap();
+    let done = wait(&manager, id).await;
+    assert_eq!(done["status"], "cancelled");
+    assert!(!done["activity"].as_array().unwrap().is_empty());
+    assert_eq!(done["result"]["activity_updates"], 2);
+    assert!(done["result"]["activity_error"].is_null());
+    db.close().await;
+}
+
+#[tokio::test]
 async fn start_returns_immediately_and_the_result_becomes_durable() {
     let (_s, _db, m) = rig("write:{cwd}/done.txt,say:finished").await;
     let started = m

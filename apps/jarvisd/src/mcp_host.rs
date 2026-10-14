@@ -39,6 +39,9 @@ use std::sync::Arc;
 use jarvis_mcp_transport::{HostConfigError, HostError, McpHost, McpHostConfig};
 use jarvis_tools::ToolExecutor;
 
+#[path = "mcp_browser.rs"]
+mod browser;
+
 /// The file an operator writes, beside the daemon's own `config.toml`.
 pub const MCP_SERVERS_FILE_NAME: &str = "mcp-servers.toml";
 
@@ -107,7 +110,21 @@ impl ComposedHost {
     /// Returns what became of each server that connected, with its tools and the ones left out.
     #[must_use]
     pub(crate) fn statuses(&self) -> Vec<crate::mcp_admin::ServerStatus> {
-        statuses_of(&self.host)
+        let definitions = self.definitions();
+        let mut statuses = statuses_of(&self.host);
+        for status in &mut statuses {
+            status.tools.retain_mut(|tool| {
+                let Some(definition) = definitions
+                    .iter()
+                    .find(|definition| definition.id().to_string() == tool.id)
+                else {
+                    return false;
+                };
+                tool.description = crate::mcp_admin::short_description(definition.description());
+                true
+            });
+        }
+        statuses
     }
 
     /// Returns the tools a server offered that were left out, each with the reason.
@@ -129,7 +146,9 @@ impl ComposedHost {
     /// still cancels, because the SDK's handle carries a cancellation guard — verified in its source — so a
     /// failure here degrades the shutdown rather than leaking a child process.
     pub async fn close(self) -> Result<(), Vec<String>> {
-        self.host.close().await
+        let Self { host, adapters } = self;
+        drop(adapters);
+        host.close().await
     }
 }
 
@@ -305,14 +324,17 @@ pub async fn compose_host(
     // come from one source. The transport pairs them, because it is the only place that knows which server
     // owns a canonical identifier — deriving the two separately here would let them disagree about which
     // tools exist.
+    let builtin_browser = crate::mcp_abilities::has_builtin_browser(document);
     let adapters = host
         .adapters_with_definitions()
         .into_iter()
         .map(|(adapter, definitions)| {
-            (
-                definitions,
-                Arc::new(adapter.clone()) as Arc<dyn ToolExecutor>,
-            )
+            let executor = Arc::new(adapter.clone()) as Arc<dyn ToolExecutor>;
+            if builtin_browser && adapter.server() == "browser" {
+                browser::adapt(definitions, executor)
+            } else {
+                (definitions, executor)
+            }
         })
         .collect();
 

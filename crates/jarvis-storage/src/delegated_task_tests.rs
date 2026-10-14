@@ -24,6 +24,213 @@ fn at(n: i128) -> UtcTimestamp {
 }
 
 #[tokio::test]
+async fn activity_is_scoped_running_only_and_survives_reopening_and_interruption() {
+    let (scratch, database) = db().await;
+    let task = create_delegated_task(
+        &database,
+        &NewDelegatedTask {
+            workspace_id: LOCAL_WORKSPACE_ID,
+            repository: "repo",
+            task: "read config",
+            allow_commands: false,
+            minutes: 10,
+            now: at(0),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        !append_delegated_task_activity(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            &task.id,
+            1,
+            "too early",
+            at(1)
+        )
+        .await
+        .unwrap()
+    );
+    mark_delegated_task_running(&database, LOCAL_WORKSPACE_ID, &task.id, at(2))
+        .await
+        .unwrap();
+    assert!(
+        append_delegated_task_activity(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            &task.id,
+            1,
+            "Read config [in progress]",
+            at(3)
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !append_delegated_task_activity(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            &task.id,
+            1,
+            "duplicate",
+            at(4)
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !append_delegated_task_activity(&database, "other", &task.id, 2, "wrong workspace", at(4))
+            .await
+            .unwrap()
+    );
+    database.close().await;
+    let database = SqliteDatabase::open(&scratch.0.join(DEFAULT_DATABASE_FILENAME))
+        .await
+        .unwrap();
+    let found = find_delegated_task(&database, LOCAL_WORKSPACE_ID, &task.id)
+        .await
+        .unwrap();
+    assert_eq!(found.status, "running");
+    assert!(found.result_json.is_none());
+    assert_eq!(found.activity.len(), 1);
+    assert_eq!(found.activity[0].summary, "Read config [in progress]");
+    interrupt_delegated_tasks(&database, at(5)).await.unwrap();
+    assert!(
+        !append_delegated_task_activity(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            &task.id,
+            2,
+            "too late",
+            at(6)
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        find_delegated_task(&database, LOCAL_WORKSPACE_ID, &task.id)
+            .await
+            .unwrap()
+            .activity,
+        found.activity
+    );
+    assert!(
+        list_delegated_tasks(&database, "other", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn activity_payload_guards_reject_invalid_sequences_sizes_and_ownership() {
+    let (_scratch, database) = db().await;
+    let task = create_delegated_task(
+        &database,
+        &NewDelegatedTask {
+            workspace_id: LOCAL_WORKSPACE_ID,
+            repository: "repo",
+            task: "read config",
+            allow_commands: false,
+            minutes: 10,
+            now: at(0),
+        },
+    )
+    .await
+    .unwrap();
+    mark_delegated_task_running(&database, LOCAL_WORKSPACE_ID, &task.id, at(1))
+        .await
+        .unwrap();
+    for (sequence, summary) in [
+        (0, "invalid sequence".to_owned()),
+        (1, "x".repeat(MAX_TASK_ACTIVITY_CHARS + 1)),
+        (1, "invalid\0control".to_owned()),
+    ] {
+        assert!(
+            append_delegated_task_activity(
+                &database,
+                LOCAL_WORKSPACE_ID,
+                &task.id,
+                sequence,
+                &summary,
+                at(2)
+            )
+            .await
+            .is_err()
+        );
+    }
+    assert!(sqlx::query("INSERT INTO delegated_task_activity (task_id,workspace_id,sequence,summary,created_at) VALUES (?1,'other',2,'wrong owner',?2)")
+        .bind(&task.id).bind(at(3).to_string()).execute(database.pool()).await.is_err());
+    assert!(
+        find_delegated_task(&database, LOCAL_WORKSPACE_ID, &task.id)
+            .await
+            .unwrap()
+            .activity
+            .is_empty()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn activity_history_is_bounded_and_returned_in_sequence_order() {
+    let (_scratch, database) = db().await;
+    let task = create_delegated_task(
+        &database,
+        &NewDelegatedTask {
+            workspace_id: LOCAL_WORKSPACE_ID,
+            repository: "repo",
+            task: "many updates",
+            allow_commands: false,
+            minutes: 10,
+            now: at(0),
+        },
+    )
+    .await
+    .unwrap();
+    mark_delegated_task_running(&database, LOCAL_WORKSPACE_ID, &task.id, at(1))
+        .await
+        .unwrap();
+    let last = MAX_TASK_ACTIVITY_RETAINED + 5;
+    for sequence in 1..=last {
+        assert!(
+            append_delegated_task_activity(
+                &database,
+                LOCAL_WORKSPACE_ID,
+                &task.id,
+                sequence,
+                &format!("update {sequence}"),
+                at(i128::from(sequence))
+            )
+            .await
+            .unwrap()
+        );
+    }
+    let found = find_delegated_task(&database, LOCAL_WORKSPACE_ID, &task.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        found.activity.len(),
+        usize::try_from(MAX_TASK_ACTIVITY_SHOWN).unwrap()
+    );
+    assert_eq!(found.activity.last().unwrap().sequence, last);
+    assert!(
+        found
+            .activity
+            .windows(2)
+            .all(|pair| pair[0].sequence + 1 == pair[1].sequence)
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM delegated_task_activity WHERE task_id=?1")
+            .bind(&task.id)
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, i64::try_from(MAX_TASK_ACTIVITY_RETAINED).unwrap());
+    database.close().await;
+}
+
+#[tokio::test]
 async fn lifecycle_is_durable_and_workspace_scoped() {
     let (_s, db) = db().await;
     let task = create_delegated_task(

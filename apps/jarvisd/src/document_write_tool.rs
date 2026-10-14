@@ -23,6 +23,34 @@ use jarvis_tools::{
 use serde_json::{Value, json};
 use thiserror::Error;
 
+#[path = "xlsx_workbook.rs"]
+mod xlsx_workbook;
+
+/// Edits literal cell values in an existing spreadsheet without rebuilding its other parts.
+pub const EDIT_SPREADSHEET_TOOL: &str = "jarvis.files.edit_spreadsheet";
+
+const EDIT_INPUT: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "edits"],
+  "properties": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 260, "description": "An EXISTING .xlsx path inside a granted folder. This replaces the workbook after all edits validate; it never creates a missing workbook." },
+    "edits": {
+      "type": "array", "minItems": 1, "maxItems": 500,
+      "description": "Literal cell values only, at most 1 MiB in total. Other cells, styles, formulas, worksheets and ZIP parts are preserved. Null clears a value but retains its style. Formula cells/ranges and protected worksheets are refused; formula-looking strings remain text. Read the workbook first, then use exact worksheet names and uppercase A1 addresses. No formula execution or recalculation is performed.",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["sheet", "cell", "value"],
+        "properties": {
+          "sheet": { "type": "string", "minLength": 1, "maxLength": 31 },
+          "cell": { "type": "string", "minLength": 2, "maxLength": 10, "pattern": "^[A-Z]{1,3}[1-9][0-9]{0,6}$" },
+          "value": { "type": ["string", "number", "boolean", "null"], "maxLength": 32000 }
+        }
+      }
+    }
+  }
+}"#;
+
 /// Writes a spreadsheet, CSV or Word file.
 pub const WRITE_DOCUMENT_TOOL: &str = "jarvis.files.write_document";
 
@@ -186,6 +214,142 @@ impl WriteDocumentTool {
     }
 }
 
+/// The scoped adapter behind `jarvis.files.edit_spreadsheet`.
+pub struct EditSpreadsheetTool {
+    roots: Arc<WorkspaceRoots>,
+}
+
+impl EditSpreadsheetTool {
+    /// Builds the adapter over the existing granted-folder confinement boundary.
+    #[must_use]
+    pub const fn new(roots: Arc<WorkspaceRoots>) -> Self {
+        Self { roots }
+    }
+
+    /// The destructive-write definition; workspace policy requires approval by default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a constant of the tool contract is invalid.
+    pub fn definition() -> Result<ToolDefinition, WriteDocumentToolError> {
+        Ok(ToolDefinition::new(ToolDefinitionParts {
+            id: ToolId::new(EDIT_SPREADSHEET_TOOL)?,
+            version: "1.0.0".to_owned(),
+            title: "Edit an existing spreadsheet".to_owned(),
+            description: "Edits literal cell values in an EXISTING .xlsx inside a granted folder, preserving other worksheets, \
+                          cell formatting, formulas and untouched archive parts. Uses exact worksheet names and uppercase A1 cells; \
+                          text never becomes a formula and null clears a value while keeping its style. Adds missing cells or rows, \
+                          but never creates a workbook. Formula cells/ranges, protected sheets, macro and signed workbooks are refused. \
+                          All edits validate before atomic replacement. Does not calculate formulas: reopen in a spreadsheet app to recalculate."
+                .to_owned(),
+            input_schema: ToolSchema::parse(EDIT_INPUT)?,
+            output_schema: ToolSchema::parse(OUTPUT)?,
+            effects: EffectSet::single(ToolEffect::Write),
+            risk: 2,
+            required_scopes: ScopeSet::single(Scope::new("files.write")?),
+            approval: ApprovalPolicy::Policy,
+            timeout_seconds: 60,
+            retry: RetryDeclaration::none(),
+            idempotency: Idempotency::Unsupported,
+            source: ToolSource::Native,
+            availability: Availability::Available,
+            sensitivity: ToolSensitivity::new(Sensitivity::Internal, Sensitivity::Internal),
+        })?)
+    }
+
+    fn edit(&self, arguments: &Value) -> Result<Value, AdapterError> {
+        let object = arguments
+            .as_object()
+            .ok_or_else(|| refused("an object is required"))?;
+        if object.len() != 2 {
+            return Err(refused("exactly path and edits are required"));
+        }
+        let text = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty() && text.chars().count() <= 260)
+            .ok_or_else(|| refused("an existing .xlsx path is required, at most 260 characters"))?;
+        let path = crate::google_files::plain_relative(text).ok_or_else(|| {
+            refused("the path must be inside a granted folder (no drive, no .., not absolute)")
+        })?;
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx"))
+        {
+            return Err(refused("only an existing .xlsx workbook can be edited"));
+        }
+        let edits = xlsx_workbook::parse_edits(
+            arguments
+                .get("edits")
+                .ok_or_else(|| refused("edits are required"))?,
+        )
+        .map_err(|reason| refused(&reason))?;
+        let count = edits.len();
+        let mut output_bytes = 0;
+        self.roots.replace_bytes(&path, xlsx_workbook::MAX_BYTES as u64, |bytes| {
+            let result = xlsx_workbook::edit(bytes, &edits).map_err(|reason| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, reason)
+            })?;
+            output_bytes = result.len();
+            Ok(result)
+        }).map_err(|error| match error.kind() {
+            std::io::ErrorKind::InvalidData => refused(&error.to_string()),
+            std::io::ErrorKind::NotFound => refused("the workbook does not exist inside the granted folders"),
+            _ => refused("the workbook could not be safely replaced inside the granted folders; close it in Excel and try again"),
+        })?;
+        Ok(json!({
+            "path": text,
+            "format": "xlsx",
+            "edited_cells": count,
+            "bytes": output_bytes,
+            "created": false,
+            "note": "Formula definitions are preserved, not calculated. Cached results may be stale until a spreadsheet application recalculates the workbook."
+        }))
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for EditSpreadsheetTool {
+    fn adapter_id(&self) -> &'static str {
+        "spreadsheets-edit"
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolExecutionRequest,
+    ) -> Result<ToolCallResult, AdapterError> {
+        let now = UtcTimestamp::now(&SystemClock);
+        if request.is_past_deadline(now) {
+            return Err(refused("the call was already past its deadline"));
+        }
+        if request.tool().to_string() != EDIT_SPREADSHEET_TOOL {
+            return Err(AdapterError::NotImplemented {
+                tool: request.tool().to_string(),
+            });
+        }
+        let arguments = request.arguments().clone();
+        let roots = Arc::clone(&self.roots);
+        let body = tokio::task::spawn_blocking(move || Self { roots }.edit(&arguments))
+            .await
+            .map_err(|_| refused("the workbook could not be edited"))??;
+        let evidence = ProviderEvidence::new("documents:edit-spreadsheet").ok();
+        let record = evidence
+            .as_ref()
+            .and_then(|value| ToolOutcomeRecord::confirmed(value.as_str()).ok())
+            .unwrap_or_else(|| {
+                ToolOutcomeRecord::failed("evidence")
+                    .unwrap_or_else(|_| unreachable!("a literal reason"))
+            });
+        Ok(ToolCallResult::new(
+            record,
+            evidence,
+            Some(BoundedOutput::from_bounded(body.to_string(), false)),
+            now,
+        ))
+    }
+}
+
 fn refused(reason: &str) -> AdapterError {
     AdapterError::RefusedBeforeReaching {
         reason: reason.to_owned(),
@@ -214,6 +378,11 @@ impl ToolExecutor for WriteDocumentTool {
         let now = UtcTimestamp::now(&SystemClock);
         if request.is_past_deadline(now) {
             return Err(refused("the call was already past its deadline"));
+        }
+        if request.tool().to_string() == EDIT_SPREADSHEET_TOOL {
+            return EditSpreadsheetTool::new(Arc::clone(&self.roots))
+                .execute(request)
+                .await;
         }
         if request.tool().to_string() != WRITE_DOCUMENT_TOOL {
             return Err(AdapterError::NotImplemented {

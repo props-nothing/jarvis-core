@@ -78,6 +78,135 @@ impl PermissionPolicy for Fixed {
 }
 
 #[tokio::test]
+async fn progress_arrives_before_the_prompt_finishes_and_cancellation_still_works() {
+    let mut connection = opened("permission:read:/work/a.txt,wait").await;
+    let (sender, mut updates) = mpsc::channel(4);
+    connection.set_activity_sender(sender);
+    let cancel = Arc::new(Notify::new());
+    let trigger = Arc::clone(&cancel);
+    let worker = tokio::spawn(async move {
+        let report = connection.prompt("read", &Fixed(true), &cancel).await;
+        connection.close().await;
+        report
+    });
+    let update = tokio::time::timeout(Duration::from_secs(3), updates.recv())
+        .await
+        .unwrap_or_else(|error| panic!("progress timeout: {error}"))
+        .unwrap_or_else(|| panic!("progress channel closed"));
+    assert_eq!(update.sequence, 1);
+    assert_eq!(update.tool.kind, "read");
+    assert_eq!(update.tool.status, "pending");
+    assert!(!worker.is_finished(), "progress must precede completion");
+    trigger.notify_one();
+    let report = worker
+        .await
+        .unwrap_or_else(|error| panic!("worker: {error}"));
+    assert_eq!(report.ended, Ended::Cancelled);
+}
+
+#[tokio::test]
+async fn progress_backpressure_does_not_block_the_prompt() {
+    let mut connection = opened("chat").await;
+    let (sender, _updates) = mpsc::channel(1);
+    connection.set_activity_sender(sender);
+    let report = connection
+        .prompt("read", &Fixed(false), &Notify::new())
+        .await;
+    assert_eq!(report.ended, Ended::Finished(StopReason::EndTurn));
+    assert_eq!(report.activity_updates, 2);
+    assert_eq!(report.activity_dropped, 1);
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn progress_is_session_scoped_and_never_exposes_internal_reasoning() {
+    let mut connection = opened("progress,wait").await;
+    let (sender, mut updates) = mpsc::channel(8);
+    connection.set_activity_sender(sender);
+    let cancel = Arc::new(Notify::new());
+    let trigger = Arc::clone(&cancel);
+    let worker = tokio::spawn(async move {
+        let report = connection.prompt("read", &Fixed(false), &cancel).await;
+        connection.close().await;
+        report
+    });
+    let first = tokio::time::timeout(Duration::from_secs(3), updates.recv())
+        .await
+        .unwrap_or_else(|error| panic!("progress timeout: {error}"))
+        .unwrap_or_else(|| panic!("progress closed"));
+    let second = tokio::time::timeout(Duration::from_secs(3), updates.recv())
+        .await
+        .unwrap_or_else(|error| panic!("progress timeout: {error}"))
+        .unwrap_or_else(|| panic!("progress closed"));
+    assert_eq!(first.sequence, 1);
+    assert_eq!(first.tool.title, "Read config");
+    assert_eq!(second.sequence, 2);
+    assert_eq!(second.tool.title, first.tool.title);
+    assert_eq!(second.tool.paths, first.tool.paths);
+    assert!(second.tool.paths[0].ends_with("a.txt"));
+    assert_eq!(second.tool.status, "in_progress");
+    assert!(!format!("{first:?}{second:?}").contains("private"));
+    assert!(matches!(
+        updates.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    trigger.notify_one();
+    let report = worker
+        .await
+        .unwrap_or_else(|error| panic!("worker: {error}"));
+    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(report.activity_updates, 2);
+    assert!(!report.message.contains("private thought"));
+}
+
+#[tokio::test]
+async fn progress_full_queue_does_not_prevent_cancellation() {
+    let mut connection = opened("progress,wait").await;
+    let (sender, _updates) = mpsc::channel(1);
+    connection.set_activity_sender(sender.clone());
+    let cancel = Arc::new(Notify::new());
+    let trigger = Arc::clone(&cancel);
+    let worker = tokio::spawn(async move {
+        let report = connection.prompt("read", &Fixed(false), &cancel).await;
+        connection.close().await;
+        report
+    });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while sender.capacity() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|error| panic!("no progress: {error}"));
+    trigger.notify_one();
+    let report = tokio::time::timeout(Duration::from_secs(3), worker)
+        .await
+        .unwrap_or_else(|error| panic!("cancellation blocked: {error}"))
+        .unwrap_or_else(|error| panic!("worker: {error}"));
+    assert_eq!(report.ended, Ended::Cancelled);
+}
+
+#[test]
+fn progress_preserves_partial_metadata_and_excludes_private_payloads() {
+    let mut report = Report::new();
+    let limits = Limits::default();
+    let update = |value| json!({"params": {"update": value}});
+    assert!(note_update(&update(json!({"sessionUpdate":"agent_thought_chunk", "content":{"type":"text", "text":"private thought"}})), &mut report, &limits).is_none());
+    let first = update(
+        json!({"sessionUpdate":"tool_call", "toolCallId":"read-1", "title":"Read config", "kind":"read", "status":"pending", "locations":[{"path":"/work/config.toml"}], "rawInput":{"secret":"private input"}, "rawOutput":"private output", "content":[{"type":"text","text":"private content"}]}),
+    );
+    assert!(note_update(&first, &mut report, &limits).is_some());
+    let changed = note_update(&update(json!({"sessionUpdate":"tool_call_update", "toolCallId":"read-1", "status":"completed"})), &mut report, &limits)
+        .unwrap_or_else(|| panic!("a tool snapshot"));
+    assert_eq!(changed.title, "Read config");
+    assert_eq!(changed.kind, "read");
+    assert_eq!(changed.paths, ["/work/config.toml"]);
+    assert_eq!(changed.status, "completed");
+    assert!(!format!("{changed:?}").contains("private"));
+    assert!(report.message.is_empty());
+}
+
+#[tokio::test]
 async fn a_turn_streams_its_words_and_tool_calls_into_the_report() {
     let mut connection = opened("chat").await;
     assert_eq!(connection.agent().name, "fake-agent");

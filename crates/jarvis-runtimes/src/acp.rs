@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
 /// The only protocol version spoken. Version 2 is a draft; an agent that answers with it is refused.
@@ -261,6 +261,17 @@ pub struct ToolNote {
     pub kind: String,
     /// The last status: `pending`, `in_progress`, `completed` or `failed`.
     pub status: String,
+    /// Up to four file paths reported by the agent, not independently verified.
+    pub paths: Vec<String>,
+}
+
+/// A bounded public tool snapshot observed before the prompt ends. This never contains internal reasoning or raw tool payloads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolActivity {
+    /// Increasing position within this prompt; gaps indicate updates the observer could not receive.
+    pub sequence: u64,
+    /// The merged tool metadata, with omitted update fields preserved.
+    pub tool: ToolNote,
 }
 
 /// A permission request and what was decided.
@@ -302,6 +313,10 @@ pub struct Report {
     pub permissions: Vec<PermissionRecord>,
     /// How many `session/update` notifications arrived.
     pub updates: u32,
+    /// Public tool snapshots observed in this prompt.
+    pub activity_updates: u64,
+    /// Snapshots dropped because the bounded observer queue was full or closed.
+    pub activity_dropped: u64,
     /// How many lines that were not protocol messages the agent wrote to its output.
     pub stray_lines: u32,
 }
@@ -316,6 +331,8 @@ impl Report {
             tools_dropped: 0,
             permissions: Vec::new(),
             updates: 0,
+            activity_updates: 0,
+            activity_dropped: 0,
             stray_lines: 0,
         }
     }
@@ -337,6 +354,7 @@ pub struct Connection {
     signed_in: bool,
     /// The method to sign in with if the agent asks during a prompt.
     sign_in: Option<String>,
+    activity_sender: Option<mpsc::Sender<ToolActivity>>,
 }
 
 /// Why waiting for a response ended without one.
@@ -397,6 +415,7 @@ impl Connection {
             auth_methods: Vec::new(),
             signed_in: false,
             sign_in: sign_in.map(str::to_owned),
+            activity_sender: None,
         };
         let deadline = Instant::now() + connection.limits.handshake;
         connection.handshake(cwd, deadline, sign_in).await?;
@@ -419,6 +438,11 @@ impl Connection {
     #[must_use]
     pub const fn signed_in(&self) -> bool {
         self.signed_in
+    }
+
+    /// Observes public tool activity through a bounded queue. A slow or closed observer never blocks protocol handling.
+    pub fn set_activity_sender(&mut self, sender: mpsc::Sender<ToolActivity>) {
+        self.activity_sender = Some(sender);
     }
 
     /// Signs in now with one of the methods the agent advertised, whether or not it has asked: the owner pressed Sign in. The agent's own
@@ -724,7 +748,28 @@ impl Connection {
                     )
                     .await?;
                 }
-                (Some("session/update"), None) => note_update(&message, report, &self.limits),
+                (Some("session/update"), None) => {
+                    let session = message
+                        .get("params")
+                        .and_then(|params| params.get("sessionId"))
+                        .and_then(Value::as_str);
+                    if wait.policy.is_some()
+                        && session == Some(self.session_id.as_str())
+                        && let Some(tool) = note_update(&message, report, &self.limits)
+                    {
+                        report.activity_updates = report.activity_updates.saturating_add(1);
+                        if let Some(sender) = &self.activity_sender
+                            && sender
+                                .try_send(ToolActivity {
+                                    sequence: report.activity_updates,
+                                    tool,
+                                })
+                                .is_err()
+                        {
+                            report.activity_dropped = report.activity_dropped.saturating_add(1);
+                        }
+                    }
+                }
                 (None, Some(response_id)) => {
                     if *response_id != json!(wait.id) {
                         continue;
@@ -966,14 +1011,11 @@ fn pick_option(options: &[PermissionOption], allow: bool) -> Option<&PermissionO
 }
 
 /// Folds one `session/update` into the report. Variants this client does not know are counted and otherwise ignored.
-fn note_update(message: &Value, report: &mut Report, limits: &Limits) {
+fn note_update(message: &Value, report: &mut Report, limits: &Limits) -> Option<ToolNote> {
     report.updates = report.updates.saturating_add(1);
-    let Some(update) = message
+    let update = message
         .get("params")
-        .and_then(|params| params.get("update"))
-    else {
-        return;
-    };
+        .and_then(|params| params.get("update"))?;
     match update.get("sessionUpdate").and_then(Value::as_str) {
         Some("agent_message_chunk") => {
             let chunk = update
@@ -993,27 +1035,48 @@ fn note_update(message: &Value, report: &mut Report, limits: &Limits) {
         }
         Some("tool_call" | "tool_call_update") => {
             let id = text_of(update.get("toolCallId"), 200);
-            let existing = report.tools.iter_mut().find(|note| note.id == id);
-            if let Some(note) = existing {
-                if let Some(status) = update.get("status").and_then(Value::as_str) {
-                    note.status = status.chars().take(40).collect();
-                }
-                if let Some(title) = update.get("title").and_then(Value::as_str) {
-                    note.title = title.chars().take(200).collect();
-                }
+            if id.is_empty() {
+                return None;
+            }
+            let position = report.tools.iter().position(|note| note.id == id);
+            let position = if let Some(position) = position {
+                position
             } else if report.tools.len() < limits.max_tool_notes {
                 report.tools.push(ToolNote {
                     id,
-                    title: text_of(update.get("title"), 200),
-                    kind: text_of(update.get("kind"), 40),
-                    status: text_of(update.get("status"), 40),
+                    title: String::new(),
+                    kind: "other".to_owned(),
+                    status: "pending".to_owned(),
+                    paths: Vec::new(),
                 });
+                report.tools.len() - 1
             } else {
                 report.tools_dropped = report.tools_dropped.saturating_add(1);
+                return None;
+            };
+            let note = &mut report.tools[position];
+            if let Some(status) = update.get("status").and_then(Value::as_str) {
+                note.status = status.chars().take(40).collect();
             }
+            if let Some(title) = update.get("title").and_then(Value::as_str) {
+                note.title = title.chars().take(200).collect();
+            }
+            if let Some(kind) = update.get("kind").and_then(Value::as_str) {
+                note.kind = kind.chars().take(40).collect();
+            }
+            if let Some(locations) = update.get("locations").and_then(Value::as_array) {
+                note.paths = locations
+                    .iter()
+                    .filter_map(|location| location.get("path").and_then(Value::as_str))
+                    .take(4)
+                    .map(|path| path.chars().take(260).collect())
+                    .collect();
+            }
+            return (note.kind != "think").then(|| note.clone());
         }
         _ => {}
     }
+    None
 }
 
 /// Reads the agent's error stream so its pipe never fills, keeping only the last few kilobytes.

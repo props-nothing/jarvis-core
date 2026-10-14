@@ -28,7 +28,11 @@ fn now() -> UtcTimestamp {
 
 async fn database() -> (Scratch, Arc<SqliteDatabase>) {
     let tag = jarvis_core::scratch_tag();
-    let path = std::env::temp_dir().join(format!("jct-{}", &tag[tag.len() - 12..]));
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target")
+        .join(format!("jct-{}", &tag[tag.len() - 12..]));
     must(std::fs::create_dir_all(&path));
     let database = must(SqliteDatabase::open(&path.join("jarvis.sqlite3")).await);
     (Scratch(path), Arc::new(database))
@@ -69,12 +73,13 @@ async fn run_with_call(database: &SqliteDatabase) -> (String, String) {
 }
 
 #[test]
-fn the_contact_tools_need_no_approval_because_they_only_write_local_rows() {
+fn destructive_and_bulk_contact_tools_ask_and_import_needs_both_scopes() {
     let definitions = must(ContactsTool::definitions());
-    assert_eq!(definitions.len(), 5);
+    assert_eq!(definitions.len(), 7);
     for definition in &definitions {
-        // Everything that stays inside one row runs; folding two contacts into one removes a row, so it asks.
-        let expected = if definition.id().to_string() == MERGE_TOOL {
+        let expected = if [MERGE_TOOL, DELETE_TOOL, IMPORT_TOOL]
+            .contains(&definition.id().to_string().as_str())
+        {
             ApprovalPolicy::Ask
         } else {
             ApprovalPolicy::Auto
@@ -87,6 +92,51 @@ fn the_contact_tools_need_no_approval_because_they_only_write_local_rows() {
         .unwrap_or_else(|| panic!("the save tool is defined"));
     assert!(save.effects().contains(ToolEffect::Write));
     assert!(SAVE_INPUT.contains(r#""additionalProperties": false"#));
+    let delete = definitions
+        .iter()
+        .find(|definition| definition.id().to_string() == DELETE_TOOL)
+        .unwrap_or_else(|| panic!("delete is defined"));
+    assert!(delete.effects().contains(ToolEffect::Destructive));
+    assert_eq!(delete.risk().level(), 3);
+    assert_eq!(
+        delete.required_scopes(),
+        &ScopeSet::single(must(Scope::new(WRITE_SCOPE)))
+    );
+    let import = definitions
+        .iter()
+        .find(|definition| definition.id().to_string() == IMPORT_TOOL)
+        .unwrap_or_else(|| panic!("import is defined"));
+    assert!(import.effects().contains(ToolEffect::Write));
+    assert!(!import.effects().contains(ToolEffect::Destructive));
+    assert_eq!(import.risk().level(), 2);
+    assert_eq!(import.required_scopes().len(), 2);
+    assert!(
+        import
+            .required_scopes()
+            .contains(&must(Scope::new(WRITE_SCOPE)))
+    );
+    assert!(
+        import
+            .required_scopes()
+            .contains(&must(Scope::new("files.read")))
+    );
+    for (input, valid, invalid) in [
+        (
+            IMPORT_INPUT,
+            json!({ "path": "contacts.csv" }),
+            json!({ "path": "contacts.csv", "csv": "unbounded" }),
+        ),
+        (
+            DELETE_INPUT,
+            json!({ "id": "contact-id" }),
+            json!({ "id": "contact-id", "owner": true }),
+        ),
+    ] {
+        let schema = must(ToolSchema::parse(input));
+        assert!(must(schema.validate(&valid)).is_valid());
+        assert!(!must(schema.validate(&invalid)).is_valid());
+        assert!(!must(schema.validate(&json!({}))).is_valid());
+    }
 }
 
 #[tokio::test]
@@ -250,4 +300,262 @@ async fn duplicates_are_previewed_and_merged() {
         assert!(tool.merge(&bad, now()).await.is_err(), "{bad}");
     }
     assert_eq!(must(tool.stats().await)["total"], 1);
+}
+
+#[tokio::test]
+async fn deleting_removes_only_a_local_contact_and_cannot_erase_do_not_contact() {
+    let (_scratch, database) = database().await;
+    let tool = ContactsTool::new(Arc::clone(&database));
+    let made = must(
+        tool.save("none", &json!({ "company": "Acme" }), now())
+            .await,
+    );
+    let id = &made["contact"]["id"];
+    assert_eq!(
+        must(tool.delete(&json!({ "id": id })).await)["deleted"],
+        true
+    );
+    assert_eq!(
+        must(tool.delete(&json!({ "id": id })).await)["deleted"],
+        false
+    );
+    let barred = must(
+        tool.save(
+            "none",
+            &json!({
+                "company": "Suppressed", "email": "barred@example.test", "status": "do_not_contact"
+            }),
+            now(),
+        )
+        .await,
+    );
+    assert!(
+        tool.delete(&json!({ "id": barred["contact"]["id"] }))
+            .await
+            .is_err()
+    );
+    assert_eq!(must(tool.stats().await)["total"], 1);
+    for bad in [
+        json!({}),
+        json!({ "id": "" }),
+        json!({ "id": "x".repeat(65) }),
+    ] {
+        assert!(tool.delete(&bad).await.is_err());
+    }
+}
+
+fn importing_tool(database: &Arc<SqliteDatabase>, path: &std::path::Path) -> ContactsTool {
+    ContactsTool::with_roots(
+        Arc::clone(database),
+        Arc::new(must(WorkspaceRoots::new([path]))),
+    )
+}
+
+#[tokio::test]
+async fn csv_import_supports_bom_quotes_newlines_and_the_existing_upsert_rules() {
+    let (scratch, database) = database().await;
+    let tool = importing_tool(&database, &scratch.0);
+    let project = must(
+        jarvis_storage::create_project(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            &NewProject {
+                name: "CSV leads".to_owned(),
+                ..NewProject::default()
+            },
+            now(),
+        )
+        .await,
+    );
+    let (session, call) = run_with_call(&database).await;
+    must(jarvis_storage::link_project(&database, LinkKind::Session, &session, &project.id).await);
+    let csv = "\u{feff} Company ,person,email,notes,status,role,phone,source\r\n\"Acme, BV\",Eva,eva@example.test,\"Line one\r\nLine \"\"two\"\"\",new,Owner,+31 6 1234 5678,CSV\r\nBeta,Tom,tom@example.test,Initial,new,,,\r\nBETA,tom,TOM@example.test,Updated,contacted,,,\r\n";
+    must(std::fs::write(scratch.0.join("contacts.csv"), csv));
+    let imported = must(
+        tool.import(&call, &json!({ "path": "contacts.csv" }), now())
+            .await,
+    );
+    assert_eq!(
+        imported,
+        json!({ "imported": 3, "created": 2, "updated": 1 })
+    );
+    let contacts =
+        must(jarvis_storage::list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await);
+    assert_eq!(contacts.len(), 2);
+    assert_eq!(contacts[0].company, "Acme, BV");
+    assert_eq!(contacts[0].role, "Owner");
+    assert_eq!(contacts[0].phone, "+31 6 1234 5678");
+    assert_eq!(contacts[0].source, "CSV");
+    assert_eq!(contacts[0].notes, "Line one\nLine \"two\"");
+    assert!(
+        contacts
+            .iter()
+            .all(|contact| contact.project_id.as_deref() == Some(project.id.as_str()))
+    );
+    assert_eq!(contacts[1].status, ContactStatus::Contacted);
+    assert_eq!(contacts[1].notes, "Updated");
+}
+
+#[tokio::test]
+async fn malformed_or_invalid_csv_never_changes_any_contact() {
+    let (scratch, database) = database().await;
+    let tool = importing_tool(&database, &scratch.0);
+    must(
+        tool.save("none", &json!({ "company": "Existing" }), now())
+            .await,
+    );
+    let before =
+        must(jarvis_storage::list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await);
+    let bad = vec![
+        String::new(),
+        "company\n".to_owned(),
+        "person,email\nEva,eva@example.test".to_owned(),
+        "company,Company\nA,B".to_owned(),
+        "company,\nA,B".to_owned(),
+        "company,unknown\nA,B".to_owned(),
+        "company,email\nGood,good@example.test\nBad,not-an-address".to_owned(),
+        "company,status\nGood,new\nBad,unknown".to_owned(),
+        "company,email\nGood,good@example.test\nMissingColumn".to_owned(),
+        "company\nGood\nBad,extra".to_owned(),
+        "company\nGood\n\"Unterminated".to_owned(),
+        "company\nGood\n\"Closed\"tail".to_owned(),
+        "company\nGood\nUnquoted\"quote".to_owned(),
+        "company\nGood\n\r".to_owned(),
+        "company\nGood\n\"\"".to_owned(),
+        format!("company,notes\nGood,ok\nBad,{}", "x".repeat(2_001)),
+        format!("company\nGood\n{}", "x".repeat(201)),
+        "company,person\nGood,OK\nBad,\"multiline\nperson\"".to_owned(),
+        "company\nGood\nControl\0".to_owned(),
+        "company\n".to_owned() + &"Row\n".repeat(1_001),
+    ];
+    for csv in bad {
+        must(std::fs::write(
+            scratch.0.join("contacts.csv"),
+            csv.as_bytes(),
+        ));
+        assert!(
+            tool.import("none", &json!({ "path": "contacts.csv" }), now())
+                .await
+                .is_err(),
+            "{csv:?}"
+        );
+        assert_eq!(
+            must(jarvis_storage::list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await),
+            before
+        );
+    }
+    for bytes in [vec![0xff, 0xfe], vec![b'x'; 2 * 1024 * 1024 + 1]] {
+        must(std::fs::write(scratch.0.join("contacts.csv"), bytes));
+        assert!(
+            tool.import("none", &json!({ "path": "contacts.csv" }), now())
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        must(jarvis_storage::list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await),
+        before
+    );
+}
+
+#[tokio::test]
+async fn import_cannot_lift_suppression_and_a_late_guard_rolls_back_the_batch() {
+    let (scratch, database) = database().await;
+    let tool = importing_tool(&database, &scratch.0);
+    must(tool.save("none", &json!({ "company": "Barred", "email": "barred@example.test", "status": "do_not_contact" }), now()).await);
+    must(std::fs::write(
+        scratch.0.join("contacts.csv"),
+        "company,email,status\nNew,new@example.test,new\nBarred,barred@example.test,new\n",
+    ));
+    assert!(
+        tool.import("none", &json!({ "path": "contacts.csv" }), now())
+            .await
+            .is_err()
+    );
+    assert_eq!(must(tool.stats().await)["total"], 1);
+    must(std::fs::write(
+        scratch.0.join("contacts.csv"),
+        "company,email,notes\nBarred,barred@example.test,Still suppressed\n",
+    ));
+    assert_eq!(
+        must(
+            tool.import("none", &json!({ "path": "contacts.csv" }), now())
+                .await
+        )["updated"],
+        1
+    );
+    assert_eq!(
+        must(
+            jarvis_storage::contact_status_for_email(
+                &database,
+                LOCAL_WORKSPACE_ID,
+                "barred@example.test"
+            )
+            .await
+        ),
+        Some(ContactStatus::DoNotContact)
+    );
+}
+
+#[tokio::test]
+async fn csv_import_refuses_paths_outside_the_granted_folder_including_directory_links() {
+    let (scratch, database) = database().await;
+    let granted = scratch.0.join("granted");
+    let outside = scratch.0.join("outside");
+    must(std::fs::create_dir_all(&granted));
+    must(std::fs::create_dir_all(&outside));
+    must(std::fs::write(
+        outside.join("contacts.csv"),
+        "company\nOutside\n",
+    ));
+    let link = granted.join("escape");
+    #[cfg(windows)]
+    {
+        let output = must(
+            std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .output(),
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[cfg(unix)]
+    must(std::os::unix::fs::symlink(&outside, &link));
+    let tool = importing_tool(&database, &granted);
+    for path in [
+        "..\\outside\\contacts.csv".to_owned(),
+        std::path::Path::new("escape")
+            .join("contacts.csv")
+            .to_string_lossy()
+            .into_owned(),
+        outside.join("contacts.csv").to_string_lossy().into_owned(),
+        "C:\\outside\\contacts.csv".to_owned(),
+        "\\\\server\\share\\contacts.csv".to_owned(),
+        String::new(),
+        "x".repeat(261),
+    ] {
+        assert!(
+            tool.import("none", &json!({ "path": path }), now())
+                .await
+                .is_err()
+        );
+    }
+    let no_roots = ContactsTool::new(Arc::clone(&database));
+    assert!(
+        no_roots
+            .import("none", &json!({ "path": "contacts.csv" }), now())
+            .await
+            .is_err()
+    );
+    assert!(
+        tool.import("none", &json!({ "path": "escape" }), now())
+            .await
+            .is_err()
+    );
+    assert_eq!(must(tool.stats().await)["total"], 0);
 }

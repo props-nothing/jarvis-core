@@ -181,7 +181,7 @@ const SETTINGS: &[Setting] = &[
         table: "daemon",
         field: "google_actions",
         kind: Kind::Flag,
-        help: "also let JARVIS send email and create calendar events: on or off (each one still asks you first; you sign in again to grant it)",
+        help: "allow email sends, drafts, moving mail to Trash and calendar changes: on or off (sign in again for mailbox-change permission; deletion asks by default unless you explicitly trust the tool)",
         group: "google",
         default: Some("off"),
         unset_means: "Off: signing in asks only for read permissions, so JARVIS can read mail and calendar but never send or change anything.",

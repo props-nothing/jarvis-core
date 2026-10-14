@@ -1,7 +1,7 @@
 ---
 integration: cap-std-filesystem-confinement
 status: implemented
-last_verified: 2026-09-22
+last_verified: 2026-10-14
 owners: []
 selected_spec_version: n/a (capability-based filesystem API)
 selected_sdk: cap-std 4.0.3
@@ -15,8 +15,38 @@ In scope: how the read-only filesystem tool (`P3-006`) is confined to explicitly
 roots, on Windows and unix, in a crate that **forbids `unsafe_code`**.
 
 Write (create/append, and one-exact-text edit via a sibling temp file and rename) was added by `ADR-0137` using the same
-handles. Still out of scope: move, delete, and trash/undo (each needs its own undo design);
-archive handling; and OS-level sandboxing of a child process, which is `P3-011`.
+handles. Move and recoverable file deletion now use the same confinement boundary. Permanent deletion,
+recursive directory deletion, archive handling and OS-level sandboxing remain out of scope.
+
+## 2026-10-14 refresh: recoverable file deletion
+
+Official sources fetched live: https://raw.githubusercontent.com/bytecodealliance/cap-std/v4.0.3/cap-std/src/fs/dir.rs
+and https://docs.rs/cap-std/4.0.3/cap_std/fs/struct.Dir.html. The repository's
+https://raw.githubusercontent.com/bytecodealliance/cap-std/main/llms.txt returned 404; versioned source is the authority.
+Selected version remains 4.0.3; no dependency upgrade or newly relevant deprecation was observed in the selected API.
+`Dir::create_dir`, `open_dir`, `symlink_metadata` and `rename(from, to_dir, to)` resolve relative to capabilities.
+Rename replaces an existing destination, so JARVIS must provide its own fresh destination, not trust a pre-check.
+
+**JARVIS decision:** `jarvis.files.delete` moves one regular file to a freshly created random directory under
+`.jarvis-trash` in its owning granted root. Destination operations use that opened directory handle, and a failed rename
+removes only the empty directory created by this call. Return the relative recovery path; `jarvis.files.move` can restore it.
+This is workspace-local trash, **not** the operating system Recycle Bin. Reject root/directory/symlink targets and paths
+inside trash; never recursively remove or purge. No credential, webhook, egress, billing or provider rate limit applies.
+Risk 3, destructive effect, `files.delete`, explicit approval, no automatic retry; receipt identifies the owning root.
+
+**Cheapest falsification:** trash a synthetic file, restore by the returned path and compare bytes; attempting traversal,
+an absolute path, a directory, a link escaping the grant, or deletion from trash must change nothing. Run on platform-native
+CI; this task can verify Windows only. Atomic rename is filesystem-dependent; no cross-volume move or OS-trash integration
+is attempted. The SDK license is unchanged and no upstream implementation is copied.
+
+The same live 4.0.3 directory source and
+https://raw.githubusercontent.com/bytecodealliance/cap-std/v4.0.3/cap-std/src/fs/file.rs were checked for binary workbook replacement:
+`open_with(create_new)`, `File::{metadata,set_permissions,sync_all}` and capability-relative `rename`.
+`WorkspaceRoots::replace_bytes` bounds input and output, runs validation before writing, preserves ordinary file permissions,
+uses an unpredictable create-new sibling, flushes before rename and removes its own temporary file on failure.
+No promise of preserving every platform ACL, alternate stream or crash-time directory flush is made. The cheapest regression
+proves validation failure and oversize input/output leave original bytes untouched, binary content survives a successful replacement,
+and an unrelated predictable sibling remains unchanged. Workbook-specific package fidelity is tracked in [xlsx-editing.md](xlsx-editing.md).
 
 ## The Requirement This Satisfies
 

@@ -43,9 +43,10 @@ pub use config::{
     unrecognized_environment_keys,
 };
 pub use contact_repository::{
-    ContactInput, ContactStatus, DuplicatePair, MAX_CONTACTS, MAX_SEARCH_RESULTS, StoredContact,
-    combine, contact_stats, contact_status_for_email, delete_contact, duplicate_pairs,
-    find_duplicate_contacts, list_contacts, merge_contacts, save_contact, search_contacts,
+    ContactImportResult, ContactInput, ContactStatus, DuplicatePair, MAX_CONTACTS,
+    MAX_SEARCH_RESULTS, StoredContact, combine, contact_stats, contact_status_for_email,
+    delete_contact, delete_contact_for_model, duplicate_pairs, find_duplicate_contacts,
+    import_contacts, list_contacts, merge_contacts, save_contact, search_contacts,
 };
 pub use credential::{CREDENTIAL_FILE_NAME, CredentialStore, CredentialStoreError};
 pub use database::{
@@ -53,8 +54,10 @@ pub use database::{
     DatabaseError, SqliteDatabase,
 };
 pub use delegated_task_repository::{
-    DelegatedTaskFinish, NewDelegatedTask, StoredDelegatedTask, create_delegated_task,
-    find_delegated_task, finish_delegated_task, interrupt_delegated_tasks, list_delegated_tasks,
+    DelegatedTaskFinish, MAX_TASK_ACTIVITY_CHARS, MAX_TASK_ACTIVITY_RETAINED,
+    MAX_TASK_ACTIVITY_SHOWN, NewDelegatedTask, StoredDelegatedTask, StoredDelegatedTaskActivity,
+    append_delegated_task_activity, create_delegated_task, find_delegated_task,
+    finish_delegated_task, interrupt_delegated_tasks, list_delegated_tasks,
     mark_delegated_task_running,
 };
 pub use digest_repository::{

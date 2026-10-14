@@ -40,10 +40,10 @@ the model as untrusted data to read, never to obey. The read-only tools above ca
 **Where your data goes.** Mail and calendar text you ask about is given to the model you chose. With a local model that stays on your machine; with a
 cloud model (Ollama cloud, for example) it goes to that service as part of the conversation. Choose accordingly.
 
-## Letting JARVIS send mail and add events (optional, off by default)
+## Letting JARVIS send mail, trash mail and change events (optional, off by default)
 
 Reading is the default. If you also want "reply to Anna that I will be late" or "put the dentist on my calendar", turn on **Settings, Google, google_actions** (or
-`jarvis config set google_actions on`), restart once, and **sign in again** so Google asks for the extra permissions for sending mail, managing drafts and changing calendar events. These tools then exist:
+`jarvis config set google_actions on`), restart once, and **sign in again** so Google asks for the extra permissions for sending mail, managing drafts, mailbox changes (`gmail.modify`) and changing calendar events. The mailbox-change permission is broader than trash alone; JARVIS uses it here only to move a message to Trash, not permanently delete it. Existing grants continue to read and send as before; the new deletion tool refuses until the modify permission is granted. These tools then exist:
 
 | Tool | What it does |
 | --- | --- |
@@ -51,6 +51,7 @@ Reading is the default. If you also want "reply to Anna that I will be late" or 
 | `jarvis.gmail.draft` | Saves the same kind of email (one recipient, optional files, optional reply) in your Gmail **Drafts** instead of sending it: you read it, change a word if you like, and press send yourself. It sends nothing, so it does not ask. It needs one more permission (Google calls it "manage drafts and send emails"), so after turning actions on, or if you had already signed in before this existed, **sign in again** from Settings, Google; your Google Cloud consent screen must allow it. JARVIS prefers a draft when you have not said exactly what to send. |
 | `jarvis.calendar.create` | Adds one event to your main calendar (title, start, end, optional place and notes). It invites nobody. It asks first. **It will not double-book:** when the time overlaps a busy event already on your calendar (free and cancelled events do not count) nothing is created and JARVIS is told when the clash is; it only books over it if you say you want a double booking. |
 | `jarvis.calendar.delete` | Removes one event from your main calendar, by the id that `jarvis.calendar.events` lists. It notifies nobody. It asks first. |
+| `jarvis.gmail.delete` | Moves **one message** (the `message_id` from search) to **Gmail Trash**, never permanently deletes it or its thread. Deletion asks by default; only the owner may grant standing trust in Settings, Tools. Restore the message from Trash in Gmail, within Gmail's retention period. Requires signing in again for `gmail.modify`. A lost confirmation is reported as unknown, not as a safe-to-repeat failure. |
 
 JARVIS is told never to send because of something written inside an email or a web page, only because you asked. To go back to read-only, turn the setting off, restart and sign in again.
 

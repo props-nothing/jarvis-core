@@ -5,7 +5,7 @@
 //! person), a status such as `do_not_contact` is a fact a later run can read, and nothing here is ever sent anywhere.
 
 use jarvis_core::{ContactId, UtcTimestamp};
-use sqlx::Row;
+use sqlx::{Row, SqliteConnection};
 
 use crate::database::{DatabaseError, SqliteDatabase};
 
@@ -197,7 +197,7 @@ fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<StoredContact, DatabaseError>
 
 /// Finds the contact an input names: by address, else by company and person when the stored one has no address.
 async fn find_existing(
-    database: &SqliteDatabase,
+    connection: &mut SqliteConnection,
     workspace_id: &str,
     input: &ContactInput,
 ) -> Result<Option<StoredContact>, DatabaseError> {
@@ -210,7 +210,7 @@ async fn find_existing(
         ))
         .bind(workspace_id)
         .bind(email)
-        .fetch_optional(database.pool())
+        .fetch_optional(&mut *connection)
         .await
         .map_err(sqlite("find a contact by address"))?
     } else {
@@ -227,7 +227,7 @@ async fn find_existing(
         .bind(workspace_id)
         .bind(company)
         .bind(input.person.as_deref().unwrap_or(""))
-        .fetch_optional(database.pool())
+        .fetch_optional(&mut *connection)
         .await
         .map_err(sqlite("find a contact by company"))?,
         (None, _) => None,
@@ -255,8 +255,94 @@ pub async fn save_contact(
     now: UtcTimestamp,
 ) -> Result<(StoredContact, bool), DatabaseError> {
     let input = check(input)?;
+    let mut transaction = database
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(sqlite("begin saving a contact"))?;
+    let saved = save_checked_contact(
+        &mut transaction,
+        workspace_id,
+        project_id,
+        &input,
+        owner,
+        now,
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(sqlite("commit saving a contact"))?;
+    Ok(saved)
+}
+
+/// Counts successful row operations in an atomic contact import (repeated matches count as updates).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContactImportResult {
+    /// Rows that created a contact.
+    pub created: usize,
+    /// Rows that updated a matching contact.
+    pub updated: usize,
+}
+
+/// Saves 1–1,000 validated rows with the same matching and suppression rules as [`save_contact`].
+/// Either every row is committed or no contact is changed, including when a later row hits a limit or a do-not-contact guard.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError::InvalidContact`] for invalid rows or forbidden status changes, [`DatabaseError::ContactLimit`] when full,
+/// and [`DatabaseError::Sqlite`] when the transaction fails.
+pub async fn import_contacts(
+    database: &SqliteDatabase,
+    workspace_id: &str,
+    project_id: Option<&str>,
+    inputs: &[ContactInput],
+    owner: bool,
+    now: UtcTimestamp,
+) -> Result<ContactImportResult, DatabaseError> {
+    if inputs.is_empty() || inputs.len() > 1_000 {
+        return Err(invalid("rows"));
+    }
+    let inputs = inputs.iter().map(check).collect::<Result<Vec<_>, _>>()?;
+    let mut transaction = database
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(sqlite("begin importing contacts"))?;
+    let mut result = ContactImportResult::default();
+    for input in &inputs {
+        let (_, created) = save_checked_contact(
+            &mut transaction,
+            workspace_id,
+            project_id,
+            input,
+            owner,
+            now,
+        )
+        .await?;
+        if created {
+            result.created += 1;
+        } else {
+            result.updated += 1;
+        }
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(sqlite("commit importing contacts"))?;
+    Ok(result)
+}
+
+async fn save_checked_contact(
+    connection: &mut SqliteConnection,
+    workspace_id: &str,
+    project_id: Option<&str>,
+    input: &ContactInput,
+    owner: bool,
+    now: UtcTimestamp,
+) -> Result<(StoredContact, bool), DatabaseError> {
     let stamp = now.to_string();
-    if let Some(existing) = find_existing(database, workspace_id, &input).await? {
+    if let Some(existing) = find_existing(connection, workspace_id, input).await? {
         if !owner
             && existing.status == ContactStatus::DoNotContact
             && input
@@ -283,7 +369,7 @@ pub async fn save_contact(
         .bind(pick(&input.source, &existing.source))
         .bind(project_id)
         .bind(&stamp)
-        .fetch_one(database.pool())
+        .fetch_one(&mut *connection)
         .await
         .map_err(sqlite("update a contact"))?;
         return Ok((decode(&row)?, false));
@@ -295,7 +381,7 @@ pub async fn save_contact(
         .ok_or_else(|| invalid("company"))?;
     let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE workspace_id = ?1")
         .bind(workspace_id)
-        .fetch_one(database.pool())
+        .fetch_one(&mut *connection)
         .await
         .map_err(sqlite("count contacts"))?;
     if held >= MAX_CONTACTS {
@@ -319,7 +405,7 @@ pub async fn save_contact(
     .bind(text(&input.notes))
     .bind(text(&input.source))
     .bind(&stamp)
-    .fetch_one(database.pool())
+    .fetch_one(&mut *connection)
     .await
     .map_err(sqlite("create a contact"))?;
     Ok((decode(&row)?, true))
@@ -476,6 +562,46 @@ pub async fn delete_contact(
         .execute(database.pool())
         .await
         .map_err(sqlite("delete a contact"))?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// Removes a contact for an automated caller, but never erases an owner's suppression.
+/// An approval to delete is not permission to lift `do_not_contact`: the owner must change that status explicitly first.
+/// Returns whether a contact existed in this workspace.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError::InvalidContact`] with field `status` for a suppressed contact, and [`DatabaseError::Sqlite`] on failure.
+pub async fn delete_contact_for_model(
+    database: &SqliteDatabase,
+    workspace_id: &str,
+    id: &str,
+) -> Result<bool, DatabaseError> {
+    let mut transaction = database
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(sqlite("begin deleting a contact"))?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM contacts WHERE workspace_id = ?1 AND id = ?2")
+            .bind(workspace_id)
+            .bind(id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(sqlite("check a contact before deleting"))?;
+    if status.as_deref() == Some(ContactStatus::DoNotContact.as_str()) {
+        return Err(invalid("status"));
+    }
+    let done = sqlx::query("DELETE FROM contacts WHERE workspace_id = ?1 AND id = ?2")
+        .bind(workspace_id)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(sqlite("delete an automated contact"))?;
+    transaction
+        .commit()
+        .await
+        .map_err(sqlite("commit deleting a contact"))?;
     Ok(done.rows_affected() > 0)
 }
 

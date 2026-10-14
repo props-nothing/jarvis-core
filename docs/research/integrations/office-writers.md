@@ -13,6 +13,8 @@ selected_sdk: "rust_xlsxwriter 0.99.1 and docx-rs 0.4.22 (crates.io, pinned)"
 
 `P11-010` (`ADR-0185`): create a new `.xlsx`, `.docx` or `.csv` from structured content a model wrote. `.pdf` was added the same day (`ADR-0190`, section "PDF" below). **Out of scope:** `.pptx` (open), charts, images, formulas, editing an existing file, styles beyond a header row and headings.
 
+Existing-workbook cell editing is a separate risk-2 operation; see [XLSX editing](xlsx-editing.md) and the [spreadsheet user guide](../../user/spreadsheets.md). The create-only tools and their live evidence below are unchanged.
+
 ## Official Sources
 
 | Source | URL/version | Accessed | Purpose |

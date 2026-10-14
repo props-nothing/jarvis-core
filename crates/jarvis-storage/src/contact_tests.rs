@@ -13,8 +13,11 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new() -> Self {
-        let path =
-            std::env::temp_dir().join(format!("jarvis-contacts-{}", jarvis_core::scratch_tag()));
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join(format!("jarvis-contacts-{}", jarvis_core::scratch_tag()));
         must(fs::create_dir_all(&path));
         Self(path)
     }
@@ -358,4 +361,192 @@ fn merged_notes_never_exceed_the_limit() {
     };
     let merged = combine(&make("a", "x".repeat(1900)), &make("b", "y".repeat(1900)));
     assert_eq!(merged.notes.chars().count(), MAX_MERGED_NOTES);
+}
+
+#[tokio::test]
+async fn automated_delete_is_workspace_scoped_and_cannot_erase_suppression() {
+    let (_directory, database) = database().await;
+    let ordinary = saved(&database, &lead("Ordinary", "", "ordinary@example.test"), 0).await;
+    assert!(!must(
+        delete_contact_for_model(&database, "another-workspace", &ordinary.id).await
+    ));
+    assert!(must(
+        delete_contact_for_model(&database, LOCAL_WORKSPACE_ID, &ordinary.id).await
+    ));
+    assert!(!must(
+        delete_contact_for_model(&database, LOCAL_WORKSPACE_ID, &ordinary.id).await
+    ));
+    let suppressed = ContactInput {
+        status: Some(ContactStatus::DoNotContact),
+        ..lead("Suppressed", "Person", "suppressed@example.test")
+    };
+    let barred = saved(&database, &suppressed, 1).await;
+    assert!(matches!(
+        delete_contact_for_model(&database, LOCAL_WORKSPACE_ID, &barred.id).await,
+        Err(DatabaseError::InvalidContact { field: "status" })
+    ));
+    let revive = ContactInput {
+        status: Some(ContactStatus::New),
+        ..suppressed
+    };
+    assert!(matches!(
+        import_contacts(&database, LOCAL_WORKSPACE_ID, None, &[revive], false, at(2)).await,
+        Err(DatabaseError::InvalidContact { field: "status" })
+    ));
+    assert_eq!(
+        must(
+            contact_status_for_email(&database, LOCAL_WORKSPACE_ID, "suppressed@example.test")
+                .await
+        ),
+        Some(ContactStatus::DoNotContact)
+    );
+}
+
+#[tokio::test]
+async fn bulk_import_reuses_save_matching_and_preserves_suppression() {
+    let (_directory, database) = database().await;
+    let barred = saved(
+        &database,
+        &ContactInput {
+            status: Some(ContactStatus::DoNotContact),
+            ..lead("Suppressed", "", "barred@example.test")
+        },
+        0,
+    )
+    .await;
+    let inputs = [
+        lead("Acme", "Eva", "eva@example.test"),
+        ContactInput {
+            notes: Some("Updated".to_owned()),
+            ..lead("ACME", "Eva", "EVA@example.test")
+        },
+        lead("Beta", "Tom", ""),
+        lead("BETA", "tom", "tom@example.test"),
+        ContactInput {
+            notes: Some("Still barred".to_owned()),
+            ..lead("Suppressed", "", "barred@example.test")
+        },
+    ];
+    let imported =
+        must(import_contacts(&database, LOCAL_WORKSPACE_ID, None, &inputs, false, at(1)).await);
+    assert_eq!(
+        imported,
+        ContactImportResult {
+            created: 2,
+            updated: 3
+        }
+    );
+    let all = must(list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await);
+    assert_eq!(all.len(), 3);
+    let kept = all
+        .iter()
+        .find(|contact| contact.id == barred.id)
+        .unwrap_or_else(|| panic!("suppressed contact retained"));
+    assert_eq!(kept.status, ContactStatus::DoNotContact);
+    assert_eq!(kept.notes, "Still barred");
+}
+
+#[tokio::test]
+async fn an_import_rolls_back_prior_creates_and_updates_on_any_late_failure() {
+    let (_directory, database) = database().await;
+    let existing = saved(&database, &lead("Existing", "", "existing@example.test"), 0).await;
+    saved(
+        &database,
+        &ContactInput {
+            status: Some(ContactStatus::DoNotContact),
+            ..lead("Suppressed", "", "barred@example.test")
+        },
+        1,
+    )
+    .await;
+    let before = must(list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await);
+    for bad in [
+        ContactInput {
+            status: Some(ContactStatus::New),
+            ..lead("Suppressed", "", "barred@example.test")
+        },
+        ContactInput::default(),
+        lead("Invalid", "", "not-an-address"),
+    ] {
+        let inputs = [
+            ContactInput {
+                notes: Some("Must roll back".to_owned()),
+                ..lead("Changed", "", &existing.email)
+            },
+            lead("New", "", "new@example.test"),
+            bad,
+        ];
+        assert!(
+            import_contacts(&database, LOCAL_WORKSPACE_ID, None, &inputs, false, at(3))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            must(list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await),
+            before
+        );
+    }
+    assert!(
+        import_contacts(&database, LOCAL_WORKSPACE_ID, None, &[], false, at(4))
+            .await
+            .is_err()
+    );
+    assert!(
+        import_contacts(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            None,
+            &vec![lead("Too many", "", ""); 1_001],
+            false,
+            at(4)
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn reaching_workspace_capacity_rolls_back_new_rows_in_an_import() {
+    let (_directory, database) = database().await;
+    must(sqlx::query(
+        "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?1) \
+         INSERT INTO contacts (id, workspace_id, company, created_at, updated_at) \
+         SELECT printf('00000000-0000-7000-8000-%012d', n), ?2, 'Company ' || n, ?3, ?3 FROM numbers",
+    )
+    .bind(MAX_CONTACTS - 1)
+    .bind(LOCAL_WORKSPACE_ID)
+    .bind(at(0).to_string())
+    .execute(database.pool())
+    .await);
+    let inputs = [
+        lead("Must roll back", "", "first@example.test"),
+        lead("Over limit", "", "last@example.test"),
+    ];
+    assert!(matches!(
+        import_contacts(&database, LOCAL_WORKSPACE_ID, None, &inputs, false, at(1)).await,
+        Err(DatabaseError::ContactLimit)
+    ));
+    assert_eq!(
+        must(contact_status_for_email(&database, LOCAL_WORKSPACE_ID, "first@example.test").await),
+        None
+    );
+    let total: u32 = must(contact_stats(&database, LOCAL_WORKSPACE_ID).await)
+        .iter()
+        .map(|(_, count)| count)
+        .sum();
+    assert_eq!(i64::from(total), MAX_CONTACTS - 1);
+}
+
+#[tokio::test]
+async fn sql_failure_during_import_rolls_back_the_entire_batch() {
+    let (_directory, database) = database().await;
+    must(sqlx::query(
+        "CREATE TRIGGER refuse_test_contact BEFORE INSERT ON contacts WHEN NEW.company = 'Refuse' BEGIN SELECT RAISE(ABORT, 'test refusal'); END",
+    ).execute(database.pool()).await);
+    let inputs = [lead("Accepted first", "", ""), lead("Refuse", "", "")];
+    assert!(matches!(
+        import_contacts(&database, LOCAL_WORKSPACE_ID, None, &inputs, false, at(0)).await,
+        Err(DatabaseError::Sqlite { .. })
+    ));
+    assert!(must(list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await).is_empty());
 }

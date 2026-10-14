@@ -1,4 +1,4 @@
-//! The document-writing tool: it creates new files in a granted folder, never replaces one, and refuses what it must.
+//! Document creation remains create-only; spreadsheet editing is a separate policy-controlled replacement.
 
 use super::*;
 
@@ -11,7 +11,10 @@ impl Drop for Folder {
 }
 
 fn tool_over_a_folder() -> (WriteDocumentTool, Folder) {
-    let folder = std::env::temp_dir().join(format!("jwd-{}", jarvis_core::scratch_tag()));
+    let folder = std::env::current_dir()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .join("target")
+        .join(format!("jwd-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(&folder).unwrap_or_else(|error| panic!("{error}"));
     let roots = WorkspaceRoots::new([&folder]).unwrap_or_else(|error| panic!("{error}"));
     (WriteDocumentTool::new(Arc::new(roots)), Folder(folder))
@@ -147,5 +150,152 @@ async fn a_pdf_is_written_and_reports_what_it_could_not_draw() {
         tool.write(&json!({ "path": "rapport.pdf", "content": { "blocks": [] } }))
             .is_err(),
         "never replaces"
+    );
+}
+
+#[test]
+fn spreadsheet_editing_is_a_scoped_moderate_risk_policy_write() {
+    let definition = EditSpreadsheetTool::definition().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(definition.approval(), ApprovalPolicy::Policy);
+    assert!(definition.effects().contains(ToolEffect::Write));
+    assert_eq!(definition.risk().level(), 2);
+    assert!(
+        definition
+            .required_scopes()
+            .iter()
+            .any(|scope| scope.to_string() == "files.write")
+    );
+    let schema = ToolSchema::parse(EDIT_INPUT).unwrap_or_else(|error| panic!("{error}"));
+    for (arguments, valid) in [
+        (
+            json!({"path":"book.xlsx","edits":[{"sheet":"Prospects","cell":"A1","value":"=text"}]}),
+            true,
+        ),
+        (json!({"path":"book.xlsx","edits":[]}), false),
+        (
+            json!({"path":"book.xlsx","edits":[{"sheet":"Prospects","cell":"a1","value":1}]}),
+            false,
+        ),
+        (
+            json!({"path":"book.xlsx","edits":[{"sheet":"Prospects","cell":"A1","value":1,"formula":true}]}),
+            false,
+        ),
+        (
+            json!({"path":"book.xlsx","edits":[{"sheet":"Prospects","cell":"A1","value":1}],"overwrite":true}),
+            false,
+        ),
+    ] {
+        assert_eq!(
+            schema
+                .validate(&arguments)
+                .unwrap_or_else(|error| panic!("{error}"))
+                .is_valid(),
+            valid
+        );
+    }
+}
+
+#[test]
+fn an_existing_workbook_is_edited_in_place_and_reads_back_independently() {
+    let (writer, folder) = tool_over_a_folder();
+    writer
+        .write(&json!({"path":"existing.xlsx","content":sheet()}))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let tool = EditSpreadsheetTool::new(Arc::clone(&writer.roots));
+    let result = tool
+        .edit(&json!({"path":"existing.xlsx","edits":[
+            {"sheet":"Prospects","cell":"A2","value":"Changed café"},
+            {"sheet":"Prospects","cell":"B3","value":123},
+            {"sheet":"Prospects","cell":"C6","value":"=not_a_formula"}
+        ]}))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(result["created"], false);
+    assert_eq!(result["edited_cells"], 3);
+    assert!(
+        result["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("stale")
+    );
+    let bytes =
+        std::fs::read(folder.0.join("existing.xlsx")).unwrap_or_else(|error| panic!("{error}"));
+    let read = jarvis_documents::extract("existing.xlsx", &bytes)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        read.text.contains("Changed café")
+            && read.text.contains("123")
+            && read.text.contains("=not_a_formula")
+    );
+    assert!(read.text.contains("Bedrijf") && read.text.contains("Utrecht"));
+    assert_eq!(
+        std::fs::read_dir(&folder.0)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn any_invalid_edit_preserves_the_original_bytes_and_creates_no_staging_files() {
+    let (writer, folder) = tool_over_a_folder();
+    writer
+        .write(&json!({"path":"existing.xlsx","content":sheet()}))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let path = folder.0.join("existing.xlsx");
+    let original = std::fs::read(&path).unwrap_or_else(|error| panic!("{error}"));
+    let tool = EditSpreadsheetTool::new(Arc::clone(&writer.roots));
+    for arguments in [
+        json!({"path":"existing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":"must not persist"},{"sheet":"Missing","cell":"A1","value":1}]}),
+        json!({"path":"existing.xlsx","edits":[{"sheet":"Prospects","cell":"XFE1","value":1}]}),
+        json!({"path":"existing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":1},{"sheet":"Prospects","cell":"A2","value":2}]}),
+        json!({"path":"existing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":{}}]}),
+        json!({"path":"existing.xlsx","edits":[]}),
+        json!({"path":"missing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":1}]}),
+        json!({"path":"../existing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":1}]}),
+        json!({"path":"C:\\existing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":1}]}),
+        json!({"path":"\\\\localhost\\share\\existing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":1}]}),
+        json!({"path":"existing.xlsx:stream","edits":[{"sheet":"Prospects","cell":"A2","value":1}]}),
+        json!({"path":"existing.xlsm","edits":[{"sheet":"Prospects","cell":"A2","value":1}]}),
+        json!({"path":"existing.xlsx","edits":[{"sheet":"Prospects","cell":"A2","value":1}],"extra":true}),
+    ] {
+        assert!(
+            matches!(
+                tool.edit(&arguments),
+                Err(AdapterError::RefusedBeforeReaching { .. })
+            ),
+            "{arguments}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap_or_default(), original);
+        assert_eq!(
+            std::fs::read_dir(&folder.0)
+                .unwrap_or_else(|error| panic!("{error}"))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn invalid_workbook_is_never_replaced_or_repaired() {
+    let (writer, folder) = tool_over_a_folder();
+    let original = b"not an Excel workbook";
+    std::fs::write(folder.0.join("broken.xlsx"), original)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let tool = EditSpreadsheetTool::new(Arc::clone(&writer.roots));
+    assert!(
+        tool.edit(
+            &json!({"path":"broken.xlsx","edits":[{"sheet":"Sheet1","cell":"A1","value":1}]})
+        )
+        .is_err()
+    );
+    assert_eq!(
+        std::fs::read(folder.0.join("broken.xlsx")).unwrap_or_default(),
+        original
+    );
+    assert_eq!(
+        std::fs::read_dir(&folder.0)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .count(),
+        1
     );
 }

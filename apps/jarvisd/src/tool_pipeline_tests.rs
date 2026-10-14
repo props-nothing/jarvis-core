@@ -231,13 +231,13 @@ async fn a_call_reaches_the_adapter_that_owns_its_definition() {
     )
     .await;
 
-    // Seven tools are dispatchable: the filesystem adapter's six and the MCP one. Asserted so a table that
+    // Eight tools are dispatchable: the filesystem adapter's seven and the MCP one. Asserted so a table that
     // registered only one cannot make the routing assertion below vacuous — which is exactly how the first
     // version of this test passed a falsification it should have failed.
     assert_eq!(
         pipeline.dispatchable_tools(),
-        7,
-        "the filesystem adapter's six tools and the additional one must all be dispatchable"
+        8,
+        "the filesystem adapter's seven tools and the additional one must all be dispatchable"
     );
 
     let arguments = json!({ "q": "pumps" });
@@ -352,6 +352,97 @@ fn mcp_definition(id: &str, remote: &str) -> jarvis_tools::ToolDefinition {
 
 fn actor() -> ToolActor {
     ToolActor::workspace_reader(LOCAL_WORKSPACE_ID, RUN, SessionChannel::Cli, "policy-1")
+}
+
+#[tokio::test]
+async fn file_deletion_waits_for_approval_and_records_a_recoverable_receipt() {
+    let directory = TempRoot::new();
+    directory.write("scratch.txt", "recover me");
+    let roots = must(WorkspaceRoots::new([directory.path()]));
+    let (_root, database, pipeline) = pipeline_with(roots, WorkspacePolicy::default()).await;
+    let definitions = must(pipeline.definitions());
+    let actor = ToolActor::for_composed_tools(
+        LOCAL_WORKSPACE_ID,
+        RUN,
+        SessionChannel::Cli,
+        "policy-1",
+        &definitions,
+    );
+    let arguments = json!({"path":"scratch.txt"});
+    let held = must(
+        pipeline
+            .call_tool(
+                jarvis_tools::DELETE_TOOL,
+                arguments.clone(),
+                &actor,
+                CorrelationId::new(),
+            )
+            .await,
+    );
+    let ToolPipelineOutcome::AwaitingApproval {
+        call_id,
+        approval_id,
+        ..
+    } = held
+    else {
+        panic!("deletion must wait: {held:?}");
+    };
+    assert_eq!(
+        std::fs::read_to_string(directory.join("scratch.txt")).unwrap_or_default(),
+        "recover me"
+    );
+    assert!(!directory.join(".jarvis-trash").exists());
+    let decision = must(jarvis_core::ApprovalDecision::new(
+        jarvis_core::ApprovalDecisionOutcome::Approve,
+        jarvis_core::ApprovalChannel::Cli,
+        at(0),
+        LOCAL_USER_ID,
+    ));
+    must(jarvis_storage::record_decision(&database, &approval_id, &decision).await);
+    let resumed = must(
+        pipeline
+            .resume(&call_id, arguments, &actor, CorrelationId::new())
+            .await,
+    );
+    let ToolPipelineOutcome::Executed(result) = resumed else {
+        panic!("approved deletion must execute: {resumed:?}");
+    };
+    assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+    assert!(!directory.join("scratch.txt").exists());
+    let output: serde_json::Value = must(serde_json::from_str(
+        result
+            .output()
+            .unwrap_or_else(|| panic!("receipt"))
+            .content(),
+    ));
+    assert_eq!(
+        std::fs::read_to_string(directory.join(output["trash_path"].as_str().unwrap_or_default()))
+            .unwrap_or_default(),
+        "recover me"
+    );
+    assert_eq!(
+        must(pipeline.call(&call_id).await).outcome(),
+        ToolOutcome::Confirmed
+    );
+    directory.write("trusted.txt", "also recoverable");
+    pipeline.replace_workspace_policy(
+        WorkspacePolicy::default().trusting(must(ToolId::new(jarvis_tools::DELETE_TOOL))),
+    );
+    let trusted = must(
+        pipeline
+            .call_tool(
+                jarvis_tools::DELETE_TOOL,
+                json!({"path":"trusted.txt"}),
+                &actor,
+                CorrelationId::new(),
+            )
+            .await,
+    );
+    assert!(
+        matches!(trusted, ToolPipelineOutcome::Executed(_)),
+        "explicit owner trust must remain effective: {trusted:?}"
+    );
+    assert!(!directory.join("trusted.txt").exists());
 }
 
 /// **The seam that did not exist: a read reaches the filesystem and is recorded durably.**
@@ -495,7 +586,7 @@ async fn an_unknown_tool_is_not_resolved() {
     let error = must_err(
         pipeline
             .call_tool(
-                "jarvis.files.delete",
+                "jarvis.files.unknown",
                 json!({"path": "notes.txt"}),
                 &actor(),
                 CorrelationId::new(),

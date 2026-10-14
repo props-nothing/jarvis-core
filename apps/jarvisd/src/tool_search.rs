@@ -301,7 +301,7 @@ pub fn search_body(waiting: &BTreeMap<String, Vec<Entry>>, query: &str) -> Value
         "query": query,
         "found_groups": groups,
         "tools": listed,
-        "note": format!("The whole set is now available to call: {}.", sizes.join(", ")),
+        "note": format!("These are matching previews, not the full inventory. The next model request offers the whole set: {}.", sizes.join(", ")),
     })
 }
 
@@ -447,14 +447,14 @@ impl ToolSearchTool {
 /// The catalog of a pipeline, as discovery sees it.
 #[must_use]
 pub fn entries_of(pipeline: &ToolPipeline) -> Vec<Entry> {
-    pipeline
-        .registry()
-        .discover()
-        .tools
-        .iter()
-        .map(|summary| Entry {
-            id: summary.id.clone(),
-            description: summary.description.clone(),
+    let registry = pipeline.registry();
+    registry
+        .identifiers()
+        .filter(|id| registry.is_callable(id))
+        .filter_map(|id| registry.get(id).ok())
+        .map(|definition| Entry {
+            id: definition.id().to_string(),
+            description: definition.description().to_owned(),
         })
         .collect()
 }

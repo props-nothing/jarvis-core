@@ -146,6 +146,26 @@ pub fn vetted_prefixes(document: Option<&str>, runtime_directory: &std::path::Pa
         .collect()
 }
 
+/// Whether the selected pinned browser command is present (only for narrowing its reading schemas).
+///
+/// This is not a trust grant: the existing exact-profile `vetted_prefixes` check still controls re-serving.
+#[must_use]
+pub(crate) fn has_builtin_browser(document: &str) -> bool {
+    let expected = browser_arguments(std::path::Path::new("browser-contract-runtime"));
+    crate::mcp_admin::configured_servers(Some(document))
+        .iter()
+        .any(|server| {
+            let Some(arguments) = server.command.get(1..) else {
+                return false;
+            };
+            server.name == "browser"
+                && server.kind == "stdio"
+                && arguments.len() == expected.len()
+                && arguments[..arguments.len() - 1] == expected[..expected.len() - 1]
+                && arguments.last().is_some_and(|path| !path.trim().is_empty())
+        })
+}
+
 /// How the preparation of one ability is going.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

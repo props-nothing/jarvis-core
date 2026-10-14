@@ -2410,6 +2410,18 @@ mod tests {
         )
         .await
         .unwrap_or_else(|error| panic!("start task: {error}"));
+        assert!(
+            jarvis_storage::append_delegated_task_activity(
+                &database,
+                identity.workspace_id(),
+                &task.id,
+                1,
+                "Read <img src=x> config [in progress]",
+                now,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("record activity: {error}"))
+        );
         let result = serde_json::json!({
             "outcome": "completed",
             "patch": ["+<script>untrusted agent text</script>"],
@@ -2447,6 +2459,12 @@ mod tests {
         assert_eq!(review["allow_commands"], false);
         assert_eq!(review["minutes"], 10);
         assert!(!review["updated_at"].is_null());
+        assert_eq!(review["activity"][0]["sequence"], 1);
+        assert_eq!(
+            review["activity"][0]["summary"],
+            "Read <img src=x> config [in progress]"
+        );
+        assert_eq!(review["activity_limited"], false);
         database.close().await;
     }
 
@@ -3796,7 +3814,7 @@ mod tests {
         let response = app
             .oneshot(tool_call_request(
                 &presented,
-                "jarvis.files.delete",
+                "jarvis.files.unknown",
                 &run_id,
                 &serde_json::json!({ "path": "secret.txt" }),
             ))

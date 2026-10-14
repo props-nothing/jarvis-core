@@ -1309,10 +1309,9 @@ fn tool_specs(
         .filter(|(group, _)| !found.contains(group.as_str()))
         .map(|(group, tools)| (group.clone(), tools.clone()))
         .collect();
-    let specs = tools
-        .registry()
-        .discover()
-        .tools
+    // The bounded discovery summary is not the catalog: its first 64 entries can hide a deferred
+    // group's core tools before it is searched. Deferral must operate on all registered capabilities.
+    let specs = entries
         .iter()
         // A sub-agent is offered no delegation tool, so delegation is one level deep (`ADR-0134`).
         .filter(|summary| {
@@ -4878,6 +4877,162 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("compose the pipeline: {error}")),
         )
+    }
+
+    #[tokio::test]
+    async fn discovery_offers_the_complete_browser_group_beyond_the_64_tool_summary() {
+        use jarvis_tools::{
+            ApprovalPolicy, Availability, EffectSet, Idempotency, RetryDeclaration, Scope,
+            ScopeSet, ToolDefinition, ToolDefinitionParts, ToolEffect, ToolSchema, ToolSensitivity,
+            ToolSource,
+        };
+        let (_profile, database) = database().await;
+        let schema = ToolSchema::from_value(serde_json::json!({"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"})).unwrap_or_else(|e| panic!("{e}"));
+        let definitions = (0..57)
+            .map(|index| {
+                ToolDefinition::new(ToolDefinitionParts {
+                    id: jarvis_tools::ToolId::new(format!("jarvis.mock.read_{index:03}"))
+                        .unwrap_or_else(|e| panic!("{e}")),
+                    version: "1.0.0".to_owned(),
+                    title: "Fixture reader".to_owned(),
+                    description: "Read a fixture".to_owned(),
+                    input_schema: schema.clone(),
+                    output_schema: schema.clone(),
+                    effects: EffectSet::single(ToolEffect::ReadOnly),
+                    risk: 0,
+                    required_scopes: ScopeSet::single(
+                        Scope::new("mock.read").unwrap_or_else(|e| panic!("{e}")),
+                    ),
+                    approval: ApprovalPolicy::Auto,
+                    timeout_seconds: 10,
+                    retry: RetryDeclaration::none(),
+                    idempotency: Idempotency::Unsupported,
+                    source: ToolSource::Native,
+                    availability: Availability::Available,
+                    sensitivity: ToolSensitivity::new(Sensitivity::Internal, Sensitivity::Internal),
+                })
+                .unwrap_or_else(|e| panic!("{e}"))
+            })
+            .collect();
+        let names = [
+            "browser_click",
+            "browser_close",
+            "browser_console_messages",
+            "browser_drag",
+            "browser_drop",
+            "browser_emulate_media",
+            "browser_evaluate",
+            "browser_file_upload",
+            "browser_fill_form",
+            "browser_find",
+            "browser_handle_dialog",
+            "browser_hover",
+            "browser_navigate",
+            "browser_navigate_back",
+            "browser_network_request",
+            "browser_network_requests",
+            "browser_press_key",
+            "browser_resize",
+            "browser_run_code_unsafe",
+            "browser_select_option",
+            "browser_snapshot",
+            "browser_tabs",
+            "browser_take_screenshot",
+            "browser_type",
+            "browser_wait_for",
+        ];
+        let browser: Vec<_> = names
+            .iter()
+            .map(|name| {
+                jarvis_mcp::translate_tool(
+                    &jarvis_mcp::ServerName::new("browser").unwrap_or_else(|e| panic!("{e}")),
+                    &jarvis_mcp::McpToolListing {
+                        name,
+                        title: None,
+                        description: Some(name),
+                        input_schema: &serde_json::json!({"type":"object"}),
+                        output_schema: None,
+                    },
+                    jarvis_mcp::NamingStrategy::Prefixed,
+                    &jarvis_mcp::ToolEffectPolicy::unclassified(),
+                )
+                .unwrap_or_else(|e| panic!("{e}"))
+                .definition
+            })
+            .collect();
+        let search = Arc::new(crate::tool_search::ToolSearchTool::new());
+        let adapter = Arc::new(crate::approval_fixture::RecordingApprovalAdapter::default())
+            as Arc<dyn jarvis_tools::ToolExecutor>;
+        let tools = Arc::new(
+            ToolPipeline::with_adapters(
+                Arc::clone(&database),
+                None,
+                jarvis_tools::WorkspacePolicy::default(),
+                vec![
+                    (definitions, Arc::clone(&adapter)),
+                    (browser, adapter),
+                    (
+                        vec![
+                            crate::tool_search::ToolSearchTool::definition()
+                                .unwrap_or_else(|e| panic!("{e}")),
+                        ],
+                        search.clone() as Arc<dyn jarvis_tools::ToolExecutor>,
+                    ),
+                ],
+            )
+            .unwrap_or_else(|e| panic!("{e}")),
+        );
+        search.bind(&tools);
+        assert!(tools.registry().discover().is_truncated());
+        let entries = crate::tool_search::entries_of(&tools);
+        assert_eq!(entries.len(), 83);
+        assert!(
+            crate::tool_search::search_body(
+                &crate::tool_search::deferred_groups(&entries),
+                "navigate"
+            )["tools"]
+                .as_array()
+                .is_some_and(|listed| listed
+                    .iter()
+                    .any(|entry| entry["id"] == "mcp.browser.browser_navigate"))
+        );
+        let run = start(&database, "find the browser tools").await;
+        let model = model(vec![
+            Turn::tool_call(
+                "discover_browser",
+                crate::tool_search::SEARCH_TOOL,
+                r#"{"query":"browser"}"#,
+            ),
+            Turn::answer("Browser discovered."),
+        ]);
+        let settled = execute_run_with_tools(
+            &database,
+            &model,
+            &fixture_model_id(),
+            Some(&tools),
+            run.id(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            settled.terminal_outcome(),
+            Some(jarvis_core::RunOutcome::Succeeded)
+        );
+        let offered = model.seen_tools();
+        assert!(
+            !offered[0]
+                .iter()
+                .any(|tool| tool.name().starts_with("mcp.browser.")),
+            "the complete large group must stay deferred before search"
+        );
+        for name in names {
+            assert!(
+                offered[1]
+                    .iter()
+                    .any(|tool| tool.name() == format!("mcp.browser.{name}")),
+                "missing {name} in the actual post-discovery model request"
+            );
+        }
     }
 
     /// **The model can now call a tool and answer from its result — the agent loop, end to end.**

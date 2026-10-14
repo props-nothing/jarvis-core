@@ -240,7 +240,7 @@ window.JarvisSettings = function (context) {
       "daemon.tool_workspace_roots": "Folders", "daemon.code_sandbox_image": "Sandbox image", "daemon.code_sandbox_interpreter": "Interpreter",
       "daemon.speech_voice_id": "Voice", "daemon.speech_model": "Voice model", "daemon.http_port": "Console port",
       "daemon.mcp_serve_port": "Let other apps use JARVIS (port)", "daemon.notifications": "Desktop notifications", "daemon.google_client_id": "Client ID",
-      "daemon.google_actions": "Send mail & add events", "policy.trust": "Runs without asking",
+      "daemon.google_actions": "Send mail, trash mail & change events", "policy.trust": "Runs without asking",
       "daemon.quiet_hours": "Quiet hours", "daemon.resume_interrupted": "Resume cut-off tasks", "daemon.push_topic": "Push topic (ntfy)", "daemon.push_server": "Push server (ntfy)",
       "daemon.phone_agent_id": "Agent id", "daemon.phone_number_id": "Phone number id", "daemon.phone_owner_numbers": "My numbers",
       "daemon.phone_approves": "My yes on the phone counts", "daemon.phone_opening_line": "JARVIS writes the opening line", "daemon.phone_call_anyone": "JARVIS may call other people", "daemon.phone_screen_callers": "Answer only my own numbers",
@@ -248,7 +248,7 @@ window.JarvisSettings = function (context) {
     };
     // A one-line statement of what an on/off switch does, shown instead of the long explanation (which is one click away under More).
     var SHORT = {
-      "daemon.google_actions": "Let JARVIS send mail and add calendar events. It asks you every time.",
+      "daemon.google_actions": "Allow sending, drafts, moving mail to Gmail Trash and calendar changes. This requests Google's broader mailbox-change permission; sign in again to grant it. Deletion asks by default unless you explicitly trust the tool.",
       "daemon.notifications": "Show a desktop notification when a scheduled task finishes or a reminder is due while the console is closed.",
       "daemon.resume_interrupted": "After a restart, continue a task that was cut off, once.",
       "daemon.phone_approves": "Count my spoken yes, on a call JARVIS placed to me, as the approval.",
@@ -908,87 +908,167 @@ window.JarvisSettings = function (context) {
       card.appendChild(taskNotice);
       var tasks = el("div");
       card.appendChild(tasks);
+      var emptyTasks = el("p", "help", "No background coding tasks.");
+      card.appendChild(emptyTasks);
       var taskViews = Object.create(null);
       function taskReview(task) {
         var review = el("details", "code-task");
         var summary = el("summary");
-        summary.appendChild(el("span", "name", task.repository));
+        var name = el("span", "name", task.repository);
+        var status = el("span", "badge");
+        var objective = el("span", "code-task-objective", task.task);
+        summary.appendChild(name);
         summary.appendChild(document.createTextNode(" "));
-        summary.appendChild(el("span", "badge " + (task.status === "completed" ? "on" : "off"), String(task.status || "unknown").replace(/_/g, " ")));
-        summary.appendChild(el("span", "code-task-objective", task.task));
+        summary.appendChild(status);
+        summary.appendChild(objective);
         review.appendChild(summary);
         var body = el("div", "code-task-body");
-        var metadata = el("dl", "code-task-meta");
-        body.appendChild(metadata);
-        function field(name, value) {
-          if (value === null || value === undefined || value === "") return;
-          metadata.appendChild(el("dt", "", name));
-          metadata.appendChild(el("dd", "", String(value)));
-        }
-        function evidence(name, value) {
-          var text = Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : "";
-          if (!text) return;
-          var section = el("details", "code-evidence");
-          section.appendChild(el("summary", "", name));
-          section.appendChild(el("pre", "", text));
-          body.appendChild(section);
-        }
-        var result = task.result || {};
-        field("Task", task.task_id);
-        field("Branch", task.branch || result.branch);
-        field("Worktree", task.worktree || result.worktree);
-        field("Created", task.created_at);
-        field("Finished", task.finished_at);
-        field("Commands", task.allow_commands === undefined ? "Not recorded" : task.allow_commands ? "Allowed" : "Not allowed");
-        field("Agent outcome", result.outcome);
-        field("Base commit", result.base_commit);
-        field("Commit", result.commit);
-        field("Files changed", result.files_changed);
-        if (task.result) field("Verification", "Not independently verified");
-        if (result.permissions) field("Permissions", result.permissions.allowed + " allowed, " + result.permissions.refused + " refused");
-        [task.error, result.detail, result.result_unreadable].concat(result.notes || []).forEach(function (note) {
-          if (note) body.appendChild(el("p", "help bad", note));
-        });
-        if (!task.result) body.appendChild(el("p", "help", task.status === "interrupted" ? "Interrupted; no final result was recorded." : "No result has been recorded yet."));
-        evidence("Agent report", result.agent_message);
-        evidence("Agent activity", result.agent_tool_calls);
-        evidence("Permission decisions", result.agent_requests);
-        evidence("Changed files", result.stat);
-        if (result.patch_was_cut) body.appendChild(el("p", "help bad", "Diff preview truncated."));
-        evidence("Diff", result.patch);
-        if (result.next) body.appendChild(el("p", "help", result.next));
+        body.appendChild(el("h5", "", "Agent-reported activity"));
+        var activity = el("ol", "code-task-activity");
+        activity.setAttribute("aria-label", "Agent-reported activity");
+        activity.setAttribute("aria-live", "polite");
+        activity.setAttribute("aria-relevant", "additions");
+        var activityNotice = el("p", "help");
+        body.appendChild(activity);
+        body.appendChild(activityNotice);
+        var resultBody = el("div");
+        body.appendChild(resultBody);
         review.appendChild(body);
-        return review;
+        var activityViews = Object.create(null), resultSignature = null;
+        function paintActivity(task) {
+          var entries = task.activity || [], present = Object.create(null);
+          entries.forEach(function (entry) {
+            var key = String(entry.sequence);
+            present[key] = true;
+            var row = activityViews[key];
+            if (!row) {
+              var line = el("li", "code-task-event");
+              var time = el("time");
+              var text = el("pre");
+              line.appendChild(time); line.appendChild(text);
+              activity.appendChild(line);
+              row = activityViews[key] = { node: line, time: time, text: text };
+            }
+            if (row.text.textContent !== entry.summary) row.text.textContent = entry.summary;
+            if (row.time.getAttribute("datetime") !== entry.created_at) {
+              var created = new Date(entry.created_at);
+              row.time.textContent = isNaN(created.getTime()) ? "" : created.toLocaleTimeString();
+              row.time.setAttribute("datetime", entry.created_at || "");
+              row.time.title = entry.created_at || "";
+            }
+          });
+          Object.keys(activityViews).forEach(function (key) {
+            if (!present[key]) { activityViews[key].node.remove(); delete activityViews[key]; }
+          });
+          activity.hidden = !entries.length;
+          activityNotice.className = "help" + (task.activity_limited ? " bad" : "");
+          activityNotice.textContent = task.activity_limited ? "Some activity was not retained." : entries.length ? "" : "No tool activity reported yet.";
+        }
+        function paintResult(task) {
+          resultBody.replaceChildren();
+          var metadata = el("dl", "code-task-meta");
+          resultBody.appendChild(metadata);
+          function field(name, value) {
+            if (value === null || value === undefined || value === "") return;
+            metadata.appendChild(el("dt", "", name));
+            metadata.appendChild(el("dd", "", String(value)));
+          }
+          function evidence(name, value) {
+            var text = Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : "";
+            if (!text) return;
+            var section = el("details", "code-evidence");
+            section.appendChild(el("summary", "", name));
+            section.appendChild(el("pre", "", text));
+            resultBody.appendChild(section);
+          }
+          var result = task.result || {};
+          field("Task", task.task_id);
+          field("Branch", task.branch || result.branch);
+          field("Worktree", task.worktree || result.worktree);
+          field("Created", task.created_at);
+          field("Finished", task.finished_at);
+          field("Commands", task.allow_commands === undefined ? "Not recorded" : task.allow_commands ? "Allowed" : "Not allowed");
+          field("Agent outcome", result.outcome);
+          field("Base commit", result.base_commit);
+          field("Commit", result.commit);
+          field("Files changed", result.files_changed);
+          if (task.result) field("Verification", "Not independently verified");
+          if (result.permissions) field("Permissions", result.permissions.allowed + " allowed, " + result.permissions.refused + " refused");
+          [task.error, result.detail, result.result_unreadable, result.activity_error].concat(result.notes || []).forEach(function (note) {
+            if (note) resultBody.appendChild(el("p", "help bad", note));
+          });
+          if (!task.result) resultBody.appendChild(el("p", "help", task.status === "interrupted" ? "Interrupted; no final result was recorded." : "No result has been recorded yet."));
+          evidence("Agent report", result.agent_message);
+          evidence("Agent activity", result.agent_tool_calls);
+          evidence("Permission decisions", result.agent_requests);
+          evidence("Changed files", result.stat);
+          if (result.patch_was_cut) resultBody.appendChild(el("p", "help bad", "Diff preview truncated."));
+          evidence("Diff", result.patch);
+          if (result.next) resultBody.appendChild(el("p", "help", result.next));
+        }
+        function update(task) {
+          if (name.textContent !== task.repository) name.textContent = task.repository;
+          if (objective.textContent !== task.task) objective.textContent = task.task;
+          status.className = "badge " + (task.status === "completed" ? "on" : "off");
+          status.textContent = String(task.status || "unknown").replace(/_/g, " ");
+          paintActivity(task);
+          var signature = JSON.stringify([task.task_id, task.branch, task.worktree, task.created_at, task.finished_at, task.allow_commands, task.status, task.error, task.result]);
+          if (signature !== resultSignature) { paintResult(task); resultSignature = signature; }
+        }
+        return { node: review, update: update };
       }
       function paintTasks(reply) {
-        var previous = taskViews;
-        taskViews = Object.create(null);
-        tasks.replaceChildren();
-        var found = reply.tasks || [];
-        if (!found.length) tasks.appendChild(el("p", "help", "No background coding tasks."));
-        found.forEach(function (task) {
-          var review = taskReview(task);
-          review.open = !!(previous[task.task_id] && previous[task.task_id].open);
-          taskViews[task.task_id] = review;
-          tasks.appendChild(review);
+        var found = reply.tasks || [], present = Object.create(null);
+        found.forEach(function (task) { present[task.task_id] = true; });
+        Object.keys(taskViews).forEach(function (key) {
+          if (!present[key]) { taskViews[key].node.remove(); delete taskViews[key]; }
         });
+        emptyTasks.hidden = !!found.length;
+        found.forEach(function (task, index) {
+          var view = taskViews[task.task_id];
+          if (!view) {
+            view = taskViews[task.task_id] = taskReview(task);
+            tasks.insertBefore(view.node, tasks.children[index] || null);
+          }
+          view.update(task);
+        });
+        activeTasks = found.some(function (task) { return task.status === "queued" || task.status === "running"; });
       }
-      function loadTasks() {
+      var pollTimer = null, activeTasks = false;
+      function tasksVisible() {
+        return !$('settings').hidden && sview.tab === "files" && $("settings-body").contains(card);
+      }
+      function scheduleTasks() {
+        if (pollTimer !== null) clearTimeout(pollTimer);
+        pollTimer = null;
+        if (activeTasks && tasksVisible()) pollTimer = setTimeout(function () {
+          pollTimer = null;
+          if (tasksVisible()) loadTasks(true);
+        }, 2000);
+      }
+      function loadTasks(automatic) {
+        if (refreshTasks.disabled) return;
+        if (pollTimer !== null) clearTimeout(pollTimer);
+        pollTimer = null;
         refreshTasks.disabled = true;
         taskNotice.className = "help";
-        taskNotice.textContent = "Loading coding tasks...";
+        if (!automatic) taskNotice.textContent = "Loading coding tasks...";
         api("/code-agents/tasks").then(function (reply) {
-          paintTasks(reply);
           refreshTasks.disabled = false;
+          if (!tasksVisible()) return;
+          paintTasks(reply);
           taskNotice.textContent = "";
+          scheduleTasks();
         }, function () {
           refreshTasks.disabled = false;
+          if (!tasksVisible()) return;
           taskNotice.className = "help bad";
           taskNotice.textContent = "Coding tasks could not be loaded.";
+          scheduleTasks();
         });
       }
-      refreshTasks.addEventListener("click", loadTasks);
-      loadTasks();
+      refreshTasks.addEventListener("click", function () { loadTasks(false); });
+      loadTasks(false);
       return card;
     }
     var POSTURES = [["default", "Default (the rules decide)"], ["ask", "Always ask first"], ["trusted", "Run without asking"], ["off", "Off"]];
@@ -1107,8 +1187,8 @@ window.JarvisSettings = function (context) {
         acts.replaceChildren();
         if (status.connected) {
           line.textContent = "Connected as " + (status.email || "your Google account") + ". Restart once if the mail and calendar tools are not listed yet."
-            + (status.actions && !status.can_act ? " Sending and calendar changes are switched on but not granted yet: sign in again." : "")
-            + (status.actions && status.can_act ? " JARVIS may send mail and add events, asking you every time." : "");
+            + (status.actions && !status.can_act ? " Some action permissions (including moving mail to Trash) are not granted yet: sign in again. Existing granted actions still work." : "")
+            + (status.actions && status.can_act ? " JARVIS may send mail, move mail to Trash and change events. Policy asks first unless you explicitly trust the tool. Drafts send nothing and do not ask." : "");
           if (status.actions && !status.can_act) {
             var again = el("button", "yes", "Sign in again to grant it");
             again.addEventListener("click", function () {

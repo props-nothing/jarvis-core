@@ -490,10 +490,16 @@ button.danger { color: var(--red); border-color: rgba(250, 129, 123, 0.4); }
 .code-task-body .bad { color: var(--amber); }
 .code-evidence { min-width: 0; margin: 10px 0; }
 .code-evidence pre { max-height: 320px; overflow: auto; padding: 10px; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); }
-.code-task-body > .help { overflow-wrap: anywhere; }
+.code-task-body .help { overflow-wrap: anywhere; }
+.code-task-body h5 { margin: 0 0 8px; font: 500 12px var(--display); letter-spacing: 0; color: var(--dim); }
+.code-task-activity { max-height: 260px; overflow-y: auto; margin: 0 0 12px; padding: 0; list-style: none; }
+.code-task-activity li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+.code-task-activity time { font: 11px/1.6 var(--mono); color: var(--dim); }
+.code-task-activity pre { min-width: 0; margin: 0; font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 480px) {
   .code-task-meta { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .code-task-meta dt:not(:first-child) { margin-top: 6px; }
+  .code-task-activity li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 .sheet .foot { flex-shrink: 0; border-top: 1px solid var(--line); padding-top: 16px; flex-wrap: wrap; }
 .settings-heading { flex-shrink: 0; }

@@ -838,6 +838,112 @@ async fn a_draft_needs_the_compose_permission_and_honours_do_not_contact() {
     jarvis_core::remove_scratch_dir(&directory);
 }
 
+#[test]
+fn mail_deletion_is_scoped_destructive_and_asks_by_default() {
+    let definitions = GoogleTool::action_definitions().unwrap_or_else(|e| panic!("{e}"));
+    let delete = definitions
+        .iter()
+        .find(|definition| definition.id().to_string() == MAIL_DELETE_TOOL)
+        .unwrap_or_else(|| panic!("delete tool"));
+    assert_eq!(delete.approval(), ApprovalPolicy::Ask);
+    assert_eq!(delete.risk().level(), 3);
+    assert!(delete.effects().contains(ToolEffect::Destructive));
+    assert_eq!(delete.retry().blind_retries(), 0);
+    assert!(
+        delete
+            .required_scopes()
+            .iter()
+            .any(|scope| scope.to_string() == GOOGLE_ACTION_SCOPE)
+    );
+}
+
+#[tokio::test]
+async fn mail_deletion_posts_an_empty_body_and_requires_provider_confirmation() {
+    let (_scratch, fixture, tool) =
+        signed_in_with(&[crate::google_account::SCOPE_GMAIL_MODIFY]).await;
+    let path = "/gmail/users/me/messages/m1/trash";
+    fixture.answer(
+        &format!("POST {path}"),
+        200,
+        r#"{"id":"m1","labelIds":["TRASH"]}"#,
+    );
+    let confirmed = tool
+        .delete_mail(&json!({"message_id":"m1"}))
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.detail));
+    assert!(confirmed.contains("Gmail Trash"));
+    assert_eq!(fixture.bodies(path), vec![String::new()]);
+    let wire = fixture.wire_requests(path).remove(0).to_ascii_lowercase();
+    assert!(wire.starts_with(&format!("post {path} http/1.1")));
+    assert!(wire.contains("\r\nauthorization: bearer "));
+    for body in [
+        r#"{"id":"m1"}"#,
+        r#"{"id":"other","labelIds":["TRASH"]}"#,
+        "{}",
+        "invalid",
+        r#"{"id":"m1","labelIds":["INBOX"]}"#,
+    ] {
+        fixture.answer(&format!("POST {path}"), 200, body);
+        let failed = tool
+            .delete_mail(&json!({"message_id":"m1"}))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("must not confirm {body}"));
+        assert_eq!(failed.code, "outcome_unknown");
+    }
+    for (status, code) in [
+        (401, "sign_in_expired"),
+        (403, "google_forbidden"),
+        (404, "not_found"),
+        (429, "rate_limited"),
+        (500, "outcome_unknown"),
+    ] {
+        fixture.answer(
+            &format!("POST {path}"),
+            status,
+            r#"{"error":"SECRET PROVIDER TEXT"}"#,
+        );
+        let failed = tool
+            .delete_mail(&json!({"message_id":"m1"}))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("must fail {status}"));
+        assert_eq!(failed.code, code);
+        assert!(!failed.detail.contains("SECRET"));
+    }
+}
+
+#[tokio::test]
+async fn mail_deletion_requires_modify_scope_and_validates_ids_before_network() {
+    let path = "/gmail/users/me/messages/m1/trash";
+    let (_scratch, fixture, tool) = signed_in_with(&[
+        crate::google_account::SCOPE_GMAIL_SEND,
+        crate::google_account::SCOPE_GMAIL_COMPOSE,
+    ])
+    .await;
+    assert_eq!(
+        tool.delete_mail(&json!({"message_id":"m1"}))
+            .await
+            .err()
+            .map(|failure| failure.code),
+        Some("not_permitted")
+    );
+    assert!(fixture.bodies(path).is_empty());
+    let (_scratch2, fixture2, tool2) =
+        signed_in_with(&[crate::google_account::SCOPE_GMAIL_MODIFY]).await;
+    for id in ["", "../m1", "m1/trash", "m1?x=1", "a b", "m1\r\n"] {
+        assert_eq!(
+            tool2
+                .delete_mail(&json!({"message_id":id}))
+                .await
+                .err()
+                .map(|failure| failure.code),
+            Some("bad_arguments")
+        );
+    }
+    assert!(fixture2.bodies(path).is_empty());
+}
+
 const EVENTS: &str = "/calendar/calendars/primary/events";
 
 fn posted(fixture: &Fixture, path: &str) -> Vec<String> {

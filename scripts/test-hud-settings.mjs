@@ -46,6 +46,10 @@ class Element {
     this.text = "";
     children.forEach(child => this.appendChild(child));
   }
+  remove() {
+    if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = null;
+  }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   addEventListener(type, listener) {
@@ -121,7 +125,14 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
     if (storageThrows) throw new Error("Storage access blocked");
     return storage;
   } });
-  runInNewContext(source, { window, document, Event, setTimeout() {}, setInterval() {} }, { filename: "settings.js" });
+  const timers = new Map();
+  let timerId = 0;
+  runInNewContext(source, {
+    window, document, Event,
+    setTimeout(callback, delay) { timers.set(++timerId, { callback, delay }); return timerId; },
+    clearTimeout(id) { timers.delete(id); },
+    setInterval() {}
+  }, { filename: "settings.js" });
   function initialize() {
     window.JarvisSettings({
       $, el,
@@ -146,7 +157,13 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
   function tab(id) { return $("settings-tab-" + id); }
   function open() { $("open-settings").dispatch("click"); }
   function select(id) { tab(id).dispatch("click"); }
-  return { document, $, initialize, writes, entries, apiCalls, putCalls, settings, tools, confirmations, search, tab, open, select };
+  function runTimer(id) {
+    const timer = timers.get(id);
+    assert.ok(timer, "the timer is scheduled");
+    timers.delete(id);
+    timer.callback();
+  }
+  return { document, $, initialize, writes, entries, apiCalls, putCalls, settings, tools, confirmations, search, tab, open, select, timers, runTimer };
 }
 
 const defaultAppearance = { density: "comfortable", motion: "system", accent: "mint", atmosphere: "cinematic" };
@@ -289,6 +306,77 @@ test("coding task refresh preserves expanded reviews and focus, reports failures
   assert.match(h.$("settings-body").textContent, /No background coding tasks/);
   assert.doesNotMatch(h.$("settings-body").textContent, /The agent exited|could not be loaded/);
   assert.equal(h.putCalls.length, 0);
+});
+
+test("live coding activity refreshes in place without executing work or losing focus and disclosures", async () => {
+  const task = { task_id: "live-task", repository: "repo", task: "Read config", status: "running", result: null,
+    activity: [{ sequence: 1, summary: "<img src=x onerror=alert(1)> Read config", created_at: "2026-10-14T10:00:00Z" }] };
+  const completed = { task_id: "old-task", repository: "repo", task: "Previous task", status: "completed",
+    activity: [], result: { agent_message: ["Earlier report"] } };
+  const responses = {
+    "/code-agents": { needs: { folder: true, git: true, node: true }, presets: [] },
+    "/code-agents/tasks": { tasks: [task, completed] }
+  };
+  const h = harness({ apiResponses: responses });
+  h.initialize(); h.open(); await loadFixture(h, {
+    ...configuredFixture, settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
+  });
+  h.select("files"); await flush();
+  const review = classNodes(h, "code-task")[0]; review.open = true; review.firstChild.focus();
+  const event = classNodes(h, "code-task-event")[0];
+  assert.ok(event, "persisted activity is visible during the task");
+  const evidence = classNodes(h, "code-evidence")[0]; evidence.open = true;
+  const command = descendants(h.$("settings-body")).find(node => node.tagName === "INPUT" && String(node.placeholder).startsWith("e.g. npx"));
+  command.value = "unsaved custom agent";
+  const poll = [...h.timers].find(([, timer]) => timer.delay === 2000);
+  assert.ok(poll, "running tasks are refreshed automatically");
+  responses["/code-agents/tasks"] = { tasks: [{ ...task, activity_limited: true,
+    activity: [...task.activity, { sequence: 3, summary: "Config read [completed]", created_at: "2026-10-14T10:00:02Z" }] }, completed] };
+  h.runTimer(poll[0]); await flush();
+  assert.equal(classNodes(h, "code-task")[0], review);
+  assert.equal(review.open, true);
+  assert.equal(h.document.activeElement, review.firstChild);
+  assert.equal(classNodes(h, "code-task-event")[0], event);
+  assert.equal(classNodes(h, "code-evidence")[0], evidence);
+  assert.equal(evidence.open, true);
+  assert.equal(command.value, "unsaved custom agent");
+  assert.match(review.textContent, /Config read \[completed\]/);
+  assert.match(review.textContent, /Some activity was not retained/);
+  assert.equal(descendants(review).some(node => ["IMG", "SCRIPT"].includes(node.tagName)), false);
+  assert.equal(h.putCalls.length, 0);
+  const next = [...h.timers].find(([, timer]) => timer.delay === 2000);
+  responses["/code-agents/tasks"] = { tasks: [{ ...task, status: "completed", activity: task.activity, result: { outcome: "completed" } }, completed] };
+  h.runTimer(next[0]); await flush();
+  assert.equal(classNodes(h, "code-task")[0], review);
+  assert.equal(h.document.activeElement, review.firstChild);
+  assert.equal([...h.timers.values()].some(timer => timer.delay === 2000), false);
+});
+
+test("live coding activity retries a failed refresh and stops polling when Settings closes", async () => {
+  const task = { task_id: "live-task", repository: "repo", task: "Read config", status: "running", result: null,
+    activity: [{ sequence: 1, summary: "Reading config", created_at: "2026-10-14T10:00:00Z" }] };
+  const responses = {
+    "/code-agents": { needs: { folder: true, git: true, node: true }, presets: [] },
+    "/code-agents/tasks": { tasks: [task] }
+  };
+  const h = harness({ apiResponses: responses });
+  h.initialize(); h.open(); await loadFixture(h, {
+    ...configuredFixture, settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
+  });
+  h.select("files"); await flush();
+  const poll = [...h.timers].find(([, timer]) => timer.delay === 2000);
+  assert.ok(poll);
+  const failure = deferred(); responses["/code-agents/tasks"] = failure.promise;
+  h.runTimer(poll[0]); failure.reject(new Error("offline")); await flush();
+  assert.match(h.$("settings-body").textContent, /Coding tasks could not be loaded/);
+  assert.match(h.$("settings-body").textContent, /Reading config/);
+  const retry = [...h.timers].find(([, timer]) => timer.delay === 2000);
+  assert.ok(retry);
+  const before = h.apiCalls.length;
+  h.$("settings").hidden = true;
+  h.runTimer(retry[0]); await flush();
+  assert.equal(h.apiCalls.length, before);
+  assert.equal([...h.timers.values()].some(timer => timer.delay === 2000), false);
 });
 
 test("interrupted coding tasks keep the missing-result state explicit without inventing evidence", async () => {

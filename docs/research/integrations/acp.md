@@ -1,7 +1,7 @@
 ---
 integration: acp
 status: researched
-last_verified: 2026-10-13
+last_verified: 2026-10-14
 owners: []
 selected_spec_version: "ACP protocol v1 (stable); v2 is draft and is refused"
 selected_sdk: "none: a small JARVIS client over JSON-RPC on stdio (see Decisions)"
@@ -19,15 +19,16 @@ Out of scope for this record and the first slice: JARVIS acting as an ACP **agen
 
 | Source | URL/version | Accessed | Purpose |
 | --- | --- | --- | --- |
-| `llms.txt` | https://agentclientprotocol.com/llms.txt | 2026-10-13 | discovery (lists v1 and v2 trees) |
+| `llms.txt` | https://agentclientprotocol.com/llms.txt | 2026-10-14 | discovery (lists v1 and v2 trees) |
 | Overview, v1 | https://agentclientprotocol.com/protocol/v1/overview.md | 2026-10-13 | methods and roles |
 | Initialization, v1 | https://agentclientprotocol.com/protocol/v1/initialization.md | 2026-10-13 | version and capability negotiation |
 | Session setup, v1 | https://agentclientprotocol.com/protocol/v1/session-setup.md | 2026-10-13 | `session/new` |
-| Prompt turn, v1 | https://agentclientprotocol.com/protocol/v1/prompt-turn.md | 2026-10-13 | turn lifecycle, updates, stop reasons |
-| Tool calls, v1 | https://agentclientprotocol.com/protocol/v1/tool-calls.md | 2026-10-13 | `session/request_permission` |
+| Prompt turn, v1 | https://agentclientprotocol.com/protocol/v1/prompt-turn.md | 2026-10-14 | turn lifecycle, updates, stop reasons |
+| Tool calls, v1 | https://agentclientprotocol.com/protocol/v1/tool-calls.md | 2026-10-14 | partial tool updates, locations and permissions |
 | Cancellation, v1 | https://agentclientprotocol.com/protocol/v1/cancellation.md | 2026-10-13 | `$/cancel_request`, `-32800` |
 | Transports, v1 | https://agentclientprotocol.com/protocol/v1/transports.md | 2026-10-13 | stdio framing |
-| JSON Schema, v1 | https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/main/schema/v1/schema.json | 2026-10-13 | exact shapes (255 KB) |
+| JSON Schema, v1 | https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/main/schema/v1/schema.json | 2026-10-14 | exact shapes; the v1 tree on main, not a pinned SDK |
+| Updates | https://agentclientprotocol.com/updates.md | 2026-10-14 | v2 remains draft; optional tool names stabilized September 17, 2026 |
 | Migration to v2 | https://agentclientprotocol.com/protocol/v2/migration.md | 2026-10-13 | what v2 changes and its draft status |
 | Agents list | https://agentclientprotocol.com/get-started/agents.md | 2026-10-13 | which agents speak ACP |
 | Registry entries | https://github.com/agentclientprotocol/registry (`claude-acp`, `codex-acp`, `gemini`, `github-copilot-cli` `agent.json`) | 2026-10-13 | how each agent is launched |
@@ -112,9 +113,33 @@ What leaves JARVIS: the task text and whatever the agent reads in the worktree g
 - Whether each agent honours `session/cancel` promptly (blocks: nothing; JARVIS kills the process after a grace period).
 - Windows process-tree cleanup for agents that start their own children (blocks: "no orphan" on Windows beyond best effort).
 
+## Live tool activity refresh, 2026-10-14
+
+Scope: forward the existing v1 `session/update` tool activity while a prompt is running, rather than only returning it in the final report. No dependency, transport, sign-in, permission or cancellation-protocol change. The official index, prompt-turn guide, tool-call guide, v1 JSON Schema and updates page above were fetched during this task; no relevant deprecation of this v1 contract was observed.
+
+Verified facts:
+
+- A notification carries `params.sessionId` and `params.update`. Tool activity uses `tool_call` or `tool_call_update`; `toolCallId` identifies the call within that session. On updates, omitted fields retain their previous values. A status-only update must not lose the earlier title, kind or locations.
+- Locations carry `path` and an optional unsigned line number. They are agent-reported metadata, not filesystem authority or proof that an operation happened.
+- `session/prompt` responds when the turn ends. Tool updates may arrive before that response, including after cancellation was requested. The stream ends at the prompt response, not at an arbitrary pause in activity.
+- `agent_thought_chunk` contains internal reasoning and is distinct from public tool activity. The progress path must not persist or display it. Raw tool input/output, tool content, prompts, authentication data and stderr are not needed for a progress summary.
+- The protocol sets no delivery rate, queue size or retention limit, and agents need not report every action. Absence of updates is not proof that a process is idle.
+
+JARVIS decisions and boundaries:
+
+- Keep v1 and the existing SDK-free adapter. Normalize only bounded tool identifiers, titles, kinds, statuses and file locations for the active session. Unknown update variants and other sessions do not become progress.
+- Use a bounded observer channel without letting a slow progress consumer block ACP reads, permission responses or cancellation. Progress is observation only and never changes authority, risk or tool outcomes.
+- Persist retained activity in the local workspace before displaying it; bound retained history and disclose omissions. Display all agent-provided strings as inert data. A recorded tool status is the agent's claim, not independently verified success.
+- No new credential, webhook, retry or network operation is introduced. Existing agent authentication, environment allowlist, time limits, data egress and ambiguous-effect rules remain unchanged. No automatic task replay is added.
+
+Falsifying checks: receive a tool update while the prompt future is still unfinished; retain earlier metadata on a status-only update; exclude thought chunks, raw payloads and wrong-session notifications; flood a full observer channel and still cancel promptly; read persisted activity while the task remains running and again after reopening the database. A live run with a real ACP agent is separate evidence and is not claimed by these offline tests.
+
+Earlier statements in this record that a real task has not run describe the original first-slice verification. `ADR-0209` subsequently records ordinary and background Codex tasks. That evidence does not verify the new progress delivery path.
+
 ## Verification Log
 
 | Date | Versions checked | Relevant change or no-change evidence | Researcher |
 | --- | --- | --- | --- |
 | 2026-10-13 | ACP v1 docs and schema (main), v2 migration guide, registry entries listed above, crate 3.3.0 | first record; v2 draft; v1 selected | JARVIS agent |
 | 2026-10-13 | v1 authentication page, codex-acp and claude-agent-acp READMEs, registry entries for opencode, goose, cursor, qwen-code, kimi, cline; live handshake with `@agentclientprotocol/codex-acp@2.2.2` | authentication implemented; presets for ten agents; the real Codex adapter completes the handshake through the JARVIS client (version 1, two sign-in methods, session made without a sign-in). The launch commands of the other agents were read from the registry and **not run** | JARVIS agent |
+| 2026-10-14 | live official index, v1 prompt-turn and tool-call guides, v1 schema on main, updates page | partial tool updates and session scoping rechecked; v2 remains draft; public progress excludes internal reasoning and raw payloads; new progress delivery not yet verified live | JARVIS agent |
