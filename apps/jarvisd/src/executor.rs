@@ -4879,6 +4879,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn discovery_offers_the_complete_browser_group_beyond_the_64_tool_summary() {
         use jarvis_tools::{

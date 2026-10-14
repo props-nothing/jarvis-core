@@ -442,6 +442,7 @@ async fn synthetic_page() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>)
     (address, http)
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 #[ignore = "opt-in: starts the real cached pinned Playwright server and an isolated local browser"]
 async fn browser_live_navigation_and_fixed_find_on_synthetic_loopback_page() {
