@@ -26,8 +26,8 @@ pub const ELEVENLABS_BASE_URL: &str = "https://api.elevenlabs.io";
 /// The model used unless configuration names another: the provider's real-time expressive model.
 pub const DEFAULT_MODEL: &str = "eleven_v4_turbo";
 
-/// The voice used unless configuration names another: "George", the voice the provider's own quickstart uses.
-pub const DEFAULT_VOICE_ID: &str = "JBFqnCBsd6RMkjVDRZzb";
+/// The owner's preferred voice, used unless configuration names another.
+pub const DEFAULT_VOICE_ID: &str = "liN4AsrhF3CylqMDWK6p";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 

@@ -4,7 +4,7 @@
 //! one surface and refused in another. This file only reads the command line and prints. A key is read from an environment
 //! variable, a file or standard input, never from an argument (it would stay in shell history).
 
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read};
 use std::time::Duration;
 
 use jarvis_storage::settings::{self, SecretKind};
@@ -138,16 +138,10 @@ fn read_secret(arguments: &[String], kind: SecretKind) -> Result<String, String>
     } else if let Some(path) = flag_value(arguments, "--file") {
         std::fs::read_to_string(&path).map_err(|_| format!("{path} could not be read"))?
     } else if std::io::stdin().is_terminal() {
-        eprint!(
-            "Paste the key and press Enter (it is shown as you type; use --from-env {} or --file to avoid that): ",
-            kind.default_env()
-        );
-        let _ = std::io::stderr().flush();
-        let mut line = String::new();
-        std::io::stdin()
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?;
-        line
+        rpassword::prompt_password(format!("Paste the {} key (hidden): ", kind.default_env()))
+            .map_err(|_| {
+                "the key could not be read securely; use --from-env or --file".to_owned()
+            })?
     } else {
         let mut all = String::new();
         std::io::stdin()

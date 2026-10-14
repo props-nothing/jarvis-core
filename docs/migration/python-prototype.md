@@ -2,7 +2,7 @@
 
 ## Status And Legal Boundary
 
-The [example](../../example/readme.md) is a substantial MARK LIV Python assistant and behavior reference. Its README identifies a CC BY-NC 4.0 license. The future JARVIS platform has no selected license yet.
+The former `example/` was a substantial MARK LIV Python assistant and behavior reference. Its README identified CC BY-NC 4.0 terms; it was removed from the current tree on 2026-10-13. Original JARVIS platform code and documentation are now [Apache-2.0](../../LICENSE) (selected 2026-10-14). This does **not** relicense the prototype, grant rights to historical source, or permit copying its implementation. The inventory below is historical.
 
 Therefore:
 

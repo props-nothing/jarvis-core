@@ -16,7 +16,7 @@ JARVIS is a working assistant under active development. Contributions should imp
 | Improve documentation | Exact commands, working links, clear prerequisites and no claims stronger than the evidence. |
 | Change a boundary | An ADR explaining ownership, compatibility and the tradeoff before implementation. |
 
-No license has been selected for the new platform yet. Review [license status](README.md#license-status) and [third-party provenance](THIRD_PARTY.md) before redistributing or introducing third-party code.
+Original JARVIS code and documentation are licensed under [Apache-2.0](LICENSE). Contributions intended for inclusion are submitted under the same terms unless explicitly stated otherwise; only submit material you have the right to license. Preserve [NOTICE](NOTICE) and [third-party provenance](THIRD_PARTY.md). The former prototype's CC BY-NC 4.0 terms are not replaced by this license.
 
 ## Before You Change Code
 

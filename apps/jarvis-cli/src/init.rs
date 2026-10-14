@@ -14,15 +14,16 @@
 //!
 //! # What `init` decides for you, and what it refuses to
 //!
-//! - It **looks before it writes**: the model must be one the local server actually lists, so a typo is a refusal now
-//!   and not a failed first run later.
+//! - It **tests before it writes**: the selected model must answer, and the required `ElevenLabs` voice must produce
+//!   audio, before configuration or new key files are saved. Provider listing is a hint; a model can be typed when
+//!   listing is unavailable.
 //! - It **never overwrites** an existing configuration without `--force`, because that file may hold decisions
 //!   (policy overrides, a code sandbox) it knows nothing about.
 //! - It grants **no folder unless you name one.** The filesystem tools exist only for folders an operator chose
 //!   (`ADR-0020`); a default would grant a directory nobody picked.
-//! - The model key is a **file**, never a value in the document (`ADR-0121`). For a local Ollama it is a placeholder
-//!   the server ignores; for a hosted provider you pass `--api-key-file`, and the key never passes through this
-//!   command.
+//! - Keys are **file references**, never values in the document (`ADR-0121`). Local servers use a placeholder unless
+//!   a key file is supplied. Hosted keys come from explicit files, environment variables or hidden terminal entry
+//!   (`ADR-0214`); failed secure entry never falls back to echoing the key.
 //! - The document is validated by the same parser the daemon uses before it is saved, so a configuration `init`
 //!   writes is one the daemon will start with.
 
@@ -62,7 +63,7 @@ struct InitRequest {
     trust_code: bool,
     /// A file holding the speech provider's key, used in place.
     voice_key_file: Option<PathBuf>,
-    /// Take the speech key from the `ELEVENLABS_API_KEY` environment variable and keep it in a private file.
+    /// Compatibility flag: setup now always requires a speech key, read from a file, environment or hidden prompt.
     elevenlabs: bool,
     voice_id: Option<String>,
     voice_model: Option<String>,
@@ -236,44 +237,11 @@ struct VoiceSetup {
     model: Option<String>,
 }
 
-/// The name of the speech key file `--elevenlabs` writes, beside the model key.
+/// The private speech key file for environment or hidden-prompt entry, beside the model key.
 const SPEECH_KEY_FILE_NAME: &str = "speech.key";
 
-/// Reads the voice flags. The key is a file and never a command-line value (it would sit in shell history): either
-/// `--voice-key-file PATH`, or `--elevenlabs` to take it from `ELEVENLABS_API_KEY` into a private file.
-fn voice_setup(request: &InitRequest, paths: &AppPaths) -> Result<Option<VoiceSetup>, String> {
-    let key_file = if let Some(path) = &request.voice_key_file {
-        if !path.is_absolute() || !path.is_file() {
-            return Err(
-                "--voice-key-file must be the absolute path of an existing file".to_owned(),
-            );
-        }
-        path.clone()
-    } else if request.elevenlabs {
-        let key = std::env::var("ELEVENLABS_API_KEY").unwrap_or_default();
-        if key.trim().is_empty() {
-            return Err(
-                "--elevenlabs reads your key from the ELEVENLABS_API_KEY environment variable, which is not set"
-                    .to_owned(),
-            );
-        }
-        let path = paths.config().join(SPEECH_KEY_FILE_NAME);
-        write_secret(&path, key.trim())
-            .map_err(|error| format!("the speech key file could not be written: {error}"))?;
-        path
-    } else if request.voice_id.is_some() || request.voice_model.is_some() {
-        return Err(
-            "--voice-id and --voice-model need --elevenlabs or --voice-key-file".to_owned(),
-        );
-    } else {
-        return Ok(None);
-    };
-    Ok(Some(VoiceSetup {
-        key_file,
-        voice_id: request.voice_id.clone(),
-        model: request.voice_model.clone(),
-    }))
-}
+#[path = "init_setup.rs"]
+mod setup;
 
 /// Builds the configuration document `init` saves.
 fn render_config(
@@ -342,21 +310,58 @@ fn render_config(
     Ok(document)
 }
 
-/// The folders the assistant may read: only what the person names, here or when asked.
+fn suggested_folders(home: &Path) -> Vec<PathBuf> {
+    ["Development", "Projects", "code"]
+        .iter()
+        .map(|name| home.join(name))
+        .filter(|folder| folder.is_dir())
+        .collect()
+}
+
+/// Suggestions are not grants: only a path or number explicitly entered is saved.
 fn resolve_folders(named: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let mut folders = named.to_vec();
-    if folders.is_empty()
-        && let Some(answer) = ask("A folder the assistant may read (blank for none): ")
-        && !answer.is_empty()
-    {
-        folders.push(PathBuf::from(answer));
+    if folders.is_empty() && can_ask() {
+        let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        let suggestions = std::env::var_os(home_var)
+            .map(PathBuf::from)
+            .map(|home| suggested_folders(&home))
+            .unwrap_or_default();
+        eprintln!(
+            "Choose only project folders JARVIS may read and write. Changes still ask for approval. No folder is granted by default."
+        );
+        for (index, folder) in suggestions.iter().enumerate() {
+            eprintln!("  {}. {}", index + 1, folder.display());
+        }
+        while let Some(answer) =
+            ask("Folder path or suggested number (blank to finish, none is fine): ")
+        {
+            if answer.is_empty() {
+                break;
+            }
+            let folder = if let Ok(number) = answer.parse::<usize>() {
+                number
+                    .checked_sub(1)
+                    .and_then(|index| suggestions.get(index))
+                    .cloned()
+                    .ok_or_else(|| {
+                        "choose a listed folder number or enter a full path".to_owned()
+                    })?
+            } else {
+                PathBuf::from(answer)
+            };
+            folders.push(folder);
+        }
     }
     let mut roots = Vec::new();
     for folder in &folders {
         match std::fs::canonicalize(folder) {
-            // Canonicalised so the stored root is one absolute spelling, and refused when it is not a directory:
-            // a root that cannot be opened stops the daemon at startup (`ADR-0020`).
-            Ok(resolved) if resolved.is_dir() => roots.push(strip_verbatim(resolved)),
+            Ok(resolved) if resolved.is_dir() => {
+                let resolved = strip_verbatim(resolved);
+                if !roots.contains(&resolved) {
+                    roots.push(resolved);
+                }
+            }
             _ => return Err(format!("{} is not a folder that exists", folder.display())),
         }
     }
@@ -375,9 +380,7 @@ fn report(
     println!("  model   {model}");
     println!("  server  {base_url}");
     if roots.is_empty() {
-        println!(
-            "  folders none (the assistant can read no files; add one with `jarvis init --force --workspace DIR`)"
-        );
+        println!("  folders none (no file access; add folders later in Settings, Folders & code)");
     } else {
         for root in roots {
             println!("  folder  {}", root.display());
@@ -400,171 +403,40 @@ fn report(
             "  voice   ElevenLabs ({})",
             voice.voice_id.as_deref().unwrap_or("default voice")
         ),
-        None => println!(
-            "  voice   the browser's own (for a natural one: `jarvis init --force --elevenlabs`, with ELEVENLABS_API_KEY set)"
-        ),
+        None => {
+            println!("  voice   the browser's own (add a key later in Settings, Voice & search)");
+        }
     }
     println!();
     println!("next:  jarvis start     # start the assistant in the background");
     println!("       jarvis chat      # talk to it");
 }
 
-/// What to do when neither `--base-url` nor a local Ollama is available.
-fn explain_no_server() {
-    eprintln!("jarvis: no Ollama answered on {OLLAMA_ORIGIN}, and no --base-url was given.");
-    eprintln!(
-        "jarvis: install Ollama (https://ollama.com) and pull a model, or point at another OpenAI-compatible server:"
-    );
-    eprintln!(
-        "jarvis:   jarvis init --base-url https://api.example.com/v1 --model NAME --api-key-file C:/path/to/key.txt"
-    );
-}
-
-/// The model key file. A hosted provider's key is the person's own file and never passes through this command; a
-/// local Ollama needs only a placeholder it ignores.
-fn model_key_file(
-    request: &InitRequest,
-    paths: &AppPaths,
-    local_ollama: bool,
-) -> Result<PathBuf, ExitStatus> {
-    match &request.api_key_file {
-        Some(path) => {
-            if !path.is_absolute() || !path.is_file() {
-                eprintln!("jarvis: --api-key-file must be the absolute path of an existing file");
-                return Err(ExitStatus::Usage);
-            }
-            Ok(path.clone())
-        }
-        None if local_ollama => {
-            let path = paths.config().join(KEY_FILE_NAME);
-            if let Err(error) = write_placeholder_key(&path) {
-                eprintln!("jarvis: the model key file could not be written: {error}");
-                return Err(ExitStatus::Internal);
-            }
-            Ok(path)
-        }
-        None => {
-            eprintln!("jarvis: a hosted provider needs --api-key-file, a file holding your key");
-            Err(ExitStatus::Usage)
-        }
-    }
-}
 /// `jarvis init`
 pub async fn init(paths: &AppPaths, arguments: &[String]) -> ExitStatus {
     let request = parse_init(arguments);
     let store = ConfigStore::from_paths(paths);
     if store.path().exists() && !request.force {
         eprintln!(
-            "jarvis: {} already exists, so nothing was changed. Run `jarvis init --force` to replace it, or edit it directly.",
+            "jarvis: {} already exists, so nothing was changed. Use Settings or `jarvis config` to change one setting; `jarvis init --force` replaces the whole configuration.",
             store.path().display()
         );
         return ExitStatus::Rejected;
     }
 
-    // The provider: an explicit endpoint, or the user's own Ollama.
-    let (base_url, models, local_ollama) = if let Some(url) = &request.base_url {
-        (url.clone(), None, false)
-    } else if let Some(models) = ollama_models().await {
-        eprintln!(
-            "jarvis: found Ollama on this machine with {} model(s)",
-            models.len()
-        );
-        (OLLAMA_BASE_URL.to_owned(), Some(models), true)
-    } else {
-        explain_no_server();
-        return ExitStatus::Unavailable;
-    };
-
-    let model = match (&models, &request.model) {
-        (Some(available), requested) => match choose_model(requested.as_deref(), available) {
-            Ok(model) => model,
-            Err(message) => {
-                eprintln!("jarvis: {message}");
-                return ExitStatus::Rejected;
-            }
-        },
-        (None, Some(model)) => model.clone(),
-        (None, None) => {
-            eprintln!(
-                "jarvis: --base-url needs --model, because there is no server here to ask which models it has"
-            );
-            return ExitStatus::Usage;
-        }
-    };
-
-    let key_file = match model_key_file(&request, paths, local_ollama) {
-        Ok(path) => path,
-        Err(status) => return status,
-    };
-
-    let code = match code_setup(&request) {
-        Ok(code) => code,
+    match setup::configure(paths, &request).await {
+        Ok(()) => ExitStatus::Ok,
         Err(message) => {
             eprintln!("jarvis: {message}");
-            return ExitStatus::Usage;
+            ExitStatus::Rejected
         }
-    };
-    let voice = match voice_setup(&request, paths) {
-        Ok(voice) => voice,
-        Err(message) => {
-            eprintln!("jarvis: {message}");
-            return ExitStatus::Usage;
-        }
-    };
-    let roots = match resolve_folders(&request.workspaces) {
-        Ok(roots) => roots,
-        Err(message) => {
-            eprintln!("jarvis: {message}");
-            return ExitStatus::Rejected;
-        }
-    };
-    let document = match render_config(
-        &model,
-        &base_url,
-        &key_file,
-        &roots,
-        code.as_ref(),
-        voice.as_ref(),
-    ) {
-        Ok(document) => document,
-        Err(message) => {
-            eprintln!("jarvis: {message}");
-            return ExitStatus::Rejected;
-        }
-    };
-    // The daemon's own parser, so a document written here is one the daemon starts with.
-    let config = match Config::parse_with_environment(&document, std::iter::empty::<(&str, &str)>())
-    {
-        Ok(loaded) => loaded.into_config(),
-        Err(error) => {
-            eprintln!("jarvis: the configuration it would write is not valid: {error}");
-            return ExitStatus::Internal;
-        }
-    };
-    if let Err(error) = store.save(&config) {
-        eprintln!("jarvis: the configuration could not be saved: {error}");
-        return ExitStatus::Internal;
     }
-
-    report(
-        store.path(),
-        &model,
-        &base_url,
-        &roots,
-        code.as_ref(),
-        voice.as_ref(),
-    );
-    ExitStatus::Ok
 }
 
 /// Windows canonical paths carry a `\\?\` prefix that a person never typed and a TOML reader should not see.
 pub(crate) fn strip_verbatim(path: PathBuf) -> PathBuf {
     let text = path.display().to_string();
     text.strip_prefix(r"\\?\").map_or(path, PathBuf::from)
-}
-
-fn write_placeholder_key(path: &Path) -> std::io::Result<()> {
-    write_secret(path, OLLAMA_PLACEHOLDER_KEY)
 }
 
 /// Writes a key to a file only its owner can read.
@@ -926,15 +798,13 @@ mod tests {
     }
 
     #[test]
-    fn voice_options_without_a_key_source_are_refused_and_the_key_is_never_a_flag() {
-        let paths =
-            AppPaths::from_root(&std::env::temp_dir()).unwrap_or_else(|error| panic!("{error}"));
-        let lone = parse_init(&words("--voice-id abc"));
-        assert!(voice_setup(&lone, &paths).is_err());
-        let relative = parse_init(&words("--voice-key-file relative.key"));
-        assert!(voice_setup(&relative, &paths).is_err());
-        assert!(voice_setup(&parse_init(&words("")), &paths).is_ok_and(|v| v.is_none()));
-        // There is deliberately no flag that takes the key itself: it would sit in shell history.
-        assert!(!parse_init(&words("--elevenlabs-key sk_x")).elevenlabs);
+    fn voice_flags_take_references_and_identifiers_never_a_raw_key() {
+        let request = parse_init(&words(
+            "--voice-key-file speech.key --voice-id abc --elevenlabs",
+        ));
+        assert_eq!(request.voice_key_file, Some(PathBuf::from("speech.key")));
+        assert_eq!(request.voice_id.as_deref(), Some("abc"));
+        assert!(request.elevenlabs);
+        assert!(!parse_init(&words("--elevenlabs-key synthetic-key")).elevenlabs);
     }
 }

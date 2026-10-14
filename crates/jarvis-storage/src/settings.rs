@@ -293,9 +293,9 @@ const SETTINGS: &[Setting] = &[
         kind: Kind::Text,
         help: "ElevenLabs voice id",
         group: "voice",
-        default: Some("JBFqnCBsd6RMkjVDRZzb"),
-        unset_means: "Uses the built-in default voice (George). Only used once a voice key is set.",
-        example: "JBFqnCBsd6RMkjVDRZzb",
+        default: Some("liN4AsrhF3CylqMDWK6p"),
+        unset_means: "Uses the owner's preferred default voice. Only used once a voice key is set; your ElevenLabs account must have access to this voice.",
+        example: "liN4AsrhF3CylqMDWK6p",
     },
     Setting {
         table: "daemon",

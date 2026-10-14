@@ -77,8 +77,15 @@ pub(crate) fn find_attachments(payload: &Value) -> Vec<FoundAttachment> {
 }
 
 /// A relative path made only of ordinary names: no drive, no leading slash, no `..`, nothing that is not a plain component.
+/// Reject Windows drive, stream and traversal syntax on Unix too; native components alone treat it as ordinary names.
 pub(crate) fn plain_relative(text: &str) -> Option<PathBuf> {
-    if text.is_empty() || text.chars().count() > 260 || text.chars().any(char::is_control) {
+    if text.is_empty()
+        || text.chars().count() > 260
+        || text.chars().any(char::is_control)
+        || text.contains(':')
+        || text.starts_with('\\')
+        || text.split(['/', '\\']).any(|component| component == "..")
+    {
         return None;
     }
     let path = Path::new(text);

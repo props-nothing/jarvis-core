@@ -1,13 +1,29 @@
 ---
 integration: model-providers
 status: implemented-minimal
-last_verified: 2026-10-10
+last_verified: 2026-10-14
 owners: []
 selected_spec_version: "each vendor's documented OpenAI-compatible surface; no version pinned (see Versions)"
 selected_sdk: null
 ---
 
 # Model providers behind the OpenAI-compatible adapter (choosing one, listing its models)
+
+## Terminal setup refresh (2026-10-14)
+
+Re-read live official indexes/pages: https://developers.openai.com/llms.txt and the models/list reference below;
+https://docs.ollama.com/llms.txt, its openai-compatibility.md and authentication.md pages;
+https://ai.google.dev/gemini-api/docs/openai (root llms.txt returned 404);
+https://platform.claude.com/llms.txt and its OpenAI SDK compatibility page below.
+No relevant change to the existing preset addresses/auth contract observed. No SDK or wire changes: the terminal
+reuses the console's model listing and fixed 64-token completion check, one attempt with existing timeouts.
+Cloud keys are hidden on entry, never reused for another endpoint, and saved only after the selected model answers.
+Local/custom loopback servers use the existing placeholder when no explicit key file is supplied.
+Listing failure does not block manually entering a model; completion failure blocks saving setup.
+The Anthropic compatibility caveat and uncertain model-list support remain. New setup also requires the independent
+ElevenLabs TTS check (see elevenlabs.md). Cheapest falsification: a refused model/voice leaves configuration and
+new secret files absent; test shared preset parity and a failed list with manually selected model. No hosted-provider
+live call was made during this refresh; vendor SDK changelogs do not control this unchanged direct HTTP path.
 
 ## Scope
 

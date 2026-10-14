@@ -1,0 +1,17 @@
+JARVIS
+Copyright 2026 JARVIS contributors
+
+Original JARVIS code and documentation are licensed under the Apache License,
+Version 2.0. See LICENSE. Separately attributed materials retain their terms.
+
+The browser console includes positions and triangle indices derived from
+MediaPipe's canonical_face_model.obj:
+Copyright 2019-2023 The MediaPipe Authors
+Licensed under the Apache License, Version 2.0.
+Source: https://github.com/google-ai-edge/mediapipe
+The geometry is reduced to positions and triangle indices, quantized to
+hundredths of a model unit; rendering and animation are JARVIS implementations.
+See THIRD_PARTY.md for provenance and the research record.
+
+The former Python prototype is not included in this distribution. Its
+CC BY-NC 4.0 terms are not superseded by JARVIS's Apache-2.0 license.

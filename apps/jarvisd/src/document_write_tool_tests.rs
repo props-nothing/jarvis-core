@@ -97,6 +97,13 @@ async fn bad_requests_write_nothing() {
     for arguments in [
         json!({ "path": "../escape.xlsx", "content": sheet() }),
         json!({ "path": "C:/escape.xlsx", "content": sheet() }),
+        json!({ "path": "C:escape.xlsx", "content": sheet() }),
+        json!({ "path": r"C:\escape.xlsx", "content": sheet() }),
+        json!({ "path": r"\\server\share\escape.xlsx", "content": sheet() }),
+        json!({ "path": r"\escape.xlsx", "content": sheet() }),
+        json!({ "path": r"out\..\escape.xlsx", "content": sheet() }),
+        json!({ "path": "out/../escape.xlsx", "content": sheet() }),
+        json!({ "path": "out.xlsx:stream", "content": sheet() }),
         json!({ "path": "/etc/escape.xlsx", "content": sheet() }),
         json!({ "path": "report.pdf", "content": sheet() }),
         json!({ "path": "noextension", "content": sheet() }),

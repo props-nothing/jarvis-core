@@ -1,0 +1,4 @@
+/LICENSE text eol=lf
+/NOTICE text eol=lf
+/scripts/package-release.sh text eol=lf
+/scripts/test-package-release.sh text eol=lf

@@ -94,6 +94,49 @@ async fn a_question_finds_the_passage_and_the_file_it_came_from() {
 }
 
 #[tokio::test]
+async fn reopening_preserves_the_index_and_replacement_and_removal_still_work() {
+    let (directory, database) = database().await;
+    put(&database, "a.txt", &["original passage", "second piece"]).await;
+    put(&database, "b.txt", &["another passage"]).await;
+    database.close().await;
+    drop(database);
+
+    let reopened =
+        must(SqliteDatabase::open(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
+    assert!(reopened.pre_migration_backup().is_none());
+    assert_eq!(
+        must(search_knowledge(&reopened, "passage", 5).await).len(),
+        2
+    );
+    assert_eq!(
+        must(knowledge_stats(&reopened).await),
+        KnowledgeStats {
+            files: 2,
+            chunks: 3
+        }
+    );
+
+    put(&reopened, "a.txt", &["replacement passage"]).await;
+    assert!(must(search_knowledge(&reopened, "original", 5).await).is_empty());
+    assert!(must(search_knowledge(&reopened, "second", 5).await).is_empty());
+    assert_eq!(
+        must(search_knowledge(&reopened, "replacement", 5).await).len(),
+        1
+    );
+    must(remove_knowledge_file(&reopened, "C:/notes", "b.txt").await);
+    assert_eq!(
+        must(search_knowledge(&reopened, "passage", 5).await).len(),
+        1
+    );
+    assert_eq!(must(clear_knowledge(&reopened).await), 1);
+    assert_eq!(
+        must(knowledge_stats(&reopened).await),
+        KnowledgeStats::default()
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
 async fn every_word_is_wanted_first_and_any_word_is_the_fallback() {
     let (_directory, database) = database().await;
     put(&database, "a.txt", &["alpha beta gamma"]).await;

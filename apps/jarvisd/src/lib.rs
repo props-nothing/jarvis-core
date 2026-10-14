@@ -43,7 +43,7 @@ mod memory_propose;
 mod memory_search;
 mod memory_service;
 mod model_fallback;
-mod model_probe;
+pub mod model_probe;
 mod model_routing;
 mod notify;
 mod ocr;

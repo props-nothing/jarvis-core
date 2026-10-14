@@ -1,58 +1,59 @@
 name: Release (private artifacts)
 
-# Builds the two programs for each platform and packages them.
+# Packages the single jarvis program only after CI passes for its exact commit.
+# Main pushes reuse completed CI; manual/tag runs call the same CI workflow first.
+# Artifacts are kept 14 days and downloadable by signed-in users of this public repository.
+# Tags attach all five platforms to a draft only after the complete package matrix succeeds.
 #
-#   * It runs by itself on every push to `main` (code changes only) and can be run by hand (Actions > "Release (private
-#     artifacts)" > Run workflow). Either gives **workflow artifacts**, kept 14 days: open the run and download the archive for
-#     your platform. This repository is public, so anyone signed in to GitHub can download the artifacts of a public repository.
-#   * Push a tag (`git tag v0.1.0 && git push origin v0.1.0`) to also attach the archives to a **draft** GitHub release. A draft is
-#     visible only to people with write access, so it is the durable place to download the exe from; publish it by hand when
-#     you decide to.
-#
-# No *published* release is ever created here, because no licence has been chosen for JARVIS yet (README.md, "License Status"),
-# which blocks distributing it. When a licence is chosen, publishing is one extra step.
+# JARVIS is Apache-2.0 licensed. This workflow still creates drafts only: dependency-license inventories,
+# signing/notarization and clean-machine verification remain public-release gates (TODO.md, P9-017b).
 on:
   workflow_dispatch:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
-    # Documentation alone does not change what is shipped, so it does not spend five builds.
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
+  push:
     tags:
       - "v*"
 
-# A newer push to the same ref makes an older build pointless; a tag build is never cancelled by a branch push.
+# A failed/foreign CI completion must not cancel a valid release; reruns of the same CI run share a group.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.workflow_run.id || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  draft:
-    name: Draft release
-    if: startsWith(github.ref, 'refs/tags/v')
+  source:
+    name: Select verified source
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.source.outputs.ready }}
+      sha: ${{ steps.source.outputs.sha }}
     steps:
-      - name: Create the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --prerelease \
-                 --title "JARVIS $GITHUB_REF_NAME" \
-                 --notes "Unsigned private build. Unpack and run jarvis (one program). See docs/user/quick-start.md."
+      - name: Check out release policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select the exact eligible commit
+        id: source
+        run: node scripts/release-policy.mjs
+
+  quality:
+    needs: source
+    if: needs.source.outputs.ready == 'true' && github.event_name != 'workflow_run'
+    uses: ./.github/workflows/ci.yml
 
   package:
-    needs: draft
-    # `draft` is skipped for a manual run, and a skipped dependency would skip this job too unless it is named here.
-    if: ${{ !cancelled() && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
+    needs: [source, quality]
+    # Main already passed CI. A skipped quality job is not a bypass for a manual/tag run.
+    if: ${{ !cancelled() && needs.source.outputs.ready == 'true' && (needs.quality.result == 'success' || (github.event_name == 'workflow_run' && needs.quality.result == 'skipped')) }}
     permissions:
-      contents: write
+      contents: read
     name: Package (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -71,6 +72,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
       - name: Report pinned toolchain
         run: |
           rustup show active-toolchain
@@ -111,14 +115,6 @@ jobs:
           ext=""; [ -f "$dir/jarvis.exe" ] && ext=".exe"
           "$dir/jarvis$ext" version
           "$dir/jarvis$ext" daemon --version
-      - name: Attach to the draft release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          shopt -s nullglob
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/*.sha256 --clobber --repo "$GITHUB_REPOSITORY"
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -128,4 +124,41 @@ jobs:
             dist/*.zip
             dist/*.sha256
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
+
+  draft:
+    name: Attach complete draft release
+    needs: [source, package]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download this run's verified packages
+        run: |
+          gh --version
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'jarvis-*' --dir dist
+      - name: Verify checksums and attach to a draft only
+        shell: bash
+        run: |
+          shopt -s nullglob
+          archives=(dist/jarvis-*/*.tar.gz dist/jarvis-*/*.zip)
+          checksums=(dist/jarvis-*/*.sha256)
+          [ "${#archives[@]}" -eq 5 ] && [ "${#checksums[@]}" -eq 5 ] \
+            || { echo "::error::Expected all five platform archives and checksums"; exit 1; }
+          for checksum in "${checksums[@]}"; do
+            (cd "$(dirname "$checksum")" && sha256sum -c "$(basename "$checksum")")
+          done
+          if is_draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"; then
+            [ "$is_draft" = true ] || { echo "::error::Refusing to modify a published release"; exit 1; }
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --prerelease --verify-tag \
+              --title "JARVIS $GITHUB_REF_NAME" \
+              --notes "Unsigned build. Unpack and run jarvis (one program). See docs/user/quick-start.md."
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${archives[@]}" "${checksums[@]}" --clobber --repo "$GITHUB_REPOSITORY"

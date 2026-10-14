@@ -6,15 +6,27 @@
 
 ## Build From Source
 
-Install Git and Rust through rustup. The repository pins the compiler and components in [rust-toolchain.toml](../../rust-toolchain.toml); rustup selects that toolchain when you run Cargo here. Windows needs the MSVC C++ build tools and Windows SDK; macOS needs the command-line developer tools; Linux needs a C/C++ toolchain and the native dependencies used by enabled workspace features.
+Source builds need Git, [Rust installed through rustup](https://rust-lang.org/tools/install/) and native build tools. The repository pins Rust **1.98.1**, clippy and rustfmt in [rust-toolchain.toml](../../rust-toolchain.toml); rustup selects the checked-out version when you run Cargo here. These are **build prerequisites**, not requirements to run an already installed JARVIS executable.
+
+- **Windows 10/11:** install Git for Windows, Rust via rustup and Visual Studio C++ Build Tools with **Desktop development with C++** and a Windows SDK. Follow the [official MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html), including the appropriate Visual Studio edition for your license. Open a new PowerShell terminal after installation. The website installer accepts a discoverable Visual Studio C++ installation; `cl` need not be on ordinary PowerShell PATH. Cargo checks final linker/SDK compatibility.
+- **macOS:** run `xcode-select --install` and finish Apple's command-line tools installation (or select an existing Xcode installation). `xcode-select --print-path` must succeed; a `cc` shim alone is not enough. Install Rust via rustup, then open a new terminal.
+- **Ubuntu:** explicitly install the native source prerequisites below, then install Rust via rustup and open a new terminal. Other Linux distributions need their equivalent Git/C/C++ toolchain packages. JARVIS uses pure-Rust TLS; no separate OpenSSL package is required for this CLI build.
+
+```bash
+# Ubuntu: advisory commands you choose to run, not actions performed by the installer
+sudo apt-get update
+sudo apt-get install git build-essential curl
+```
+
+Check `git --version`, `rustup --version` and `cargo --version` in the new terminal. Rustup/Cargo may download the pinned toolchain and dependencies; internet/proxy access is required unless they are already cached. Keep `--locked`: a missing or inconsistent `Cargo.lock` is a build failure, not a reason to silently re-resolve dependencies. [Research and platform evidence limits](../research/integrations/source-install-prerequisites.md).
 
 ```text
 git clone https://github.com/props-nothing/jarvis-core.git
 cd jarvis-core
-cargo build --release -p jarvis-cli
+cargo build --release -p jarvis-cli --locked
 ```
 
-Run `./target/release/jarvis` on Linux/macOS or `.\target\release\jarvis.exe` on Windows. It performs onboarding, starts the daemon and opens the browser console. No `jarvis` command is on your PATH until you install it or add the build directory. The [quick start](../user/quick-start.md) explains both options.
+Run `./target/release/jarvis` on Linux/macOS or `.\target\release\jarvis.exe` on Windows. New onboarding chooses a model, requires your ElevenLabs API key privately and asks for explicit folder grants; only successful setup starts the daemon and opens the console. Existing profiles skip new setup. No `jarvis` command is on your PATH until you install it or add the build directory. The website source installers run only `jarvis install` and print the setup handoff, including absolute key-file flags for unattended use; they never run setup through piped stdin. The [quick start](../user/quick-start.md) explains both options.
 
 Docker is optional for containerized code execution; Tesseract is optional for OCR. A working model server is needed for actual model answers, but the default offline tests use scripted models and do not need provider credentials.
 
@@ -67,16 +79,15 @@ The next implementation task is the first unchecked item in [TODO.md](../../TODO
 
 ```text
 jarvis           # first run: setup questions, then starts and opens the console (the rest of this section is the same steps one at a time)
-jarvis init      # finds your local Ollama, asks which model and which folder, writes the configuration
+jarvis init      # chooses a model, requires an ElevenLabs key, asks for explicit folders, writes configuration
 jarvis start     # starts the daemon in the background and waits until it answers
 jarvis chat
 ```
 
-`init` lists the models your Ollama has and refuses a model it does not list. It writes `model.key` (a placeholder
+For local Ollama, `init` lists its models and refuses a model it does not list. It writes `model.key` (a placeholder
 Ollama ignores) and a validated `config.toml`, and it **never overwrites** an existing configuration without
-`--force`. It grants **no folder unless you name one** (`--workspace DIR`, repeatable, or the prompt). For another
-OpenAI-compatible server: `jarvis init --base-url URL --model NAME --api-key-file C:/path/to/key.txt` (the key stays in
-your file; it never passes through the command). Add `--code-image node:22-alpine --code-interpreter "node -e"` to give
+`--force`. New setup requires a private ElevenLabs key, from the hidden prompt, `ELEVENLABS_API_KEY` with `--elevenlabs`, or an absolute `--voice-key-file PATH`; the default voice ID is `liN4AsrhF3CylqMDWK6p` (not a key). It grants **no folder unless you name one** (`--workspace DIR`, repeatable, or the prompt); `~/Development` and `~/projects` are suggestions, not automatic grants. For another
+OpenAI-compatible server, unattended setup includes both key files: `jarvis init --base-url URL --model NAME --api-key-file C:\Secrets\model.key --voice-key-file C:\Secrets\voice.key` (replace these with existing private absolute paths; keys never pass through the command). Add `--code-image node:22-alpine --code-interpreter "node -e"` to give
 the assistant a no-network throwaway container for code, and `--trust-code` to let it run without asking each time
 (`ADR-0133`); web pages already run without asking, and anything with an external effect is still asked. `start` returns once the daemon listens, or says why it exited.
 `--root DIR` (an existing directory) keeps a throwaway profile. The manual route below stays available for operators.
@@ -243,11 +254,7 @@ loud and listens for "yes" or "no". See `ADR-0135` and `ADR-0136`.
 
 #### A natural voice
 
-Out of the box the console speaks with your browser's own voice, which can sound robotic (Edge has good "Natural" ones).
-For a proper neural voice, use ElevenLabs: put your key in the `ELEVENLABS_API_KEY` environment variable and run
-`jarvis init --force --elevenlabs` (add `--voice-id ID` for another voice, `--voice-model ID` for another model), then
-`jarvis start`. The key is kept in a private file read only by the daemon, never by the browser; what JARVIS says is sent to
-ElevenLabs to be spoken. If it is unavailable, the browser voice takes over. See `ADR-0138`.
+New setup requires an ElevenLabs API key and defaults to voice ID `liN4AsrhF3CylqMDWK6p`; the ID is not a key. Supply the key privately during setup, with `--elevenlabs` reading a privately supplied `ELEVENLABS_API_KEY`, or with an absolute `--voice-key-file PATH`. Existing profiles are not forced through setup again. To change their voice key, use `jarvis keys set voice --from-env ELEVENLABS_API_KEY` and `jarvis restart`, not `init --force`. The key is kept in a private file read only by the daemon, never by the browser; what JARVIS says is sent to ElevenLabs to be spoken. If synthesis is unavailable, browser-voice fallback remains; the new setup requirement does not change headless runtime behavior. See `ADR-0138`.
 
 `jarvis watch` is a live screen of the work: what is **waiting for you**, what is
 **working** (runs and sub-agents, with ages and the cancel commands), what is **scheduled** next, and what just

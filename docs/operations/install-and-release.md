@@ -8,18 +8,28 @@
 
 | Path | Status |
 | --- | --- |
-| Build the CLI from source | `cargo build --release -p jarvis-cli`; the same `jarvis` program runs its daemon. |
+| Build the CLI from source | `cargo build --release -p jarvis-cli --locked`; the same `jarvis` program runs its daemon. |
 | Install for your user | `jarvis install` copies the program and sets up PATH; no administrator rights required. |
 | Start at login | `jarvis service install` / `uninstall`; native platform details are in the [platform guide](../user/platforms.md). |
 | Portable profile | `--root` keeps managed state in an explicit directory and does not install a service. |
 | CI archives | Platform workflow artifacts and tagged draft releases; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
-| Public signed binaries and updates | Not shipped; license choice, signing, clean-machine evidence and update/rollback work remain. |
+| Public signed binaries and updates | Not shipped; Apache-2.0 is selected, but signing, clean-machine evidence and update/rollback work remain. |
 
-The separate product website also has source-building bootstrap scripts. Those are not the signed-download bootstrap design below. Do not infer production readiness or public redistribution rights from a successful build.
+The separate product website serves working source-building scripts at `https://www.jarvisd.dev/install.sh` and `https://www.jarvisd.dev/install.ps1`, from `frontend/public/`. These clone/update a protected source checkout, build with the committed lockfile, then delegate per-user installation to `jarvis install`. They are not signed-binary downloaders. Source builds require Git, Rust via rustup and [native build tools](../development/getting-started.md#build-from-source); the installed executable needs no Rust. Build/install failure exits nonzero, without setup or a success claim. A successful installer prints interactive and noninteractive setup commands; it does not collect keys or run onboarding through piped stdin. New setup requires an ElevenLabs key and explicit folder grants before starting the assistant. Do not infer signed distribution or clean-machine readiness from this source path.
+
+## Current CI Archive Flow
+
+The [CI workflow](../../.github/workflows/ci.yml) runs native quality checks on Windows, macOS and Linux plus dependency policy. After a successful **push** run on this repository's `main`, the [release workflow](../../.github/workflows/release.yml) packages that run's exact commit, not whichever commit happens to be newest when packaging starts. Failed/cancelled CI, pull requests and foreign repositories cannot trigger packaging. Documentation-only main pushes also follow this flow.
+
+Manual release runs and `v*` tag pushes call the same CI workflow before packaging. Five platform archives and their SHA-256 files are retained as workflow artifacts for 14 days. These artifacts are downloadable by signed-in users of this public repository; “private artifacts” in the workflow name does **not** make them private.
+
+Only after all five packages succeed does a tag run attach the complete set to a draft release. Checksums are verified again before attachment. Existing published releases are never modified, tags are not created implicitly, and the workflow never publishes a release. A failed network upload can leave a partial draft; rerun the workflow to replace its draft assets.
+
+Local regression checks: `node --test scripts/test-release-flow.mjs`. Hosted trigger, token and native-platform behavior still require a passing Actions run after the changes land on the default branch.
 
 ## Target Release Contract
 
-The remaining sections specify required product behavior and retain the original planning design where identified. They are not claims that every installer, signature, service reconciliation step or deployment profile is implemented.
+The target/future sections specify required product behavior and retain the original planning design where identified. The source bootstrap below is available today; signed downloads, complete service reconciliation and deployment profiles remain release goals, not implementation claims.
 
 ## Artifact Matrix
 
@@ -40,14 +50,25 @@ Artifacts include version, target triple, archive/package type, checksum, signat
 
 ## Installation Modes
 
-### Bootstrap script
+### Source bootstrap (available today)
 
-```text
-curl -fsSL https://<official-domain>/install.sh | sh
-iwr -useb https://<official-domain>/install.ps1 | iex
+```bash
+# macOS / Ubuntu, after installing the source-build prerequisites
+curl -fsSL https://www.jarvisd.dev/install.sh | bash
 ```
 
-These commands are documentation targets, not active URLs. Scripts are small bootstrap verifiers that download a signed release; they do not install a language runtime or execute unverified nested scripts.
+```powershell
+# Windows PowerShell 5.1+, after installing the source-build prerequisites
+irm https://www.jarvisd.dev/install.ps1 | iex
+```
+
+Inspect the same-host scripts before running them. They build source, preserve checkout origin/local-change protections and leave service startup off by default. Missing prerequisites give platform-native instructions; no system packages are installed automatically. Bash retains an explicit `JARVIS_INSTALL_RUST=1` opt-in for per-user rustup. See the [prerequisite evidence and limits](../research/integrations/source-install-prerequisites.md).
+
+Open a new terminal and run `jarvis` for setup. Without a terminal, follow the printed `jarvis init` command with private absolute key-file paths; run `jarvis start` and `jarvis doctor --live` only if setup succeeds. An installer success is not a completed profile or provider test.
+
+### Signed-download bootstrap (future)
+
+The target bootstrap verifies a signed release manifest and binary before execution. It will not require a Rust source toolchain. That download/signature contract is not implemented by today's website scripts.
 
 ### Native packages
 

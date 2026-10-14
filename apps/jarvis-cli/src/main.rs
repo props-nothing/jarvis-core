@@ -199,7 +199,7 @@ async fn launch_command(arguments: &[String]) -> ExitStatus {
             return ExitStatus::Usage;
         }
         println!("Welcome to JARVIS. A few questions, then it starts and opens in your browser.");
-        let status = init::init(&paths, &[]).await;
+        let status = init::init(&paths, arguments).await;
         if status != ExitStatus::Ok {
             return status;
         }

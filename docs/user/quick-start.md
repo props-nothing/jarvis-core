@@ -11,10 +11,13 @@ The target experience, and what is still missing from it, is in [product/onboard
 
 - A model. The easiest is [Ollama](https://ollama.com) running on this machine (local models, or Ollama Cloud models through it).
   Any OpenAI-compatible server works too.
+- An **ElevenLabs API key for new setup**, supplied privately; it is not the voice ID. The default voice ID is `liN4AsrhF3CylqMDWK6p`. Existing profiles keep working without repeating setup; this requirement does not change headless runtime behavior.
 - Optionally Docker, if you want the assistant to run code in a throwaway container.
 - One program, `jarvis` (the assistant it runs in the background is the same file, started as `jarvis daemon`). Either unpack a release archive (CI builds one per platform as
-  a workflow artifact, or a draft release for a tagged build; there is no public download until a licence is chosen), or build it with a Rust toolchain:
-  `cargo build --release -p jarvis-cli`, then take it from `target/release/`.
+  a workflow artifact, or a draft release for a tagged build; Apache-2.0 is selected, but signed public downloads still need the release gates), or build it with a Rust toolchain:
+  `cargo build --release -p jarvis-cli --locked`, then take it from `target/release/`.
+
+Only source builds need Git, Rust via rustup and native build tools: Visual Studio C++ Build Tools + a Windows SDK, Xcode command-line tools on macOS, or `build-essential` on Ubuntu. Follow the [platform-specific prerequisite steps](../development/getting-started.md#build-from-source). An installed executable needs no Rust. The website's [source install commands](../operations/install-and-release.md#source-bootstrap-available-today) build and install the program; they are not signed binary downloads and do not run setup through piped input.
 
 Start the built program directly before it is on your PATH:
 
@@ -41,17 +44,25 @@ and with `--service` starts it at login. It needs no administrator rights and ne
 jarvis
 ```
 
-That is the whole thing. The first time, it asks which model to use (it lists what your Ollama has) and which folder, if any,
-the assistant may read and write; then it starts in the background and opens the console in your browser, already signed in.
-Later runs skip the questions, make sure it is running, and open the console. `jarvis --no-open` starts it without opening a
-window.
+The first time, guided setup chooses a model/provider, asks for your required ElevenLabs API key with hidden input, and asks which folders, if any, the assistant may read and write. `~/Development` and `~/projects` are useful suggestions, **not automatic grants**. Only after setup succeeds does it start in the background and open the signed-in browser console. Later runs skip new setup and keep the existing profile. `jarvis --no-open` starts it without opening a window.
 
-Setting up without questions (scripts, other providers):
+After a piped website install, open a new terminal and run `jarvis`; the installer only installed the program. For unattended setup, provide existing **private absolute key-file paths**, replacing these example paths and choosing existing workspace folders. Never put an API key value in arguments or shell history.
 
-```text
-jarvis init --base-url https://api.example.com/v1 --model NAME --api-key-file C:/path/to/key.txt --workspace C:/Users/me/notes
-jarvis start
+```powershell
+# Windows; never start after a failed init
+jarvis init --base-url https://api.example.com/v1 --model NAME --api-key-file C:\Secrets\model.key --voice-key-file C:\Secrets\voice.key --workspace "$HOME\Development" --workspace "$HOME\projects"
+if ($LASTEXITCODE -eq 0) {
+  jarvis start
+  if ($LASTEXITCODE -eq 0) { jarvis doctor --live }
+}
 ```
+
+```bash
+# Ubuntu / macOS; && prevents startup if setup fails
+jarvis init --base-url https://api.example.com/v1 --model NAME --api-key-file "$HOME/private/model.key" --voice-key-file "$HOME/private/voice.key" --workspace "$HOME/Development" --workspace "$HOME/projects" && jarvis start && jarvis doctor --live
+```
+
+Alternatively, supply `ELEVENLABS_API_KEY` through a private environment and pass `--elevenlabs` instead of `--voice-key-file`. No key value is shown here or needed by the source installer. Model and voice validation errors stop setup; do not start a new profile after a failed `init`. Omit `--workspace` to grant no folders.
 
 `--workspace` may be repeated. The assistant can read, list and create files in those folders (including new Excel, CSV and Word files it writes for you), search their text, and run commands there (such as a build or the tests) after you approve each one; changing an existing file is
 asked about first. Nothing outside them is reachable.
@@ -62,7 +73,7 @@ asked about first. Nothing outside them is reachable.
 | --- | --- | --- |
 | Model key | A hosted model provider (not needed for local Ollama) | `jarvis keys set model --from-env NAME` (or `--file PATH`, or pipe it in), or `--api-key-file PATH` at `init`. |
 | Fallback key | A second provider for when the main model is limited or down | `jarvis keys set fallback --from-env NAME`, after `executor_fallback_model_name` and `executor_fallback_base_url` are set (see settings.md). |
-| Voice key | A natural voice (ElevenLabs) | `jarvis keys set voice --from-env ELEVENLABS_API_KEY`, then `jarvis restart`. Without it the console speaks with your browser's own voice. |
+| Voice key | Required for new setup; a natural voice (ElevenLabs) | Hidden setup prompt, absolute `--voice-key-file PATH`, or `--elevenlabs` with private `ELEVENLABS_API_KEY`. For an existing profile: `jarvis keys set voice --from-env ELEVENLABS_API_KEY`, then `jarvis restart`. Existing profiles and browser fallback remain supported. |
 
 ```text
 jarvis keys status               # which keys are set (never their values)
@@ -74,7 +85,7 @@ jarvis keys remove voice
 
 Keys are written to a private file and the configuration holds only its path; they are never printed, logged or sent to the
 browser, and never taken as a command-line value (it would stay in your shell history). With no flag and a terminal, `keys set`
-asks you to paste it (visible as you type; a hidden prompt is `P9-013`).
+asks for it with hidden input. Environment names and absolute file paths are safe command arguments; the secret value itself is not.
 
 ## Changing settings
 

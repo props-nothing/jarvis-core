@@ -1,7 +1,7 @@
 ---
 integration: sqlite-sqlx
 status: implemented
-last_verified: 2026-09-20
+last_verified: 2026-10-14
 owners: [storage]
 selected_spec_version: SQLite 3.51.3
 selected_sdk: SQLx 0.9.0; libsqlite3-sys 0.37.0; Tokio 1.53.1
@@ -15,6 +15,14 @@ This record covers local SQLite connection setup, embedded migrations, schema
 compatibility checks, write-ahead logging, and a verified backup before an
 existing database is upgraded. Remote databases, replication, encryption at
 rest, SQLCipher, and PostgreSQL are out of scope for `P1-006`.
+
+## Startup Pool Refresh (2026-10-14)
+
+SQLx 0.9.0 and bundled SQLite remain unchanged. Live official [pool documentation](https://docs.rs/sqlx/0.9.0/sqlx/struct.Pool.html#method.close) was checked on 2026-10-14: queries through `&Pool` acquire arbitrary pooled connections, and `close().await` waits for connections to return and close before it completes. The [SQLite schema-version reference](https://www.sqlite.org/pragma.html#pragma_schema_version) remains the authority for schema invalidation; no schema-version override or unsafe cache pragma is introduced.
+
+Hosted CI exposed missing knowledge tables after successful initialization. A local deterministic reproduction loaded the empty schema on four connections to the same **file-backed** database, released them, migrated, then reacquired all connections and attempted `DELETE FROM knowledge_chunks`: a stale startup connection returned `no such table`. The exact SQLite invalidation internals were not instrumented; this is observed reproduction evidence, not a claim of a new upstream defect.
+
+JARVIS now completes validation, backup and migrations in a disposable one-connection startup pool, closes it, then opens normal repository connections against the completed schema. Errors still fail startup; durability, migration checksums, backup requirements, identity and permissions are unchanged. This rejects sleeps/retries or weakening migration guards as a remedy. The cheapest falsifying regression checks every repository-pool connection on fresh/upgrade opens and after reopening, rather than relying on a single lucky pooled query. Windows knowledge tests (9), database tests (20), and storage Clippy passed; hosted Linux/macOS confirmation remains required. No external network/auth, provider type, or new dependency is involved.
 
 ## Official Sources
 

@@ -14,7 +14,8 @@
     <a href="docs/README.md">Documentation</a> &middot;
     <a href="ROADMAP.md">Roadmap</a> &middot;
     <a href="CONTRIBUTING.md">Contributing</a> &middot;
-    <a href="SECURITY.md">Security</a>
+    <a href="SECURITY.md">Security</a> &middot;
+    <a href="LICENSE">Apache-2.0</a>
 </p>
 
 JARVIS is a **local-first personal AI assistant with a durable Rust core**. Talk to it, give it a project, connect your tools, and watch it work. Your conversations, memory, approvals and task state stay with JARVIS, not with a replaceable model or agent framework.
@@ -29,7 +30,7 @@ Use a local or hosted OpenAI-compatible model, choose a fallback, and reach the 
 | Capability | What JARVIS does today |
 | --- | --- |
 | **Talk and watch** | A browser console with a reactive face, text and voice, live activity, sources, approvals and a stop control. Browser speech recognition; optional ElevenLabs synthesis. |
-| **Work with your files** | Read, search, write, edit and move within granted folders. Read PDF, Word, spreadsheets and slides; create documents; optional Tesseract OCR. |
+| **Work with your files** | Read, search, write, edit and move within granted folders; recoverable single-file trash. Read PDF, Word, spreadsheets and slides; create documents and edit literal XLSX cells; optional Tesseract OCR. |
 | **Use the web** | Fetch pages and PDFs, use a built-in browser, look up developer documentation, and search with a configured search key. |
 | **Connect your day** | Google sign-in for Gmail and Calendar: mail, drafts, replies, attachments and events, with policy-controlled effects. |
 | **Keep a project moving** | Project goals, guidance, journals, recurring schedules, mail/file/webhook triggers, quiet hours, digests and run/token budgets. |
@@ -61,15 +62,15 @@ macOS / Linux:
 ./target/release/jarvis
 ```
 
-The first run asks for a model and any folders you want to grant, starts the assistant, and opens its signed-in browser console. Later runs reopen it. Use `jarvis install` to install the built program for your user; `jarvis hud` reopens the console.
+For a new setup, the first run guides provider/model selection, requires a working **ElevenLabs text-to-speech API key**, and offers optional folder grants. Interactive secret entry is hidden; model access and speech synthesis must pass tests before configuration is saved. The speech test sends a short sentence to ElevenLabs and may use credits. Setup then starts the assistant and opens its signed-in browser console. Existing configurations are not re-prompted; later runs reopen the console. Use `jarvis install` to install the built program for your user; `jarvis hud` reopens the console.
 
-> **Release status:** CI produces platform artifacts, but public binary distribution is blocked until a license is chosen. The separate product website offers source-building bootstrap scripts, not signed prebuilt releases; they require a development toolchain. [Platform notes](docs/user/platforms.md) distinguish tested behavior from targets.
+> **Release status:** JARVIS is open source under [Apache-2.0](LICENSE). CI produces unsigned platform artifacts; published releases still need dependency notices, signing/notarization and clean-machine verification. The separate product website offers source-building bootstrap scripts, not signed prebuilt releases; they require a development toolchain. [Platform notes](docs/user/platforms.md) distinguish tested behavior from targets.
 
 ## Built, Experimental, Next
 
 **Working assistant:** browser and CLI, Google tools, Telegram, MCP management, approved skills, time-zone schedules and triggers, project journals, model routing and spend guards. The [backlog](TODO.md) records the acceptance evidence and remaining live checks.
 
-**Limited first slices:** outbound calls to listed owner numbers through an ElevenLabs agent have been run live by the owner. ACP coding-agent delegation is implemented in isolated git worktrees, but only the real Codex adapter handshake is verified; a full real-agent task is still owed. A worktree is **not a sandbox**. See [coding agents](docs/user/code-agents.md) and [the roadmap](ROADMAP.md).
+**Limited first slices:** outbound calls to listed owner numbers through an ElevenLabs agent have been run live by the owner. ACP coding-agent delegation has recorded ordinary/background Codex task verification and console activity/diff review; real-account console sign-in and real-agent cancellation remain unverified. Completion is not independent test evidence, and a worktree is **not a sandbox**. See [coding agents](docs/user/code-agents.md) and [the roadmap](ROADMAP.md).
 
 **Not shipped:** a Tauri desktop client, browser-independent local voice, general telephony, signed public installers and the complete server/multi-device profile. The multi-step durable workflow engine is parked until a named requirement needs more than ordinary runs and schedules.
 
@@ -138,4 +139,6 @@ The former Python prototype is no longer part of the current tree. Its [migratio
 
 ## License Status
 
-No license has yet been selected for the new JARVIS platform. A public repository is not an open-source license: distribution outside applicable default copyright rules is blocked until the owner chooses one. Third-party source and documentation research is tracked in [THIRD_PARTY.md](THIRD_PARTY.md).
+Original JARVIS code and documentation are open source under the [Apache License 2.0](LICENSE), selected on 2026-10-14. It permits use, modification and redistribution, including commercial use, with attribution and an explicit contributor patent grant. Preserve the license and applicable [NOTICE](NOTICE) when redistributing.
+
+Third-party dependencies and the MediaPipe face geometry retain their own terms; see [THIRD_PARTY.md](THIRD_PARTY.md). The separately maintained [website repository](https://github.com/props-nothing/jarvis-frontend) uses the same license for its original code. The removed CC BY-NC 4.0 Python prototype and historical copies are **not** relicensed. License selection does not mean signed downloads or release-verification gates are complete.

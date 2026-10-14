@@ -8,7 +8,7 @@ This roadmap is ordered by risk. Each phase must leave a runnable vertical slice
 
 ## At A Glance
 
-Documentation snapshot: **2026-10-13**. This summarizes recorded delivery evidence, not a fresh run of every provider or platform gate.
+Documentation snapshot: **2026-10-14**. This summarizes recorded delivery evidence, not a fresh run of every provider or platform gate. The platform and separate website now use Apache-2.0 for original code and docs; third-party and prototype terms remain separate.
 
 | Track | Current position | Next proof |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Documentation snapshot: **2026-10-13**. This summarizes recorded delivery eviden
 | Reach and initiative | Telegram, approved skills, schedules, triggers and model routing are built. | Measure quality and cost; finish setup polish and remote/MCP credential gaps. |
 | Coding delegation | ACP tools, background task records and console configuration exist; real ordinary/background Codex tasks have recorded verification. | Verify console sign-in and cancellation against a real agent. |
 | Voice and calls | Browser voice and optional synthesis; owner outbound calls reported working live. | Browser-independent local voice and broader call-path evidence. |
-| Distribution | User-level install/service paths and CI archives exist. | Owner license choice, public signed distribution and clean-machine evidence. |
+| Distribution | Apache-2.0 selected; user-level install/service paths and CI archives exist. | Dependency notices, public signed distribution and clean-machine evidence. |
 | Scale | Local SQLite is the default. | Server/multi-device work only with a named requirement and proven ownership semantics. |
 
 The phase descriptions below are gates and dependency order, **not a list of completed features**. [TODO.md](TODO.md) records the individual slices and unresolved checks.
@@ -58,7 +58,7 @@ Measured against the four hallmarks of a real J.A.R.V.I.S.:
 6. ~~**Time-zone schedules**~~ delivered (`P6-003`, `ADR-0182`): "every weekday at 08:00 Europe/Amsterdam". **Triggers** (`P6-012`) are delivered (`ADR-0193`, `ADR-0195`): a new mail, file or request starts an ordinary run, and quiet hours hold notices (`P6-007` in part).
 7. ~~**Model routing** (`P11-006`)~~ **built and run live** (`ADR-0196`): sub-agents and scheduled or triggered runs can use their own model, and the digest shows tokens per model. Whether a cheaper model is good enough is still measured with `jarvis eval`, not assumed.
 8. **Coding agents over ACP** (`P7`): delegate to ChatGPT/Codex, Claude, Copilot, Gemini and others in a worktree, reviewed before anything merges. **First slice built (`ADR-0207` to `ADR-0209`)**, chosen and tested from the console with a sign-in flow available. The handshake and ordinary/background tasks have recorded live Codex evidence; the console Sign in click remains unverified.
-9. Setup polish (`P11-007`); ~~a spend guard in the run~~ is delivered (`P11-008`, `ADR-0191`). Then local voice and calls (`P8`), distribution (`P9-004` to `P9-007`, blocked on a licence choice), and the server profile (`P10`).
+9. Setup polish (`P11-007`); ~~a spend guard in the run~~ is delivered (`P11-008`, `ADR-0191`). Apache-2.0 is selected for original platform and website code/docs. Then local voice and calls (`P8`), distribution (`P9-004` to `P9-007`; dependency notices, signing and clean-machine gates remain), and the server profile (`P10`).
 
 Parked until there is a named use: the durable workflow engine, a connector per provider, a runtime adapter per agent framework, ElevenLabs-shaped voice transports, Tauri.
 

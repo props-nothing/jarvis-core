@@ -49,7 +49,7 @@ const NOT_CHAT: &[&str] = &[
 ///
 /// Only the address and how to get a key: the model names are asked of the provider itself and are not kept here, where they would go
 /// stale. Every address here is the OpenAI-compatible one the vendor documents (`docs/research/integrations/model-providers.md`).
-pub(crate) struct Preset {
+pub struct Preset {
     /// A stable identifier for the screen.
     pub id: &'static str,
     /// What the owner sees.
@@ -63,7 +63,7 @@ pub(crate) struct Preset {
 }
 
 /// The providers offered, in the order shown.
-pub(crate) const PRESETS: [Preset; 6] = [
+pub const PRESETS: [Preset; 6] = [
     Preset {
         id: "ollama-local",
         name: "Ollama (this computer)",
@@ -110,7 +110,7 @@ pub(crate) const PRESETS: [Preset; 6] = [
 
 /// A model identifier from a provider's list.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Listed {
+pub struct Listed {
     /// The identifier a chat request names.
     pub id: String,
     /// False when the name says it is for embeddings, speech, images or the like.
@@ -119,7 +119,7 @@ pub(crate) struct Listed {
 
 /// What looking at a provider found.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Report {
+pub struct Report {
     /// The models it serves: chat models, then the owner's fine-tunes, then the rest, each group in name order. Empty when listing failed.
     pub models: Vec<Listed>,
     /// Why listing failed, in words for the owner. The address and key may still be right: some providers do not list.
@@ -130,13 +130,26 @@ pub(crate) struct Report {
 
 /// The outcome of one tiny call to one model.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Test {
+pub struct Test {
     /// Whether the model answered.
     pub ok: bool,
     /// What happened, in words for the owner.
     pub message: String,
     /// How long it took, in milliseconds.
     pub millis: u64,
+}
+
+/// Lists models and optionally tests one using the same bounded checks as console Settings.
+///
+/// # Errors
+///
+/// Returns a redacted message for unusable settings or HTTP-client initialization failure.
+pub async fn probe(base_url: &str, key: &str, model: Option<&str>) -> Result<Report, String> {
+    let base =
+        BaseUrl::new(base_url).map_err(|_| "That model address is not usable.".to_owned())?;
+    let transport = jarvis_models::openai::HttpTransport::new()
+        .map_err(|_| "The model check could not be set up.".to_owned())?;
+    run(Arc::new(transport), base, key, model).await
 }
 
 fn same_address(left: &str, right: &str) -> bool {

@@ -1,17 +1,22 @@
 # Onboarding, settings and distribution
 
-Reviewed 2026-10-06. This is the target experience for getting from "I have JARVIS" to "I am talking to it", for a
+Reviewed 2026-10-14. This is the target experience for getting from "I have JARVIS" to "I am talking to it", for a
 person who has never opened a config file, and the control a professional user keeps. It records what exists today,
 what does not, and the ordered slices (`P9-012` to `P9-019`) that close the gap. The product rule that governs all of it:
 **the person is never asked to edit a file, run a second program, or understand a port to get a working assistant.**
 
 ## The experience we want
 
-1. **Get it.** Download one archive (or run the installer) for the platform. It contains `jarvis` and `jarvisd` side by side.
+1. **Get it.** Build from source with the website bootstrap script, or extract a CI archive. It contains one `jarvis` program; `jarvis daemon` is its daemon mode. Public signed downloads remain a release gate.
 2. **Run it.** Double-click `jarvis` (or type `jarvis`). Nothing else is needed.
-3. **Answer a few questions, once.** Which brain: a local Ollama it found, Ollama Cloud, OpenAI, OpenRouter, or another
-   OpenAI-compatible server. Paste the key if one is needed (hidden as you type, stored in a private file, tested with a real
-   call before it is saved). Which folders it may read and write. Whether to give it a natural voice (ElevenLabs key).
+3. **Answer a few questions, once.** Choose the same provider presets as Settings (local Ollama, Ollama Cloud, OpenAI,
+   Gemini, Anthropic's compatibility layer, or another OpenAI-compatible server). Choose a model from the provider's
+   list, or enter a name when listing is unavailable. Keys are hidden while typed; the model must answer a short test.
+   **The owner-selected first-run flow requires an ElevenLabs API key** with TTS access and a successful short voice test.
+   Default voice ID: `liN4AsrhF3CylqMDWK6p` (an identifier, not a key); override with `--voice-id` if the account cannot
+   access it. Tests send fixed synthetic text and may consume credits. Failed checks leave setup unsaved.
+   Existing `Development`, `Projects` and `code` folders under the home directory are suggestions, not grants: enter
+   each path/number explicitly, or finish with none. Do not grant the whole home directory just to enable coding.
 4. **It starts and opens.** The daemon starts in the background and the console opens in the browser, already signed in.
 5. **Change anything later in Settings** (in the console) or with a command (below). Never by re-running setup and losing the
    rest of the configuration.
@@ -21,7 +26,7 @@ A professional user gets the same things as commands, all with `--json`, none of
 
 | Need | Command |
 | --- | --- |
-| Set up non-interactively | `jarvis init --base-url ... --model ... --api-key-file ... --workspace ... [--elevenlabs]` |
+| Set up non-interactively | `jarvis init --base-url ... --model ... --api-key-file ABSOLUTE_PATH --voice-key-file ABSOLUTE_PATH [--workspace ...]`; `ELEVENLABS_API_KEY` can supply the voice key instead |
 | See settings (secrets shown only as set / not set) | `jarvis config show [--json]` |
 | Change one setting | `jarvis config set <key> <value>`, validated by the daemon's own parser |
 | Set, test, or remove a key | `jarvis keys set model\|voice`, `jarvis keys test`, `jarvis keys remove voice` |
@@ -33,16 +38,16 @@ A professional user gets the same things as commands, all with `--json`, none of
 
 | Step | Today | Verdict |
 | --- | --- | --- |
-| Get it | `cargo build --release` gives `jarvis` and `jarvisd`, and a CI workflow packages them per platform as an archive with a checksum (workflow artifact, or a draft release for a tag) (`P9-017a`). No public download (no licence yet), installers, signing or updates (`P9-017b`, `P9-004` to `P9-007`). | **Partial** |
-| Run it | `jarvis` with no arguments now sets up on first run, starts the daemon and opens the console. `jarvis` finds `jarvisd` only when it is in the same folder. | **Done (this review)** |
-| Pick a brain | **In the console:** Settings, Brain has a card for the main model and one for the fallback, with provider presets (Ollama on this computer, Ollama Cloud, OpenAI, Google Gemini, Anthropic, other), the provider's own list of models to choose from, a **Test** that makes one real call and says what failed, and a fallback at a different provider (`ADR-0163`, `ADR-0164`). **In the terminal:** `init` still finds a local Ollama and lists its models; any other provider needs flags (`--base-url`, `--model`, `--api-key-file PATH`), no presets, no prompt for a key, no test call (`P9-013`). | **Done in the console; terminal still weak** |
-| Keys | `jarvis keys status\|set\|remove\|test` for the model and voice keys: written to a private file, never printed, read from an environment variable, a file or standard input (never an argument), and tested against the provider. The prompt still echoes what you paste. | **Done (`P9-014`)**, hidden prompt is `P9-013` |
+| Get it | `cargo build --release -p jarvis-cli` gives the single `jarvis` program (daemon mode: `jarvis daemon`), and CI packages it with the Apache-2.0 license, attribution and a checksum (`P9-017a`). Website bootstrap scripts build from source; published downloads, signing and updates still need release gates (`P9-017b`, `P9-004` to `P9-007`). | **Partial** |
+| Run it | `jarvis` with no arguments sets up on first run, starts its own daemon mode and opens the console. First run needs a terminal; `jarvis init` with explicit references also works noninteractively. Later launches reuse saved configuration. | **Built** |
+| Pick a brain | **In the console:** Settings, Brain has a card for the main model and one for the fallback, with provider presets (Ollama on this computer, Ollama Cloud, OpenAI, Google Gemini, Anthropic, other), the provider's own list of models to choose from, a **Test** that makes one real call and says what failed, and a fallback at a different provider (`ADR-0163`, `ADR-0164`). **In the terminal:** `init` now reuses the console presets and bounded model-list/completion checks, with hidden key entry, explicit file/env alternatives and required ElevenLabs voice verification (`ADR-0214`). | **Built; hosted-account/native-terminal checks pending** |
+| Keys | `jarvis keys status\|set\|remove\|test` for the model and voice keys: written to a private file, never printed, read from an environment variable, a file or standard input (never an argument), and tested against the provider. Terminal key entry is hidden using pinned `rpassword`; a terminal error refuses rather than echoing the secret. | **Built (`P9-014`, `ADR-0214`)** |
 | Change a setting | `jarvis config show\|get\|set\|unset` changes one setting at a time, validated by the daemon's own parser, leaving the file untouched on refusal; no more `init --force` to change one thing. Comments in a hand-edited file are not preserved (the file is rewritten from its parsed form). | **Done (`P9-014`)** |
-| Settings screen | **Settings** in the console header: a side list in four groups with ten tabs (Brain, Voice & search, Folders & code, Permissions; Google, Telegram, Phone; Connect apps; Alerts, Advanced), a dot beside each tab that can be set up (green when set, amber when not), write-only key fields, each setting with a one-line explanation and the rest under **More**, on/off settings as real switches, a provider and model picker with a test (Brain), Google sign-in as one button (`docs/user/google.md`), a folder list and the code sandbox with presets, a filterable per-tool permission list (default / ask / run without asking / off), the daemon's own refusal reasons, and a footer that says which changes still wait for **Restart to apply** (`ADR-0139`, `ADR-0164`, `ADR-0203`). Reference: `docs/user/settings.md`. A test beside the voice and search keys (`jarvis keys test`) are still missing. Extra abilities (browser, documentation lookup) are one click in the Abilities tab (`ADR-0169`). | **Done (`P9-015`)** |
+| Settings screen | **Settings** in the console header: a side list in four groups with ten tabs (Brain, Voice & search, Folders & code, Permissions; Google, Telegram, Phone; Connect apps; Alerts, Advanced), a dot beside each tab that can be set up (green when set, amber when not), write-only key fields, each setting with a one-line explanation and the rest under **More**, on/off settings as real switches, a provider and model picker with a test (Brain), Google sign-in as one button (`docs/user/google.md`), a folder list and the code sandbox with presets, a filterable per-tool permission list (default / ask / run without asking / off), the daemon's own refusal reasons, and a footer that says which changes still wait for **Restart to apply** (`ADR-0139`, `ADR-0164`, `ADR-0203`). Reference: `docs/user/settings.md`. Voice and search keys now have a Test button that checks the saved key; the result is separate from configuration status. Extra abilities (browser, documentation lookup) are one click in the Abilities tab (`ADR-0169`). | **Done (`P9-015`)** |
 | Stop / restart | `jarvis stop` and `jarvis restart` (an authenticated `POST /api/v1/shutdown` that runs the daemon's normal graceful shutdown, then wait for the port). `jarvis start` also no longer hangs a script that captures its output. | **Done (`P9-012`)** |
-| Autostart | `jarvis service` prints a plan and never installs (`P9-003`). | **Missing** |
+| Autostart | `jarvis service install\|uninstall` applies per-user platform registration; `jarvis install --service` installs and registers the program. Native clean-machine end-to-end evidence remains a gate. | **Built, not proven on every clean platform** |
 | Diagnose | `jarvis doctor` checks the installation; `jarvis doctor --live` also asks the model server (key accepted? model listed?), checks folders, Docker and the running daemon, each with its fix. | **Done (`P9-016`)** |
-| Voice | Works without a key (browser voice); neural voice with an ElevenLabs key (`ADR-0138`). | **Done**, setup is the weak part above |
+| Voice | New CLI setup requires a working ElevenLabs key and uses `liN4AsrhF3CylqMDWK6p` by default. Existing/headless profiles and later key removal still permit browser voice; no runtime cloud dependency was added. | **Built; exact default voice needs owner-account evidence** |
 | Docs | The only "getting started" is a developer document mixed with the contributor loop. | **Fixed here**: `docs/user/quick-start.md` |
 
 ## The slices, in order
@@ -52,10 +57,10 @@ Each is a vertical slice with a test that fails closed where a secret or a trust
 - **`P9-012` Stop and restart (done).** An authenticated `POST /api/v1/shutdown` that runs the daemon's existing graceful shutdown;
   `jarvis stop` and `jarvis restart` use it and wait until the port is free. Without this nothing else here is pleasant, because
   every setting change needs a restart.
-- **`P9-013` Guided brain and key setup.** Provider presets (local Ollama, Ollama Cloud, OpenAI, OpenRouter, custom), a key
-  prompt that does not echo (a small, vetted dependency, decided in an ADR), the key written to a private file, **a real test
-  call before the configuration is saved** with a plain message on failure (bad key, wrong model, no network), and an
-  optional voice step. The same flow runs on first launch and as `jarvis init`.
+- **`P9-013` Guided brain and key setup (built, verification partial).** First launch and `jarvis init` share console
+  provider presets, model listing, hidden key prompts and a mandatory model/ElevenLabs test before saving (`ADR-0214`).
+  Ten new offline checks plus the existing init tests cover refusals/defaults/grants. Hosted-provider accounts,
+  the selected voice on an owner account, native hidden-entry checks and clean-machine first-run flows remain open.
 - **`P9-014` `jarvis config` and `jarvis keys` (done).** Show, get, set and unset one setting; set, test and remove a key; secrets never
   printed (only "set", length class and last four characters on request); every change validated by the daemon's parser and
   written atomically; `--json` everywhere. This needs a TOML editing approach that preserves comments (an ADR).

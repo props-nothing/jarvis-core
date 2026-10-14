@@ -724,7 +724,8 @@ impl SqliteDatabase {
     /// Opens an absolute SQLite path and brings it to the current schema.
     ///
     /// Existing recognized databases are backed up and independently verified
-    /// before any pending migration runs.
+    /// before any pending migration runs. Repository connections open only after
+    /// initialization completes, so none can retain a pre-migration schema cache.
     ///
     /// # Errors
     ///
@@ -732,34 +733,48 @@ impl SqliteDatabase {
     /// corrupt, foreign, or newer than this binary, a backup cannot be verified,
     /// or a migration or connection setting fails.
     pub async fn open(path: &Path) -> Result<Self, DatabaseError> {
+        Self::open_with_pool_options(
+            path,
+            SqlitePoolOptions::new().max_connections(MAX_CONNECTIONS),
+        )
+        .await
+    }
+
+    async fn open_with_pool_options(
+        path: &Path,
+        pool_options: SqlitePoolOptions,
+    ) -> Result<Self, DatabaseError> {
         validate_migration_plan()?;
         prepare_database_path(path)?;
 
         let options = connection_options(path, true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(MAX_CONNECTIONS)
-            .connect_with(options)
+        // Schema inspection can cache the pre-migration schema on a connection. Keep startup on one
+        // disposable connection so no repository connection retains that stale schema after migration.
+        let migration_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
             .await
             .map_err(|source| DatabaseError::Open { source })?;
 
         if let Err(error) = secure_private_file(PathKind::Data, path) {
-            pool.close().await;
+            migration_pool.close().await;
             return Err(error.into());
         }
 
-        let initialized = initialize(&pool, path).await;
-        match initialized {
-            Ok((sqlite_version, pre_migration_backup)) => Ok(Self {
-                pool,
-                path: path.to_path_buf(),
-                sqlite_version,
-                pre_migration_backup,
-            }),
-            Err(error) => {
-                pool.close().await;
-                Err(error)
-            }
-        }
+        let initialized = initialize(&migration_pool, path).await;
+        migration_pool.close().await;
+        let (sqlite_version, pre_migration_backup) = initialized?;
+        let pool = pool_options
+            .connect_with(options)
+            .await
+            .map_err(|source| DatabaseError::Open { source })?;
+
+        Ok(Self {
+            pool,
+            path: path.to_path_buf(),
+            sqlite_version,
+            pre_migration_backup,
+        })
     }
 
     /// Returns the absolute database path.
@@ -1853,6 +1868,51 @@ mod tests {
                 .connect()
                 .await,
         )
+    }
+
+    #[tokio::test]
+    async fn migration_makes_the_knowledge_index_available_on_every_connection() {
+        for upgrade in [false, true] {
+            let directory = TestDirectory::new();
+            let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
+            if upgrade {
+                create_version_zero_fixture(&path).await;
+            }
+            let pool_options = SqlitePoolOptions::new()
+                .max_connections(MAX_CONNECTIONS)
+                .min_connections(MAX_CONNECTIONS)
+                .after_connect(|connection, _metadata| {
+                    Box::pin(async move {
+                        // Eagerly load each connection's schema, making a pre-migration pool's stale
+                        // caches deterministic rather than relying on asynchronous pool-return timing.
+                        sqlx::query("SELECT COUNT(*) FROM sqlite_schema")
+                            .fetch_one(connection)
+                            .await?;
+                        Ok(())
+                    })
+                });
+            let database = must(SqliteDatabase::open_with_pool_options(&path, pool_options).await);
+            assert_eq!(database.pre_migration_backup().is_some(), upgrade);
+
+            let mut connections = Vec::new();
+            for _ in 0..MAX_CONNECTIONS {
+                connections.push(must(database.pool.acquire().await));
+            }
+            for connection in &mut connections {
+                must(
+                    sqlx::query("DELETE FROM knowledge_chunks")
+                        .execute(&mut **connection)
+                        .await,
+                );
+                must(
+                    sqlx::query("SELECT text FROM knowledge_fts WHERE knowledge_fts MATCH 'probe'")
+                        .fetch_all(&mut **connection)
+                        .await,
+                );
+            }
+            drop(connections);
+            database.close().await;
+        }
     }
 
     #[tokio::test]

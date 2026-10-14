@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -43,8 +44,11 @@ jobs:
         run: |
           set -e
           for script in hud mission head settings; do node --check "apps/jarvisd/src/hud/$script.js"; done
-      - name: Test console behavior
-        run: node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs
+      - name: Test console and release behavior
+        run: node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs scripts/test-release-flow.mjs
+      - name: Test archive contents and license notices
+        shell: bash
+        run: bash scripts/test-package-release.sh
       - name: Lint all targets
         # `--locked` keeps the lint run on the committed lockfile, like every other
         # step. Without it a dependency could resolve differently here than in the

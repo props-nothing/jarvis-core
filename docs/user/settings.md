@@ -61,8 +61,8 @@ The charcoal surfaces and default mint accents match the public site. Amber stil
 
 | Setting | Default | What unset means |
 | --- | --- | --- |
-| Voice key (ElevenLabs) | none | **Opt-in.** The console speaks with your browser's own voice. A key gives a natural voice; what JARVIS says is then sent to ElevenLabs to be spoken (`ADR-0138`). |
-| `speech_voice_id` | George (`JBFqnCBsd6RMkjVDRZzb`) | The built-in voice. Only used once a voice key is set. |
+| Voice key (ElevenLabs) | required by new CLI setup | New setup tests a key with TTS access before saving. Existing/headless profiles can omit it, and removing it later restores browser voice. What JARVIS says is sent to ElevenLabs to be spoken (`ADR-0138`, `ADR-0214`). |
+| `speech_voice_id` | `liN4AsrhF3CylqMDWK6p` | Owner-selected default voice ID, **not an API key**. The account must have access to it; choose another ID if its setup test fails. Explicit saved IDs are preserved. |
 | `speech_model` | `eleven_v4_turbo` | The built-in model. Only used once a voice key is set. `eleven_v4_turbo` and `eleven_flash_v2_5` are real-time models; `eleven_v3` sounds richer but is about 2.4 times slower, so JARVIS starts speaking noticeably later with it. |
 
 ## Folders & code

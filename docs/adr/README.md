@@ -232,3 +232,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0211](0211-recoverable-cleanup-and-bounded-data-editing-tools.md) | Recoverable cleanup and bounded data editing tools | Accepted |
 | [0212](0212-browser-reading-is-explicit-bounded-and-literal.md) | Browser reading is explicit, bounded and literal | Accepted |
 | [0213](0213-discovery-enumerates-the-full-registry-before-deferring-tools.md) | Discovery enumerates the full registry before deferring tools | Accepted |
+| [0214](0214-first-run-tests-model-and-required-voice-before-saving.md) | First run tests the model and required voice before saving | Accepted |

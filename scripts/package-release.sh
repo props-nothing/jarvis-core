@@ -7,7 +7,7 @@
 # `cargo build --release` put `jarvis` (default: target/release). The archive is written to dist/.
 #
 # The archive holds the one program (the daemon is `jarvis daemon`, ADR-0144), a README that says how to run it, the user docs,
-# and the third-party notices. No licence file is included because none has been chosen yet: see README.md.
+# the Apache-2.0 license and attribution notices. A full dependency-license inventory remains a public-release gate (P9-017b).
 set -euo pipefail
 
 label="${1:?usage: package-release.sh <label> [release-dir]}"
@@ -32,7 +32,7 @@ mkdir -p "$stage/docs"
 
 cp "$release_dir/jarvis$exe" "$stage/"
 cp docs/user/quick-start.md docs/user/settings.md docs/user/platforms.md "$stage/docs/"
-cp THIRD_PARTY.md "$stage/"
+cp LICENSE NOTICE THIRD_PARTY.md "$stage/"
 cat > "$stage/README.txt" <<EOF
 JARVIS $version ($label)
 
@@ -42,7 +42,9 @@ The first run asks a few questions, starts the assistant in the background and o
   docs/quick-start.md   the first run, keys, settings, running all the time
   docs/settings.md      every setting, its default, and why a few are off until you turn them on
   docs/platforms.md     Windows, Linux (including a server with no screen) and macOS
-  THIRD_PARTY.md        third-party notices
+  LICENSE               Apache License 2.0
+  NOTICE                JARVIS and bundled face-geometry attribution
+  THIRD_PARTY.md         third-party provenance (dependency inventory still pending)
 
 This build is not signed. On macOS, a downloaded copy may be quarantined: run
   xattr -d com.apple.quarantine jarvis

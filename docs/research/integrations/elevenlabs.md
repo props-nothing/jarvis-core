@@ -1,13 +1,35 @@
 ---
 integration: elevenlabs
 status: researched
-last_verified: 2026-10-11
+last_verified: 2026-10-14
 owners: []
 selected_spec_version: current hosted API as of verification date
 selected_sdk: undecided
 ---
 
 # ElevenLabs
+
+## Setup refresh (2026-10-14)
+
+Live official sources re-read: https://elevenlabs.io/docs/llms.txt,
+https://elevenlabs.io/docs/api-reference/authentication.md,
+https://elevenlabs.io/docs/api-reference/text-to-speech/stream.md,
+https://elevenlabs.io/docs/api-reference/voices/get.md and
+https://elevenlabs.io/docs/changelog.md (latest entry October 12). No relevant TTS auth/stream change observed.
+The adapter remains direct HTTP on the pinned workspace reqwest; hosted v1, no SDK upgrade.
+
+**JARVIS decision, not a provider guarantee:** the owner selected default voice ID `liN4AsrhF3CylqMDWK6p`.
+It is a public voice identifier, never an API key. Its availability/name/permissions on an arbitrary account are
+unverified. New CLI setup requires an ElevenLabs key and one successful short TTS request using the chosen voice/model
+before saving. Existing profiles, manual headless configuration and browser fallback remain usable without it.
+The fixed test sentence leaves the machine and may consume credits; no personal text is sent. Only `xi-api-key` auth
+and TTS access are required; phone/agent access is needed only if calls are enabled later. No retries or silent switch
+to another voice on setup failure. Account quota/rate limits and voice access can block setup with an actionable refusal.
+No webhook, pagination or idempotency contract changes. Existing text/audio limits and no-redirect policy remain.
+
+Cheapest falsifying test: a mock 401, empty stream, invalid model/voice or network failure must leave a fresh profile
+without saved setup/keys. Confirm the exact default ID in the outgoing TTS path and settings metadata. A real short
+synthesis on the owner's account with this voice is still required for live availability evidence; not performed here.
 
 ## Scope
 
