@@ -186,6 +186,132 @@ async function loadFixture(h, reply = fixture) {
   await flush();
 }
 
+test("coding agent setup offers normal sign-in without environment-name controls", async () => {
+  const h = harness({
+    apiResponses: {
+      "/code-agents": {
+        selected: "codex", needs: { folder: true, git: true, node: true }, env: ["EXISTING_PROVIDER_KEY"],
+        presets: [{ id: "codex", name: "ChatGPT/Codex", selected: true, available: true, via: "installed",
+          summary: "Coding agent", sign_in: "Use ChatGPT sign-in.", env: ["OPENAI_API_KEY"] }]
+      },
+      "/code-agents/tasks": { tasks: [] }
+    },
+    putHandler(path) {
+      assert.equal(path, "/code-agents/test");
+      return Promise.resolve({ ok: true, message: "Ready to sign in.", methods: [{ id: "chatgpt", name: "ChatGPT" }] });
+    }
+  });
+  h.initialize(); h.open(); await loadFixture(h, {
+    ...configuredFixture,
+    settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", "codex-acp", "words")]
+  });
+  h.select("files"); await flush();
+  assert.doesNotMatch(h.$("settings-body").textContent, /Environment names|Save names|EXISTING_PROVIDER_KEY/);
+  assert.equal(descendants(h.$("settings-body")).some(node => node.placeholder === "OPENAI_API_KEY"), false);
+  buttonNamed(h, "Test").click(); await flush();
+  const signIn = buttonNamed(h, "Sign in with ChatGPT");
+  assert.ok(signIn, "the agent's normal sign-in remains available");
+  assert.equal(signIn.disabled, false);
+  assert.deepEqual(h.putCalls, [["/code-agents/test", "POST", {}]]);
+});
+
+test("coding tasks expose durable review evidence as text, not markup or verified test results", async () => {
+  const h = harness({ apiResponses: {
+    "/code-agents": { needs: { folder: true, git: true, node: true }, presets: [] },
+    "/code-agents/tasks": { tasks: [{
+      task_id: "review-task", repository: "repo", task: "Fix the parser", status: "completed",
+      branch: "jarvis/parser", worktree: "C:\\worktrees\\parser", allow_commands: true,
+      created_at: "2026-10-14T10:00:00Z", finished_at: "2026-10-14T10:01:00Z",
+      result: {
+        outcome: "completed", base_commit: "abc123", commit: "def456", files_changed: 2,
+        permissions: { allowed: 3, refused: 1 },
+        agent_message: ["<script>alert('agent')</script> Tests passed."],
+        agent_tool_calls: ["- [execute] cargo test (completed)"],
+        agent_requests: ["- [fetch] Read private URL -> refused"],
+        stat: [" parser.rs | 2 +-"], patch: ["+<img src=x onerror=alert('diff')>"],
+        patch_was_cut: true, notes: ["The owner's checkout changed."],
+        next: "git diff abc123..jarvis/parser"
+      }
+    }] }
+  } });
+  h.initialize(); h.open(); await loadFixture(h, {
+    ...configuredFixture,
+    settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
+  });
+  visibleTabs(h).find(node => /Folders/.test(node.textContent)).click(); await flush();
+  const reviews = classNodes(h, "code-task");
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].tagName, "DETAILS");
+  const text = reviews[0].textContent;
+  for (const value of ["C:\\worktrees\\parser", "abc123", "def456", "Tests passed.",
+    "cargo test", "Read private URL", "<script>", "<img", "The owner's checkout changed."]) {
+    assert.ok(text.includes(value), `missing review evidence: ${value}`);
+  }
+  assert.match(text, /not independently verified/i);
+  assert.match(text, /3 allowed.*1 refused/);
+  assert.match(text, /diff.*truncated|truncated.*diff/i);
+  assert.equal(descendants(reviews[0]).some(node => ["SCRIPT", "IMG"].includes(node.tagName)), false);
+  assert.equal(h.putCalls.length, 0, "reviewing a result must never execute a task or command");
+});
+
+test("coding task refresh preserves expanded reviews and focus, reports failures and clears stale empty results", async () => {
+  const task = { task_id: "refresh-task", repository: "repo", task: "Fix the parser", status: "running", result: null };
+  const responses = {
+    "/code-agents": { needs: { folder: true, git: true, node: true }, presets: [] },
+    "/code-agents/tasks": { tasks: [task] }
+  };
+  const h = harness({ apiResponses: responses });
+  h.initialize(); h.open(); await loadFixture(h, {
+    ...configuredFixture,
+    settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
+  });
+  h.select("files"); await flush();
+  classNodes(h, "code-task")[0].open = true;
+  const refresh = descendants(h.$("settings-body")).find(node => node.getAttribute("aria-label") === "Refresh coding tasks");
+  assert.ok(refresh);
+  const update = deferred(); responses["/code-agents/tasks"] = update.promise;
+  refresh.focus(); refresh.click();
+  assert.equal(refresh.disabled, true);
+  assert.match(h.$("settings-body").textContent, /Loading coding tasks/);
+  update.resolve({ tasks: [{ ...task, status: "failed", error: "The agent exited." }] }); await flush();
+  assert.equal(classNodes(h, "code-task")[0].open, true);
+  assert.match(classNodes(h, "code-task")[0].textContent, /The agent exited/);
+  assert.equal(h.document.activeElement, refresh);
+  assert.equal(refresh.disabled, false);
+  const failure = deferred(); responses["/code-agents/tasks"] = failure.promise;
+  refresh.click(); failure.reject(new Error("offline")); await flush();
+  assert.equal(refresh.disabled, false);
+  assert.match(h.$("settings-body").textContent, /Coding tasks could not be loaded/);
+  assert.equal(classNodes(h, "code-task")[0].open, true);
+  responses["/code-agents/tasks"] = { tasks: [] };
+  refresh.click(); await flush();
+  assert.equal(classNodes(h, "code-task").length, 0);
+  assert.match(h.$("settings-body").textContent, /No background coding tasks/);
+  assert.doesNotMatch(h.$("settings-body").textContent, /The agent exited|could not be loaded/);
+  assert.equal(h.putCalls.length, 0);
+});
+
+test("interrupted coding tasks keep the missing-result state explicit without inventing evidence", async () => {
+  const h = harness({ apiResponses: {
+    "/code-agents": { needs: { folder: true, git: true, node: true }, presets: [] },
+    "/code-agents/tasks": { tasks: [{
+      task_id: "interrupted-task", repository: "repo", task: "Continue the parser", status: "interrupted",
+      result: null, error: "The daemon stopped.", allow_commands: false
+    }] }
+  } });
+  h.initialize(); h.open(); await loadFixture(h, {
+    ...configuredFixture,
+    settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
+  });
+  h.select("files"); await flush();
+  const review = classNodes(h, "code-task")[0];
+  assert.match(review.textContent, /Interrupted; no final result was recorded/);
+  assert.match(review.textContent, /The daemon stopped/);
+  assert.match(review.textContent, /Not allowed/);
+  assert.equal(descendants(review).some(node => node.tagName === "PRE"), false);
+  assert.equal(h.putCalls.length, 0);
+});
+
 for (const [label, options, expected] of [
   ["missing", {}, { density: "comfortable", motion: "system" }],
   ["valid", { stored: '{"density":"compact","motion":"reduced"}' }, { density: "compact", motion: "reduced" }],

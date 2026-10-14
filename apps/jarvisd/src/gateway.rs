@@ -2375,6 +2375,81 @@ mod tests {
         (router(state), database, presented, profile)
     }
 
+    #[tokio::test]
+    async fn coding_task_reviews_require_authentication_and_include_durable_evidence() {
+        let (app, database, presented, _profile) = test_router_and_database().await;
+        let response = app
+            .clone()
+            .oneshot(get_request("/api/v1/code-agents/tasks", None))
+            .await
+            .unwrap_or_else(|error| panic!("router call: {error}"));
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let identity = jarvis_storage::load_local_identity(&database)
+            .await
+            .unwrap_or_else(|error| panic!("identity: {error}"));
+        let now = jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock);
+        let task = jarvis_storage::create_delegated_task(
+            &database,
+            &jarvis_storage::NewDelegatedTask {
+                workspace_id: identity.workspace_id(),
+                repository: "review-repo",
+                task: "Fix the parser",
+                allow_commands: false,
+                minutes: 10,
+                now,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("create task: {error}"));
+        jarvis_storage::mark_delegated_task_running(
+            &database,
+            identity.workspace_id(),
+            &task.id,
+            now,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("start task: {error}"));
+        let result = serde_json::json!({
+            "outcome": "completed",
+            "patch": ["+<script>untrusted agent text</script>"],
+            "permissions": { "allowed": 1, "refused": 2 },
+            "patch_was_cut": true
+        });
+        jarvis_storage::finish_delegated_task(
+            &database,
+            identity.workspace_id(),
+            &task.id,
+            &jarvis_storage::DelegatedTaskFinish {
+                status: "completed",
+                branch: Some("jarvis/parser"),
+                worktree: Some("review-worktree"),
+                summary: Some("The agent finished."),
+                result_json: Some(&result.to_string()),
+                error: None,
+                now,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("finish task: {error}"));
+        let response = app
+            .oneshot(get_request("/api/v1/code-agents/tasks", Some(&presented)))
+            .await
+            .unwrap_or_else(|error| panic!("router call: {error}"));
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body_text(response).await)
+            .unwrap_or_else(|error| panic!("task response: {error}"));
+        assert_eq!(body["tasks"].as_array().map(Vec::len), Some(1));
+        let review = &body["tasks"][0];
+        assert_eq!(review["task_id"], task.id);
+        assert_eq!(review["result"], result);
+        assert_eq!(review["worktree"], "review-worktree");
+        assert_eq!(review["allow_commands"], false);
+        assert_eq!(review["minutes"], 10);
+        assert!(!review["updated_at"].is_null());
+        database.close().await;
+    }
+
     /// A router whose speech provider is the one at `base` (a local fake in the tests that use it).
     async fn test_router_with_speech(base: &str) -> (Router, String, TempProfile) {
         let profile = TempProfile::new();

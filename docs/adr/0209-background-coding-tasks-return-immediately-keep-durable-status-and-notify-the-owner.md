@@ -13,7 +13,7 @@ Date: 2026-10-13
 2. Migration 26 stores the approved intent, status (`queued`, `running`, `completed`, `failed`, `cancelled`, `interrupted`), branch, worktree, bounded result/error and timestamps. A partial unique index permits only one queued/running task per workspace.
 3. The daemon owns the background future and a cancellation `Notify`. Cancellation goes through ACP `session/cancel`, then the existing grace period and process-tree kill. The worktree is always finished into a branch where possible.
 4. On daemon start, queued/running rows from the prior daemon become `interrupted`; they are never silently restarted. The child belonged to the prior process and its outcome is unknown.
-5. Completion shows an OS desktop notification. The Coding agent card lists the latest ten durable tasks and their branch or error. The task result remains available through the status tool even if the notification was missed.
+5. Completion shows an OS desktop notification. The Coding agent card lists recent durable tasks and their branch or error. The task result remains available through the status tool even if the notification was missed. The console review extension below exposes that same recorded evidence.
 6. The existing synchronous tool remains for small jobs and compatibility. Both paths use the same agent, environment, worktree, policy and fenced result implementation.
 7. Recording `running` is required before the agent starts. Completion must update exactly one active task before a completion notification is shown; failed durable writes are logged, not treated as success. A settled result cannot be overwritten.
 
@@ -21,6 +21,14 @@ Date: 2026-10-13
 
 - A model can start a long coding task, continue the conversation, and check later. The owner can close the browser.
 - State is durable, process execution is not. A daemon crash leaves an interrupted record and the worktree for manual inspection.
-- Desktop notification is local convenience, not delivery proof. Push/Telegram delivery and a dedicated task detail panel remain open.
+- Desktop notification is local convenience, not delivery proof. Push/Telegram delivery remains open; the console review extension below supplies task details.
 - Live evidence 2026-10-13: `delegate_start` returned task `01a136ed-c9bb-75d5-8112-eae6aad47d6c` immediately; the Coding agents API reported `running`, then `completed`; real Codex produced branch `jarvis/in-greet-py-add-a-function-exc-e5ba4dbc` with the requested two-file diff, and `main` remained clean.
 - The process manager is intentionally one-at-a-time. Parallel coding agents would multiply spend and git contention; add it only with a measured need.
+
+## Console review extension, 2026-10-14
+
+The existing authenticated `GET /api/v1/code-agents/tasks` response now uses the same task representation as the status/list tools, adding recorded result, worktree, command permission, duration and update time without removing fields or changing execution. The card exposes all twenty tasks the endpoint returns, with native expandable reviews, inert text for agent output and patches, visible errors and truncation, and a read-only refresh that preserves expanded tasks.
+
+An agent's completed turn is not independent verification. The review labels recorded results **Not independently verified** and makes absent results explicit. This adds no test runner, resume, merge, push, cancellation or approval path. No ACP behavior, permissions, persisted schema or external integration changes.
+
+Evidence: an authenticated-router test over real SQLite, three focused UI tests (including hostile markup and failed refresh), both console suites (78 tests), and responsive geometry checks at 1440, 390 and 320 pixels. Formatting and workspace Clippy passed. The unfiltered workspace test gate remains blocked by three unchanged phone-service AI-disclosure tests; the remaining workspace tests pass with those three cases explicitly skipped. No new live-provider verification is claimed.

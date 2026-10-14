@@ -475,6 +475,26 @@ button.danger { color: var(--red); border-color: rgba(250, 129, 123, 0.4); }
 .set-row .help { font-size: 12px; line-height: 1.6; }
 .set-row input, .set-row select, .set-row textarea, .perm select, .pathrow input, .card textarea, .jwrite input, .permtools input, #project-pick { border-radius: 6px; padding: 8px 10px; }
 .set-row .acts { flex-wrap: wrap; }
+.code-task-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 18px; }
+.code-task-header h4 { margin: 0; letter-spacing: 0; }
+.code-task-header button { flex: none; width: 36px; height: 36px; padding: 0; font-size: 20px; }
+.code-task { min-width: 0; border-top: 1px solid var(--line); padding: 12px 0; }
+.card .code-task > summary, .card .code-evidence > summary { list-style-position: inside; cursor: pointer; overflow-wrap: anywhere; }
+.code-task > summary { font: 500 13px/1.6 var(--display); }
+.code-task > summary .badge { margin-left: 10px; letter-spacing: 0; }
+.code-task-objective { display: block; margin: 4px 0 0 16px; color: var(--dim); font-weight: 400; overflow-wrap: anywhere; }
+.code-task-body { min-width: 0; padding: 10px 0 0 16px; font: 12px/1.6 var(--display); }
+.code-task-meta { display: grid; grid-template-columns: minmax(0, 110px) minmax(0, 1fr); gap: 6px 12px; margin: 0 0 12px; }
+.code-task-meta dt { color: var(--dim); }
+.code-task-meta dd { min-width: 0; margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+.code-task-body .bad { color: var(--amber); }
+.code-evidence { min-width: 0; margin: 10px 0; }
+.code-evidence pre { max-height: 320px; overflow: auto; padding: 10px; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); }
+.code-task-body > .help { overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .code-task-meta { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .code-task-meta dt:not(:first-child) { margin-top: 6px; }
+}
 .sheet .foot { flex-shrink: 0; border-top: 1px solid var(--line); padding-top: 16px; flex-wrap: wrap; }
 .settings-heading { flex-shrink: 0; }
 .settings-heading-sub { font: 11px var(--mono); color: var(--dim); letter-spacing: 0; vertical-align: middle; margin-left: 8px; }

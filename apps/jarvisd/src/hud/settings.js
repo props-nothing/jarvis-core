@@ -830,25 +830,6 @@ window.JarvisSettings = function (context) {
         holder.appendChild(list);
         var picked = info.presets.filter(function (preset) { return preset.selected; })[0];
         if (picked) holder.appendChild(el("p", "lead", "To sign in: " + picked.sign_in));
-        // Names of environment variables the agent may use (never values).
-        var envRow = el("div", "set-row");
-        envRow.appendChild(el("span", "name", "Environment names"));
-        var envField = el("input");
-        envField.type = "text"; envField.autocomplete = "off"; envField.spellcheck = false;
-        envField.value = (info.env || []).join(" ");
-        envField.placeholder = picked && picked.env.length ? picked.env.join(" ") : "OPENAI_API_KEY";
-        envRow.appendChild(envField);
-        var envActs = el("div", "acts");
-        var envSave = el("button", "", "Save names");
-        envSave.type = "button";
-        envSave.addEventListener("click", function () {
-          var names = envField.value.split(/[\s,]+/).filter(Boolean);
-          store([{ key: "daemon.code_agent_env", values: names.length ? names : null }]);
-        });
-        envActs.appendChild(envSave);
-        envRow.appendChild(envActs);
-        holder.appendChild(envRow);
-        holder.appendChild(el("p", "secthint", "Only the names of variables, never their values. The agent gets a small safe set (path, home, temp) and the names you list here, and nothing else of JARVIS's; most agents keep their own sign-in and need none."));
         // Any other agent that speaks ACP.
         var more = el("details");
         more.open = chosen === "custom";
@@ -914,27 +895,100 @@ window.JarvisSettings = function (context) {
         holder.appendChild(out);
       }
       api("/code-agents").then(paint, function () { holder.appendChild(el("p", "help bad", "The coding agents could not be listed.")); });
+      var taskHeader = el("div", "code-task-header");
+      taskHeader.appendChild(el("h4", "", "Background coding tasks"));
+      var refreshTasks = el("button", "", "\u21bb");
+      refreshTasks.type = "button";
+      refreshTasks.title = "Refresh coding tasks";
+      refreshTasks.setAttribute("aria-label", "Refresh coding tasks");
+      taskHeader.appendChild(refreshTasks);
+      card.appendChild(taskHeader);
+      var taskNotice = el("p", "help");
+      taskNotice.setAttribute("role", "status");
+      card.appendChild(taskNotice);
       var tasks = el("div");
       card.appendChild(tasks);
+      var taskViews = Object.create(null);
+      function taskReview(task) {
+        var review = el("details", "code-task");
+        var summary = el("summary");
+        summary.appendChild(el("span", "name", task.repository));
+        summary.appendChild(document.createTextNode(" "));
+        summary.appendChild(el("span", "badge " + (task.status === "completed" ? "on" : "off"), String(task.status || "unknown").replace(/_/g, " ")));
+        summary.appendChild(el("span", "code-task-objective", task.task));
+        review.appendChild(summary);
+        var body = el("div", "code-task-body");
+        var metadata = el("dl", "code-task-meta");
+        body.appendChild(metadata);
+        function field(name, value) {
+          if (value === null || value === undefined || value === "") return;
+          metadata.appendChild(el("dt", "", name));
+          metadata.appendChild(el("dd", "", String(value)));
+        }
+        function evidence(name, value) {
+          var text = Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : "";
+          if (!text) return;
+          var section = el("details", "code-evidence");
+          section.appendChild(el("summary", "", name));
+          section.appendChild(el("pre", "", text));
+          body.appendChild(section);
+        }
+        var result = task.result || {};
+        field("Task", task.task_id);
+        field("Branch", task.branch || result.branch);
+        field("Worktree", task.worktree || result.worktree);
+        field("Created", task.created_at);
+        field("Finished", task.finished_at);
+        field("Commands", task.allow_commands === undefined ? "Not recorded" : task.allow_commands ? "Allowed" : "Not allowed");
+        field("Agent outcome", result.outcome);
+        field("Base commit", result.base_commit);
+        field("Commit", result.commit);
+        field("Files changed", result.files_changed);
+        if (task.result) field("Verification", "Not independently verified");
+        if (result.permissions) field("Permissions", result.permissions.allowed + " allowed, " + result.permissions.refused + " refused");
+        [task.error, result.detail, result.result_unreadable].concat(result.notes || []).forEach(function (note) {
+          if (note) body.appendChild(el("p", "help bad", note));
+        });
+        if (!task.result) body.appendChild(el("p", "help", task.status === "interrupted" ? "Interrupted; no final result was recorded." : "No result has been recorded yet."));
+        evidence("Agent report", result.agent_message);
+        evidence("Agent activity", result.agent_tool_calls);
+        evidence("Permission decisions", result.agent_requests);
+        evidence("Changed files", result.stat);
+        if (result.patch_was_cut) body.appendChild(el("p", "help bad", "Diff preview truncated."));
+        evidence("Diff", result.patch);
+        if (result.next) body.appendChild(el("p", "help", result.next));
+        review.appendChild(body);
+        return review;
+      }
       function paintTasks(reply) {
+        var previous = taskViews;
+        taskViews = Object.create(null);
         tasks.replaceChildren();
         var found = reply.tasks || [];
-        if (!found.length) return;
-        tasks.appendChild(el("h4", "", "Background coding tasks"));
-        found.slice(0, 10).forEach(function (task) {
-          var row = el("div", "set-row");
-          row.appendChild(el("span", "name", task.repository));
-          var middle = el("div");
-          middle.appendChild(el("span", "help", task.task));
-          if (task.branch) middle.appendChild(el("code", "", task.branch));
-          if (task.error) middle.appendChild(el("span", "help bad", task.error));
-          row.appendChild(middle);
-          row.appendChild(el("span", "badge " + (task.status === "completed" ? "on" : "off"), task.status.replace("_", " ")));
-          tasks.appendChild(row);
+        if (!found.length) tasks.appendChild(el("p", "help", "No background coding tasks."));
+        found.forEach(function (task) {
+          var review = taskReview(task);
+          review.open = !!(previous[task.task_id] && previous[task.task_id].open);
+          taskViews[task.task_id] = review;
+          tasks.appendChild(review);
         });
-        tasks.appendChild(el("p", "secthint", "Start a longer task by asking JARVIS to use the background coding agent. It returns a task id immediately; JARVIS notifies you when it ends. The branch and worktree are always kept for review."));
       }
-      api("/code-agents/tasks").then(paintTasks, function () {});
+      function loadTasks() {
+        refreshTasks.disabled = true;
+        taskNotice.className = "help";
+        taskNotice.textContent = "Loading coding tasks...";
+        api("/code-agents/tasks").then(function (reply) {
+          paintTasks(reply);
+          refreshTasks.disabled = false;
+          taskNotice.textContent = "";
+        }, function () {
+          refreshTasks.disabled = false;
+          taskNotice.className = "help bad";
+          taskNotice.textContent = "Coding tasks could not be loaded.";
+        });
+      }
+      refreshTasks.addEventListener("click", loadTasks);
+      loadTasks();
       return card;
     }
     var POSTURES = [["default", "Default (the rules decide)"], ["ask", "Always ask first"], ["trusted", "Run without asking"], ["off", "Off"]];

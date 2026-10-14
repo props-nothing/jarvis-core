@@ -282,7 +282,7 @@ fn id(v: &Value) -> Result<&str, AdapterError> {
         .filter(|id| id.len() == 36)
         .ok_or_else(|| refused("a 36-character task_id is required"))
 }
-fn render(t: &StoredDelegatedTask) -> Value {
+pub(crate) fn render(t: &StoredDelegatedTask) -> Value {
     json!({"task_id":t.id,"repository":t.repository,"task":t.task,"allow_commands":t.allow_commands,"minutes":t.minutes,"status":t.status,"branch":t.branch,"worktree":t.worktree,"summary":t.summary,"result":t.result_json.as_ref().and_then(|s|serde_json::from_str::<Value>(s).ok()),"error":t.error,"created_at":t.created_at.to_string(),"updated_at":t.updated_at.to_string(),"finished_at":t.finished_at.map(|x|x.to_string())})
 }
 fn refused(reason: &str) -> AdapterError {
