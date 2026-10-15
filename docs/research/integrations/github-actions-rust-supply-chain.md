@@ -1,7 +1,7 @@
 ---
 integration: github-actions-rust-supply-chain
 status: implemented
-last_verified: 2026-10-14
+last_verified: 2026-10-15
 owners: []
 selected_spec_version: GitHub Actions current cloud workflow syntax
 selected_sdk: cargo-deny-action 2.1.1 / cargo-deny 0.20.2
@@ -12,6 +12,32 @@ selected_sdk: cargo-deny-action 2.1.1 / cargo-deny 0.20.2
 ## Scope
 
 This record covers CI on GitHub-hosted Windows, macOS, and Linux runners, Rust dependency policy, and the CI-gated archive/draft-release flow. Public release publishing, signing, deployment, self-hosted runners, and provider credentials are out of scope.
+
+## Failure diagnostics refresh (2026-10-15)
+
+Live official sources re-read on 2026-10-15 (UTC): https://docs.github.com/llms.txt,
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run,
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency,
+https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows and
+https://raw.githubusercontent.com/actions/upload-artifact/v7.0.1/action.yml.
+No relevant trigger, token, reusable-workflow or artifact-input change observed; the existing action SHAs remain selected.
+GitHub's explicit Bash shell runs with `-e -o pipefail`: piping Cargo output through `tee` can preserve both live diagnostics
+and a file for annotations without turning a failed Cargo command into success.
+
+Hosted evidence: CI `38640916407` failed Linux phone-disclosure tests and the macOS asynchronous coding-activity test;
+Windows reached the 30-minute job timeout while all workspace test output was redirected to a file.
+Release `38644719396` correctly skipped. Earlier green release runs for red CI predate the exact-commit gate.
+The Windows log does not identify the stalled test, so a timeout alone is not evidence that more time is needed.
+
+JARVIS decision: stream lint/test output while retaining annotation files, and keep existing timeouts, read-only build
+permissions and the fail-closed release gate. No new API, authentication, pagination, retries, webhook, retention or
+privacy behavior is introduced. Synthetic tests and builds must never receive owner credentials or personal data.
+Cheapest falsifier: execute the exact CI pipelines with a failing fake Cargo executable under Bash `-eo pipefail` and
+assert a nonzero result plus captured diagnostics. Native hosted CI is still the proof for runner-only hangs and packaging;
+a passing local suite does not prove Linux/macOS or the GitHub upload path. Local Windows verification passed the complete
+2,916-test workspace (one ignored), 109 JavaScript tests, strict lint, native Phase 1/2/3 gates and an isolated locked release
+build packaged by the production script; checksums, notices and both unpacked executable version commands passed.
+The owner-running executable in the ordinary target directory was left untouched; no live release write was attempted.
 
 ## Release Flow Refresh (2026-10-14)
 
@@ -166,3 +192,4 @@ The cheapest central-contract test is a local `cargo deny check advisories bans 
 | Date | Versions checked | Relevant change or no-change evidence | Researcher |
 | --- | --- | --- | --- |
 | 2026-09-20 | GitHub Actions current, checkout 7.0.1, cargo-deny-action 2.1.1, cargo-deny 0.20.2 | SHA-pinned workflow added; local advisory, ban, license, and source checks passed | GitHub Copilot |
+| 2026-10-15 | GitHub Actions current; existing checkout/upload-artifact 7.0.1 SHAs; actionlint 1.7.12 | Failed CI correctly skipped hosted release; official contracts re-read; exact Bash pipelines tested for streamed stdout/stderr and preserved failure; both workflows pass checksum-verified actionlint | GitHub Copilot |

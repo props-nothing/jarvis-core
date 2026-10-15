@@ -1,13 +1,33 @@
 ---
 integration: elevenlabs
 status: researched
-last_verified: 2026-10-14
+last_verified: 2026-10-15
 owners: []
 selected_spec_version: current hosted API as of verification date
 selected_sdk: undecided
 ---
 
 # ElevenLabs
+
+## Phone disclosure repair (2026-10-15)
+
+Live official sources checked on 2026-10-15 (UTC): https://elevenlabs.io/docs/llms.txt,
+https://elevenlabs.io/docs/eleven-agents/api-reference/integrations/twilio/outbound-call.md,
+https://elevenlabs.io/docs/eleven-agents/customization/personalization/overrides.md,
+https://elevenlabs.io/docs/api-reference/authentication.md and https://elevenlabs.io/docs/changelog.md
+(latest entry October 12). Hosted v1 and direct HTTP on the pinned workspace reqwest remain selected; no SDK upgrade.
+No relevant first-message/prompt override or `xi-api-key` auth change observed. Overrides replace the configured values;
+first-message and prompt overrides require their agent security toggles. The warning preferring dynamic variables does not
+remove override support. Other newly documented telephony/tool options are not adopted by this repair.
+
+JARVIS decision: restore the existing ADR-0201 disclosure contract for calls to non-owners. Rust always prefixes the
+first message with its AI identity and instructs the agent to identify itself as an AI if asked. Owner-call wording stays
+unchanged. No new scopes, provider request fields, retries, timeouts, quotas, idempotency, webhook, retention or data flows
+are introduced; a failed override must not result in a call without disclosure. The provider still receives the approved
+number and bounded purpose; no live call is needed to test composition.
+Cheapest falsifier: a purpose claiming to be human and `phone_opening_line = false` must still yield an AI-disclosing first
+message in the stand-in request. Existing refusal tests protect the agent-read/prompt-update boundary. No real recipient
+is called during this task; actual spoken output remains a live-provider check, not a claim from these fixtures.
 
 ## Setup refresh (2026-10-14)
 

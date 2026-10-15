@@ -25,7 +25,11 @@ Manual release runs and `v*` tag pushes call the same CI workflow before packagi
 
 Only after all five packages succeed does a tag run attach the complete set to a draft release. Checksums are verified again before attachment. Existing published releases are never modified, tags are not created implicitly, and the workflow never publishes a release. A failed network upload can leave a partial draft; rerun the workflow to replace its draft assets.
 
-Local regression checks: `node --test scripts/test-release-flow.mjs`. Hosted trigger, token and native-platform behavior still require a passing Actions run after the changes land on the default branch.
+Local regression checks: `node --test scripts/test-release-flow.mjs` and `bash scripts/test-package-release.sh`. The release tests execute the CI lint/test pipelines under Bash `-eo pipefail`, proving both live diagnostic output and nonzero Cargo exits survive `tee`. CI streams workspace output as well as retaining annotation files, so a runner timeout no longer hides which tests were still running. Do not bypass quality or merely extend a timeout without that evidence.
+
+CI run `38640916407` (2026-10-14) failed the Linux non-owner phone-disclosure contracts and the macOS coding-activity test; Windows timed out with redirected output. Release run `38644719396` correctly skipped packaging. The disclosure was restored without changing owner-call wording; the activity test now waits for both snapshots before cancelling, with bounded readiness/completion waits for loaded runners. The Windows timeout did not reproduce in the local complete suite. A successful hosted native matrix and packaging run still require these repairs to land on the default branch; local tests do not prove those runner or upload paths.
+
+Local Windows evidence (2026-10-15): all 2,916 workspace tests passed (one ignored), all 109 console/release JavaScript tests passed, and native Phase 1/2/3 gates, formatting, strict Clippy and workflow lint passed. An isolated locked release build was packaged with the production script, checksummed, unpacked into an empty directory and smoke-tested using `jarvis version` and `jarvis daemon --version`. Isolation avoided replacing the owner's running executable. This proves the native Windows archive path, not signing, the other platforms or hosted draft attachment.
 
 ## Target Release Contract
 

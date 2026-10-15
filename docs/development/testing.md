@@ -81,6 +81,17 @@ cargo test -p jarvisd hud::tests --lib
 
 CI runs the JavaScript tests and syntax checks on Windows, macOS and Linux. The Node tests use controlled DOM shims; the Rust tests check the production asset and content-security boundaries. Neither proves a real provider connection or microphone path. For visual changes, additionally open the actual HUD assets in a browser, check narrow and desktop layouts, dialogs, picker Escape behavior, and offline/approval states against isolated fixtures. Do not send test requests through an owner's live model or change their saved permissions.
 
+## Release-flow regressions
+
+```text
+node --test scripts/test-release-flow.mjs
+bash scripts/test-package-release.sh
+```
+
+These dependency-free fixtures exercise eligible CI events, exact commit selection, quality/draft job wiring, checksum and license refusal, and draft-only attachment. They also execute the production CI lint/test commands with a failing Cargo stand-in under Bash `-eo pipefail`: diagnostics must reach both the live log and the annotation file, and the step must still fail. Real hosted triggers, all platform archives and GitHub uploads need native Actions evidence.
+
+The background coding-activity test waits for both public snapshots before requesting Stop. Cancelling after just the first snapshot can prevent the second from arriving, contradicting its later two-update assertion. Bounded 30-second readiness/completion waits allow loaded native runners without changing production deadlines or retrying a failing assertion.
+
 ## Deterministic Agent Tests
 
 Build a scripted model/runtime that emits a sequence of normalized events. Use it to test:

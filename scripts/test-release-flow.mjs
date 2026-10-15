@@ -95,6 +95,33 @@ test('workflow wiring gates all packaging paths and keeps builds read-only', () 
 });
 
 const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/bash';
+
+for (const [command, output] of [['clippy', 'clippy.txt'], ['test', 'test.txt']]) {
+  for (const exitCode of [0, 23]) {
+    test(`CI ${command} streams diagnostics and preserves Cargo exit ${exitCode}`, () => {
+      const match = ci.match(new RegExp(`^        shell: bash\\n(?:        #[^\\n]*\\n)*        run: (cargo ${command}[^\\n]+)$`, 'm'));
+      assert.ok(match, `missing Bash CI ${command} command`);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-ci-output-'));
+      try {
+        fs.mkdirSync(path.join(dir, 'bin'));
+        fs.writeFileSync(path.join(dir, 'bin', 'cargo'), `#!/usr/bin/env bash
+printf 'Cargo stdout diagnostic\\n'
+printf 'Cargo stderr diagnostic\\n' >&2
+exit ${exitCode}
+`, { mode: 0o755 });
+        const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', 'export PATH="$PWD/bin:$PATH"\n' + match[1]], {
+          cwd: dir, encoding: 'utf8',
+        });
+        assert.ifError(result.error);
+        assert.equal(result.status, exitCode, result.stderr);
+        const diagnostics = 'Cargo stdout diagnostic\nCargo stderr diagnostic\n';
+        assert.equal(result.stdout.replace(/\r\n/g, '\n'), diagnostics);
+        assert.equal(fs.readFileSync(path.join(dir, output), 'utf8').replace(/\r\n/g, '\n'), diagnostics);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  }
+}
+
 const draftScript = job('draft').split('      - name: Verify checksums and attach to a draft only\n')[1]
   .split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
 

@@ -56,9 +56,8 @@ jobs:
         #
         # `--message-format=short` prints one line per diagnostic as
         # `file:line:column: level: message`, which the next step can turn into a
-        # GitHub annotation. Output is redirected rather than piped so the exit code
-        # is clippy's own: in a pipeline it would be the last command's, and a lint
-        # failure would report success.
+        # GitHub annotation. Bash's explicit -o pipefail preserves Cargo failures
+        # through tee while keeping diagnostics visible even if a runner times out.
         #
         # This step failing on only some operating systems means a platform-gated
         # lint: `#[cfg(unix)]` or `#[cfg(windows)]` code is not compiled by the other
@@ -74,7 +73,7 @@ jobs:
         # error record and fail the step even on success -- the same reason this
         # repository's local runs read `$LASTEXITCODE` from a file instead of a pipe.
         shell: bash
-        run: cargo clippy --workspace --all-targets --all-features --locked --message-format=short -- -D warnings > clippy.txt 2>&1
+        run: cargo clippy --workspace --all-targets --all-features --locked --message-format=short -- -D warnings 2>&1 | tee clippy.txt
       - name: Annotate lint failures
         if: failure()
         shell: bash
@@ -122,7 +121,7 @@ jobs:
           echo "===== diagnostic (full) ====="
           cat clippy.txt
       - name: Test workspace
-        # Output is captured to a file so a failure can be reported through annotations,
+        # Output is streamed and captured so timeouts retain the last running tests and failures still get annotations,
         # which are the only channel readable without repository authentication. The lint
         # step got this treatment after five rounds of inference; the test step needs it
         # for the same reason, because the failing crates cannot be compiled locally for
@@ -150,7 +149,7 @@ jobs:
         shell: bash
         # --no-fail-fast: one failing crate must not hide the results of every crate after it (on Linux and macOS a failure in an
         # early crate previously meant the rest were never reported).
-        run: cargo test --workspace --all-features --locked --no-fail-fast > test.txt 2>&1
+        run: cargo test --workspace --all-features --locked --no-fail-fast 2>&1 | tee test.txt
       - name: Annotate test failures
         if: failure()
         shell: bash

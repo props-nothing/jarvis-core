@@ -1055,7 +1055,13 @@ async fn the_ai_disclosure_to_a_stranger_does_not_depend_on_the_opening_line_set
         .await
         .unwrap_or_else(|error| panic!("start: {error:?}"));
     let data = &rig.fake.placed()[0]["conversation_initiation_client_data"];
-    assert!(data["conversation_config_override"]["agent"]["first_message"].is_string());
+    assert!(
+        data["conversation_config_override"]["agent"]["first_message"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("Hello, this is JARVIS, an AI assistant calling on behalf of my owner."),
+        "{data}"
+    );
 }
 
 #[tokio::test]

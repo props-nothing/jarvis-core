@@ -71,14 +71,17 @@ async fn rig(script: &str) -> (Scratch, Arc<SqliteDatabase>, AsyncCodeDelegateTo
     (Scratch(root), db, manager)
 }
 async fn wait(manager: &AsyncCodeDelegateTool, id: &str) -> Value {
-    for _ in 0..100 {
-        let v = manager.status(&json!({"task_id":id})).await.unwrap();
-        if !matches!(v["status"].as_str(), Some("queued" | "running")) {
-            return v;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let v = manager.status(&json!({"task_id":id})).await.unwrap();
+            if !matches!(v["status"].as_str(), Some("queued" | "running")) {
+                break v;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    panic!("task did not end")
+    })
+    .await
+    .unwrap_or_else(|_| panic!("task {id} did not end within 30 seconds"))
 }
 
 #[cfg(windows)]
@@ -110,18 +113,20 @@ async fn live_activity_is_persisted_before_completion_and_fenced_for_models() {
         .await
         .unwrap();
     let id = started["task_id"].as_str().unwrap();
-    let mut observed = None;
-    for _ in 0..100 {
-        let task = jarvis_storage::find_delegated_task(&db, &manager.workspace, id)
-            .await
-            .unwrap();
-        if !task.activity.is_empty() {
-            observed = Some(task);
-            break;
+    let task = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let task = jarvis_storage::find_delegated_task(&db, &manager.workspace, id)
+                .await
+                .unwrap();
+            // Stopping after the first snapshot races the agent's second update against cancellation.
+            if task.activity.len() == 2 {
+                break task;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    let task = observed.unwrap_or_else(|| panic!("activity must be visible before the agent ends"));
+    })
+    .await
+    .unwrap_or_else(|_| panic!("both activity updates must be visible before the agent ends"));
     assert_eq!(task.status, "running");
     assert!(task.result_json.is_none());
     assert!(task.activity[0].summary.contains("a.txt"));
