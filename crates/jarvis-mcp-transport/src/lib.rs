@@ -70,11 +70,13 @@ mod boundary_tests;
 mod client;
 #[cfg(test)]
 mod conformance;
+mod credentials;
 mod endpoint;
 mod enforcement;
 mod error;
 mod host;
 mod host_config;
+mod http_auth;
 mod images;
 mod revision;
 mod serve;
@@ -86,6 +88,7 @@ pub use admission::{
     DEFAULT_REQUESTS_PER_MINUTE, Fingerprint, MAX_ADMITTED_CALLERS, MAX_CALLER_LABEL_CHARS,
     MAX_FINGERPRINT_CHARS,
 };
+pub use credentials::{McpSecretResolver, SecretUnavailable, is_credential_variable};
 // The binding layer (`P3-009c`): the tower service a daemon mounts, and the two decisions every request passes.
 // `ResponseBody` and the header/limit constants are exported because a daemon needs the body type to name its
 // router's response and may want to state the bounds it is serving under; `ResponseBody` is a fact about
@@ -96,8 +99,8 @@ pub use binding::{
 };
 pub use client::{
     MAX_IMAGE_BYTES, MAX_RESULT_IMAGES, McpCallResult, McpConnection, McpEra, McpImage,
-    OwnedListing, ServerCapabilities, StdioCommand, ToolBuffer, connect_http, connect_over,
-    connect_stdio, server_environment,
+    OwnedListing, ServerCapabilities, StdioCommand, ToolBuffer, connect_http,
+    connect_http_with_auth, connect_over, connect_stdio, server_environment,
 };
 pub use endpoint::{EndpointError, MAX_ENDPOINT_BYTES, McpHttpEndpoint};
 pub use enforcement::{RequestAdmission, RequestGate, RequestRefusal};
@@ -106,6 +109,7 @@ pub use host::{HostBuild, HostedServer, UnreadableServer, build_catalog};
 pub use host_config::{
     HostConfigError, HostError, MAX_HOST_CONFIG_BYTES, McpHost, McpHostConfig, ServerTransport,
 };
+pub use http_auth::{HttpCredentialProvider, UnavailableHttpCredentials};
 pub use images::{ImageSink, install_image_sink};
 pub use serve::{
     JarvisMcpServer, SERVER_NAME, SERVER_VERSION, ServedToolRunner, served_protocol_version,

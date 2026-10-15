@@ -100,6 +100,86 @@ impl fmt::Display for SecretRef {
     }
 }
 
+/// Profile-owned MCP credential metadata, never a credential value or arbitrary path.
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct McpSecretRef {
+    reference: String,
+    separator: usize,
+}
+
+impl McpSecretRef {
+    /// Parses `mcp:<server>:<key>` with bounded, lowercase portable components.
+    ///
+    /// # Errors
+    ///
+    /// Returns a value-free error for malformed references. Each component must
+    /// start with an ASCII lowercase letter and contain at most 64 bytes of
+    /// lowercase letters, digits, underscores or hyphens.
+    pub fn parse(reference: &str) -> Result<Self, SecretRefValidationError> {
+        let body = reference
+            .strip_prefix("mcp:")
+            .ok_or(SecretRefValidationError::InvalidCharacter)?;
+        let (server, key) = body
+            .split_once(':')
+            .ok_or(SecretRefValidationError::InvalidCharacter)?;
+        for component in [server, key] {
+            if component.is_empty() {
+                return Err(SecretRefValidationError::Empty);
+            }
+            if component.len() > 64 {
+                return Err(SecretRefValidationError::TooLong);
+            }
+            if !component.as_bytes()[0].is_ascii_lowercase()
+                || !component.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+            {
+                return Err(SecretRefValidationError::InvalidCharacter);
+            }
+        }
+        Ok(Self {
+            reference: reference.to_owned(),
+            separator: 4 + server.len(),
+        })
+    }
+
+    /// Returns the configured MCP server name.
+    #[must_use]
+    pub fn server(&self) -> &str {
+        &self.reference[4..self.separator]
+    }
+
+    /// Explicitly exposes the managed key locator to storage and configuration surfaces.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.reference[self.separator + 1..]
+    }
+
+    /// Explicitly exposes the canonical reference metadata, not its secret value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.reference
+    }
+}
+
+impl fmt::Debug for McpSecretRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("McpSecretRef")
+            .field("server", &self.server())
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl fmt::Display for McpSecretRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "mcp:{}:[REDACTED]", self.server())
+    }
+}
+
 fn validate_component(value: &str, max_len: usize) -> Result<(), SecretRefValidationError> {
     if value.is_empty() {
         return Err(SecretRefValidationError::Empty);
@@ -131,6 +211,52 @@ mod tests {
         assert!(!debug.contains(canary));
         assert!(!display.contains(canary));
         assert_eq!(secret_ref.expose_locator(), canary);
+    }
+
+    #[test]
+    fn mcp_secret_references_are_validated_metadata_with_redacted_formatting() {
+        let reference = McpSecretRef::parse("mcp:github-server:canary_key-123")
+            .unwrap_or_else(|error| panic!("valid reference: {error}"));
+        assert_eq!(reference.server(), "github-server");
+        assert_eq!(reference.key(), "canary_key-123");
+        assert_eq!(reference.as_str(), "mcp:github-server:canary_key-123");
+        assert!(!format!("{reference:?}").contains(reference.key()));
+        assert!(!reference.to_string().contains(reference.key()));
+        let component = "a".repeat(64);
+        assert!(McpSecretRef::parse(&format!("mcp:{component}:{component}")).is_ok());
+    }
+
+    #[test]
+    fn mcp_secret_references_refuse_paths_traversal_and_ambiguous_components() {
+        for reference in [
+            "",
+            "mcp",
+            "mcp:",
+            "mcp::key",
+            "mcp:server:",
+            "MCP:server:key",
+            "mcp:Server:key",
+            "mcp:server:Key",
+            "mcp:1server:key",
+            "mcp:server:_key",
+            "mcp:../server:key",
+            "mcp:server:../key",
+            "mcp:server:key/child",
+            "mcp:server:key\\child",
+            "mcp:server:key:extra",
+            "mcp:server:key.key",
+            "mcp:server:key\n",
+            "mcp:server:kéy",
+            " mcp:server:key",
+        ] {
+            let error = McpSecretRef::parse(reference)
+                .err()
+                .unwrap_or_else(|| panic!("malformed reference was accepted"));
+            assert!(!format!("{error:?} {error}").contains("mcp:"));
+        }
+        let component = "a".repeat(65);
+        assert!(McpSecretRef::parse(&format!("mcp:{component}:key")).is_err());
+        assert!(McpSecretRef::parse(&format!("mcp:server:{component}")).is_err());
     }
 
     #[test]

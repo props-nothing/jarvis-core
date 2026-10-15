@@ -11,6 +11,7 @@
 | Start JARVIS and get a first answer | [Quick start](user/quick-start.md) |
 | Run on Windows, macOS or a Linux server | [Platforms and verification](user/platforms.md) |
 | Pick a model, voice, folders and permissions | [Settings](user/settings.md) |
+| Connect accounts with browser sign-in | [Connections and persistent GitHub OAuth](user/connections.md) |
 | Connect Gmail and Calendar | [Google](user/google.md) |
 | Clean up files, import contacts and update workbooks | [Files and recovery](user/files.md) / [contacts](user/contacts.md) / [spreadsheets](user/spreadsheets.md) |
 | Reach JARVIS from your phone | [Telegram](user/telegram.md) / [owner phone calls](user/phone.md) |

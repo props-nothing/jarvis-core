@@ -234,3 +234,5 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0213](0213-discovery-enumerates-the-full-registry-before-deferring-tools.md) | Discovery enumerates the full registry before deferring tools | Accepted |
 | [0214](0214-first-run-tests-model-and-required-voice-before-saving.md) | First run tests the model and required voice before saving | Accepted |
 | [0215](0215-native-recall-searches-the-task-before-falling-back-to-recent-memory.md) | Native recall searches the task before falling back to recent memory | Accepted |
+| [0216](0216-local-mcp-credentials-are-named-profile-secrets-not-inherited-environment.md) | Local MCP credentials are named profile secrets, not inherited environment | Accepted |
+| [0217](0217-github-settings-use-persistent-pkce-sign-in-and-current-token-mcp-requests.md) | GitHub Settings use persistent PKCE sign-in and current-token MCP requests | Accepted |

@@ -120,7 +120,8 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
       entries.set(key, value);
     }
   };
-  const window = { confirm(text) { confirmations.push(text); return false; } };
+  const openedWindows = [];
+  const window = { confirm(text) { confirmations.push(text); return false; }, open(...args) { openedWindows.push(args); return null; } };
   Object.defineProperty(window, "localStorage", { get() {
     if (storageThrows) throw new Error("Storage access blocked");
     return storage;
@@ -163,7 +164,7 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
     timers.delete(id);
     timer.callback();
   }
-  return { document, $, initialize, writes, entries, apiCalls, putCalls, settings, tools, confirmations, search, tab, open, select, timers, runTimer };
+  return { document, $, initialize, writes, entries, apiCalls, putCalls, settings, tools, confirmations, openedWindows, search, tab, open, select, timers, runTimer };
 }
 
 const defaultAppearance = { density: "comfortable", motion: "system", accent: "mint", atmosphere: "cinematic" };
@@ -505,7 +506,7 @@ test("navigation filters labels and descriptions without replacing unsaved field
   h.search("voice");
   assert.ok(visibleTabs(h).some(node => node.id === "settings-tab-voice"));
   h.search("");
-  assert.equal(visibleTabs(h).length, 12);
+  assert.equal(visibleTabs(h).length, 13);
   assert.equal(h.$("settings-search-empty").hidden, true);
   assert.equal(h.tab("alerts").tabIndex, 0);
   h.select("alerts");
@@ -839,7 +840,10 @@ test("local SVG navigation icons and one hero per tab keep accessible labels and
     assert.equal(h.$("settings-section-label").textContent, label.textContent);
     assert.equal(h.$(tab.id), tab);
   }
-  assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|https?:\/\//);
+  assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML/);
+  const iconDefinitions = source.slice(source.indexOf("var ICON_PATHS"), source.indexOf("function settingsIcon"));
+  assert.ok(iconDefinitions.includes("connections:"));
+  assert.doesNotMatch(iconDefinitions, /https?:\/\//, "icons stay local; provider OAuth links elsewhere are not assets");
 });
 
 test("dynamic text, choice, switch and permission controls have real visible labels and descriptions", async () => {
@@ -960,6 +964,119 @@ test("an ordinary restart failure re-enables the pending restart without adding 
   assert.match(h.$("settings-note").textContent, /Could not restart/);
   h.$("settings-restart").click(); await flush();
   assert.equal(h.putCalls.at(-1)[0], "/restart");
+});
+
+const githubStatus = { configured: true, connected: false, client_id: "fixtureclient", client_secret_set: true, private_repositories: false, pending: false, callback_url: "http://127.0.0.1:8765/oauth/github/callback", restart_needed: true };
+
+test("Connections exposes one-time GitHub app setup with a write-only secret and browser sign-in", async () => {
+  const saveRequest = deferred();
+  const h = harness({ apiResponses: { "/github": { ...githubStatus, configured: false, client_secret_set: false, client_id: null } }, putHandler: () => saveRequest.promise });
+  h.initialize(); h.open(); await loadFixture(h); h.select("connections"); await flush();
+  assert.equal(h.$("github-client-secret").type, "password");
+  assert.equal(h.$("github-client-secret").autocomplete, "off");
+  assert.equal(buttonNamed(h, "Connect GitHub").disabled, true);
+  assert.match(h.$("settings-body").textContent, /http:\/\/127\.0\.0\.1:8765\/oauth\/github\/callback/);
+  h.$("github-client-id").value = "fixtureclient"; h.$("github-client-id").dispatch("input");
+  h.$("github-client-secret").value = "synthetic-app-secret-ui-8197"; h.$("github-client-secret").dispatch("input");
+  buttonNamed(h, "Save GitHub app").click();
+  assert.equal(h.$("github-client-secret").value, "", "clear before awaiting even a failed save");
+  assert.deepEqual(h.putCalls[0], ["/github/app", "PUT", { client_id: "fixtureclient", client_secret: "synthetic-app-secret-ui-8197", private_repositories: false }]);
+  saveRequest.resolve(githubStatus); await flush();
+  assert.equal(buttonNamed(h, "Connect GitHub").disabled, false);
+  assert.equal(h.writes.length, 0);
+  assert.ok(!h.$("settings-body").textContent.includes("synthetic-app-secret-ui-8197"));
+  assert.ok(!h.putCalls.some(call => call[0] === "/restart"));
+});
+
+test("GitHub failed saves clear secrets and unsaved permissions block connect and test", async () => {
+  const h = harness({ apiResponses: { "/github": { ...githubStatus, connected: true, login: "fixture-user" } }, putHandler: () => Promise.reject({ status: 422 }) });
+  h.initialize(); h.open(); await loadFixture(h); h.select("connections"); await flush();
+  assert.equal(buttonNamed(h, "Test GitHub tools").disabled, false);
+  h.$("github-private-repositories").checked = true; h.$("github-private-repositories").dispatch("change");
+  assert.equal(buttonNamed(h, "Connect GitHub").disabled, true);
+  assert.equal(buttonNamed(h, "Test GitHub tools").disabled, true);
+  h.$("github-client-secret").value = "synthetic-refused-secret-9721"; h.$("github-client-secret").dispatch("input");
+  buttonNamed(h, "Save GitHub app").click(); await flush();
+  assert.equal(h.$("github-client-secret").value, "");
+  assert.match(h.$("settings-body").textContent, /App setup was not saved/);
+  assert.equal(h.writes.length, 0);
+  assert.ok(!h.putCalls.some(call => call[0] === "/github/connect"));
+});
+
+test("GitHub browser handoff is out-of-band and rejects non-GitHub addresses", async () => {
+  for (const authUrl of ["https://github.com/login/oauth/authorize?state=synthetic-state", "https://untrusted.example.test/?state=synthetic-state"]) {
+    const h = harness({ apiResponses: { "/github": githubStatus }, putHandler: () => Promise.resolve({ auth_url: authUrl }) });
+    h.initialize(); h.open(); await loadFixture(h); h.select("connections"); await flush();
+    buttonNamed(h, "Connect GitHub").click(); await flush();
+    assert.deepEqual(h.putCalls[0], ["/github/connect", "POST", {}]);
+    const expected = authUrl.startsWith("https://github.com/") ? 1 : 0;
+    assert.equal(h.openedWindows.length, expected);
+    assert.equal(h.writes.length, 0);
+    assert.ok(!h.putCalls.some(call => call[0] === "/runs" || call[0] === "/restart"));
+    if (expected) assert.equal(h.openedWindows[0][2], "noopener,noreferrer");
+    else assert.match(h.$("settings-body").textContent, /valid GitHub sign-in address/);
+  }
+});
+
+test("late GitHub status preserves drafts and cannot undo a newer app save", async () => {
+  const initial = deferred();
+  const h = harness({ apiResponses: { "/github": initial.promise }, putHandler: () => Promise.resolve({ ...githubStatus, client_id: "editedclient" }) });
+  h.initialize(); h.open(); await loadFixture(h); h.select("connections"); await flush();
+  h.$("github-client-id").value = "editedclient"; h.$("github-client-id").dispatch("input");
+  h.$("github-client-secret").value = "synthetic-secret-newer-save"; h.$("github-client-secret").dispatch("input");
+  buttonNamed(h, "Save GitHub app").click(); await flush();
+  assert.equal(buttonNamed(h, "Connect GitHub").disabled, false);
+  initial.resolve({ ...githubStatus, configured: false, client_id: "oldclient" }); await flush(); await flush();
+  assert.equal(h.$("github-client-id").value, "editedclient");
+  assert.equal(buttonNamed(h, "Connect GitHub").disabled, false);
+  assert.equal(h.$("github-client-secret").value, "");
+});
+
+test("GitHub initial status does not overwrite unsaved drafts and polling stops off-page", async () => {
+  const initial = deferred();
+  const h = harness({ apiResponses: { "/github": initial.promise } });
+  h.initialize(); h.open(); await loadFixture(h); h.select("connections"); await flush();
+  h.$("github-client-id").value = "draftclient"; h.$("github-client-id").dispatch("input");
+  h.$("github-private-repositories").checked = true; h.$("github-private-repositories").dispatch("change");
+  initial.resolve(githubStatus); await flush(); await flush();
+  assert.equal(h.$("github-client-id").value, "draftclient");
+  assert.equal(h.$("github-private-repositories").checked, true);
+  assert.equal(buttonNamed(h, "Connect GitHub").disabled, true);
+  assert.equal(h.putCalls.length, 0);
+  const polling = harness({ apiResponses: { "/github": { ...githubStatus, pending: true } }, putHandler: () => Promise.resolve({ auth_url: "https://github.com/login/oauth/authorize?state=synthetic-state" }) });
+  polling.initialize(); polling.open(); await loadFixture(polling); polling.select("connections"); await flush();
+  buttonNamed(polling, "Connect GitHub").click(); await flush();
+  const timer = [...polling.timers].find(([, timer]) => timer.delay === 2000);
+  assert.ok(timer);
+  polling.select("console"); const calls = polling.apiCalls.length;
+  polling.runTimer(timer[0]); await flush();
+  assert.equal(polling.apiCalls.length, calls);
+});
+
+test("GitHub tool test is explicit and Disconnect retains app setup without starting work", async () => {
+  const h = harness({ apiResponses: { "/github": { ...githubStatus, connected: true, login: "fixture-user" } }, putHandler: path => Promise.resolve(path === "/github/test" ? { ok: true, tools: [{ id: "mcp.github.get_me" }] } : githubStatus) });
+  h.initialize(); h.open(); await loadFixture(h); h.select("connections"); await flush();
+  assert.match(h.$("settings-body").textContent, /fixture-user \(saved connection\)/);
+  buttonNamed(h, "Test GitHub tools").click(); await flush();
+  assert.match(h.$("settings-body").textContent, /GitHub answered: 1 tools/);
+  buttonNamed(h, "Disconnect GitHub").click(); await flush();
+  assert.equal(buttonNamed(h, "Test GitHub tools").disabled, true);
+  assert.equal(h.$("github-client-id").value, "fixtureclient");
+  assert.ok(!h.putCalls.some(call => call[0] === "/runs" || call[0] === "/restart"));
+});
+
+test("MCP credential status shows references only and Test preserves the configured mappings", async () => {
+  const env = { GITHUB_PERSONAL_ACCESS_TOKEN: "mcp:github:token" };
+  const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [{ name: "github", kind: "stdio", command: ["github-mcp-server", "stdio"], posture: "unclassified", state: "connected", tools: [], env, credentials: [{ name: "GITHUB_PERSONAL_ACCESS_TOKEN", reference: env.GITHUB_PERSONAL_ACCESS_TOKEN, state: "set" }] }] } }, putHandler: () => Promise.resolve({ ok: true, tools: [] }) });
+  h.initialize(); h.open(); await loadFixture(h);
+  h.select("advanced"); await flush();
+  assert.match(h.$("settings-body").textContent, /GITHUB_PERSONAL_ACCESS_TOKEN: set \(mcp:github:token\)/);
+  buttonNamed(h, "Test").click(); await flush();
+  const request = h.putCalls.find(call => call[0] === "/mcp/test");
+  assert.ok(request);
+  assert.deepEqual(request[2].env, env);
+  assert.equal(request[2].read_only, false);
+  assert.equal(h.writes.length, 0, "credential data is not written to browser storage");
 });
 
 for (const [tab, path, response, pendingName] of [

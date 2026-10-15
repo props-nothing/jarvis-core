@@ -14,6 +14,7 @@ use crate::output::ExitStatus;
 use crate::schedule::{print_json, report};
 
 const USAGE: &str = "usage: jarvis mcp <list|on|off|add|test|remove|access> [...]
+       jarvis mcp add NAME --env-ref VARIABLE=mcp:NAME:KEY -- PROGRAM [ARGS...]  # reference only; set with jarvis keys set mcp:NAME:KEY
        jarvis mcp access [on|off|key]                              # let other AI apps (Claude Code, Cursor, VS Code) hand JARVIS tasks: shows the address and key\n       jarvis mcp access public on|off                             # reach it from the internet (a cloud phone agent): a free temporary address\n       jarvis mcp access public named HOSTNAME [--from-env NAME]   # a stable address on your own Cloudflare tunnel (token from the environment, a file, or typed in)\n       jarvis mcp access public named off                          # back to the free temporary address\n       jarvis mcp list [--json]                                    # the abilities you can switch on, and any program you added\n       jarvis mcp on browser                                       # switch an ability on (JARVIS does the setup)\n       jarvis mcp off browser\n       jarvis mcp add NAME [--read-only] -- PROGRAM [ARGS...]      # a program on this computer, e.g. -- npx -y @playwright/mcp@latest\n       jarvis mcp add NAME [--read-only] --url https://host/mcp    # a remote server (HTTPS)\n       jarvis mcp test NAME                                        # connect once and show its tools; nothing is saved\n       jarvis mcp test -- PROGRAM [ARGS...]                        # try a server before adding it\n       jarvis mcp remove NAME\n       A change applies on the next `jarvis restart`.";
 
 /// Runs one MCP verb.
@@ -59,7 +60,7 @@ fn name_of(before: &[String]) -> Option<&str> {
     for argument in before {
         if skip {
             skip = false;
-        } else if argument == "--url" || argument == "--root" {
+        } else if argument == "--url" || argument == "--root" || argument == "--env-ref" {
             skip = true;
         } else if !argument.starts_with("--") {
             return Some(argument.as_str());
@@ -68,13 +69,35 @@ fn name_of(before: &[String]) -> Option<&str> {
     None
 }
 
-fn body_from(before: &[String], command: &[String]) -> Value {
-    json!({
+fn body_from(before: &[String], command: &[String]) -> Result<Value, String> {
+    let mut environment = std::collections::BTreeMap::new();
+    let mut words = before.iter();
+    while let Some(word) = words.next() {
+        if word != "--env-ref" {
+            continue;
+        }
+        let (name, reference) = words
+            .next()
+            .and_then(|value| value.split_once('='))
+            .ok_or_else(|| {
+                "use --env-ref VARIABLE=mcp:SERVER:KEY (references, never a key value)".to_owned()
+            })?;
+        let reference = jarvis_core::McpSecretRef::parse(reference)
+            .map_err(|_| "use a named MCP key reference, never its value".to_owned())?;
+        if environment
+            .insert(name.to_owned(), reference.as_str().to_owned())
+            .is_some()
+        {
+            return Err("each credential environment variable may be mapped only once".to_owned());
+        }
+    }
+    Ok(json!({
         "name": name_of(before).unwrap_or_default(),
         "command": command,
         "endpoint": flag(before, "--url"),
         "read_only": before.iter().any(|argument| argument == "--read-only"),
-    })
+        "env": environment,
+    }))
 }
 
 async fn list(client: &ApiClient, rest: &[String]) -> ExitStatus {
@@ -331,6 +354,15 @@ fn render_servers(overview: &Value, servers: &[Value]) -> String {
             _ => "not started yet (restart to apply)".to_owned(),
         };
         let _ = writeln!(text, "{name}  {how}\n  {tools} tool(s), {asks}");
+        for credential in server["credentials"].as_array().into_iter().flatten() {
+            let _ = writeln!(
+                text,
+                "  {}: {} ({})",
+                credential["name"].as_str().unwrap_or("?"),
+                credential["state"].as_str().unwrap_or("not set"),
+                credential["reference"].as_str().unwrap_or("?")
+            );
+        }
         for tool in server["tools"].as_array().into_iter().flatten() {
             let _ = writeln!(
                 text,
@@ -362,7 +394,14 @@ async fn add(client: &ApiClient, rest: &[String]) -> ExitStatus {
         eprintln!("{USAGE}");
         return ExitStatus::Usage;
     }
-    let overview = match client.mcp_add(&body_from(before, command)).await {
+    let body = match body_from(before, command) {
+        Ok(body) => body,
+        Err(message) => {
+            eprintln!("jarvis: {message}");
+            return ExitStatus::Usage;
+        }
+    };
+    let overview = match client.mcp_add(&body).await {
         Ok(overview) => overview,
         Err(error) => return report(&error),
     };
@@ -402,9 +441,17 @@ async fn test(client: &ApiClient, rest: &[String]) -> ExitStatus {
             "command": server["command"],
             "endpoint": server["endpoint"],
             "read_only": server["posture"] == "read-only",
+            "env": server["env"].as_object().cloned().unwrap_or_default(),
+            "authorization": server["authorization"],
         })
     } else {
-        body_from(before, command)
+        match body_from(before, command) {
+            Ok(body) => body,
+            Err(message) => {
+                eprintln!("jarvis: {message}");
+                return ExitStatus::Usage;
+            }
+        }
     };
     eprintln!("connecting (a first start with npx may download the program and take a minute)...");
     let report_value = match client.mcp_test(&body).await {
@@ -471,6 +518,40 @@ async fn remove(client: &ApiClient, rest: &[String]) -> ExitStatus {
 mod tests {
     use super::*;
 
+    #[test]
+    fn credential_flags_are_references_and_not_server_names_or_literal_values() {
+        let args = [
+            "--env-ref",
+            "GITHUB_PERSONAL_ACCESS_TOKEN=mcp:github:token",
+            "github",
+        ]
+        .map(str::to_owned);
+        assert_eq!(name_of(&args), Some("github"));
+        let body = body_from(&args, &["github-mcp-server".to_owned(), "stdio".to_owned()])
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            body["env"]["GITHUB_PERSONAL_ACCESS_TOKEN"],
+            "mcp:github:token"
+        );
+        assert_eq!(body["read_only"], false);
+        for bad in [
+            vec!["github", "--env-ref"],
+            vec!["github", "--env-ref", "API_KEY=synthetic-literal-secret"],
+            vec![
+                "github",
+                "--env-ref",
+                "API_KEY=mcp:github:token",
+                "--env-ref",
+                "API_KEY=mcp:github:token",
+            ],
+        ] {
+            let error = body_from(&bad.into_iter().map(str::to_owned).collect::<Vec<_>>(), &[])
+                .err()
+                .unwrap_or_else(|| panic!("must refuse"));
+            assert!(!error.contains("synthetic-literal-secret"));
+        }
+    }
+
     fn words(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| (*part).to_owned()).collect()
     }
@@ -496,7 +577,7 @@ mod tests {
     fn a_remote_server_has_no_command_and_read_only_is_explicit() {
         let arguments = words(&["docs", "--url", "https://example.invalid/mcp"]);
         let (before, command) = split_command(&arguments);
-        let body = body_from(before, command);
+        let body = body_from(before, command).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(body["name"], "docs");
         assert_eq!(body["endpoint"], "https://example.invalid/mcp");
         assert_eq!(body["read_only"], false, "nothing is read-only unless said");

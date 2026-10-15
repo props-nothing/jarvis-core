@@ -207,6 +207,12 @@ mod tests {
 
     #[test]
     fn voice_stays_in_the_browser_and_the_page_loads_nothing_from_elsewhere() {
+        // Provider sign-in is an explicit browser navigation, not a remotely loaded page asset.
+        let registration = "register.href = \"https://github.com/settings/applications/new\";";
+        assert!(SETTINGS.contains(registration));
+        assert!(SETTINGS.contains("register.rel = \"noopener noreferrer\""));
+        let settings_assets =
+            SETTINGS.replace(registration, "register.href = approved_provider_link;");
         for external in [
             "http://",
             "https://",
@@ -218,7 +224,7 @@ mod tests {
                 !SCRIPT.contains(external)
                     && !HEAD.contains(external)
                     && !MISSION.contains(external)
-                    && !SETTINGS.contains(external)
+                    && !settings_assets.contains(external)
                     && !PAGE.contains(external),
                 "the page must load and send nothing outside this origin: {external}"
             );

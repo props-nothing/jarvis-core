@@ -7,6 +7,7 @@ mod embedding_repository;
 mod identity_repository;
 mod inspect;
 mod knowledge_repository;
+pub mod mcp_secrets;
 mod memory_repository;
 mod message_repository;
 mod paths;

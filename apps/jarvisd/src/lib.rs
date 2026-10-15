@@ -20,6 +20,8 @@ mod document_write_tool;
 mod entity_service;
 mod executor;
 mod gateway;
+mod github_account;
+mod github_service;
 mod google_account;
 mod google_files;
 mod google_service;
@@ -35,6 +37,7 @@ mod mail_mime;
 mod mcp_abilities;
 mod mcp_access;
 mod mcp_admin;
+mod mcp_credentials;
 mod mcp_host;
 mod mcp_serve;
 mod mcp_tunnel;
@@ -962,16 +965,18 @@ fn compose_executor(
 /// whether the file has changed since.
 async fn compose_mcp(paths: &AppPaths) -> (Option<crate::mcp_host::ComposedHost>, Option<String>) {
     let (mcp, loaded) = match crate::mcp_abilities::startup_document(paths).await {
-        Ok(document) => match crate::mcp_host::compose_host(document.as_deref()).await {
-            Ok(host) => (host, document),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "the configured MCP servers are unavailable; their tools will not be offered"
-                );
-                (None, document)
+        Ok(document) => {
+            match crate::mcp_host::compose_host_with_paths(document.as_deref(), paths).await {
+                Ok(host) => (host, document),
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "the configured MCP servers are unavailable; their tools will not be offered"
+                    );
+                    (None, document)
+                }
             }
-        },
+        }
         Err(error) => {
             tracing::warn!(
                 %error,
@@ -1811,7 +1816,8 @@ impl HttpTransport {
             .await
             .map_err(|source| DaemonError::HttpBind { port, source })?;
 
-        let mut state = gateway::GatewayState::new(database, credential);
+        let mut state = gateway::GatewayState::new(database, credential)
+            .with_http_port(listener.local_addr().map_or(port, |address| address.port()));
         if let Some(executor) = executor {
             state = state.with_executor(executor);
         }
@@ -1825,6 +1831,10 @@ impl HttpTransport {
         match google_account::GoogleAccount::shared(settings.paths()) {
             Ok(google) => state = state.with_google(google),
             Err(error) => tracing::warn!(%error, "Google sign-in is not available"),
+        }
+        match github_account::GithubAccount::shared(settings.paths()) {
+            Ok(github) => state = state.with_github(github),
+            Err(error) => tracing::warn!(%error, "GitHub sign-in is not available"),
         }
         let telegram = Arc::new(telegram::TelegramBridge::new(settings.paths().clone()));
         // Pictures a tool returns (a screenshot) are kept here and shown in the console; the first daemon in a process owns the sink.

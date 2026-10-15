@@ -65,6 +65,7 @@ window.JarvisSettings = function (context) {
         ["permissions", "Permissions", "For each tool: let the rules decide, always ask, run without asking, or switch it off."]
       ]],
       ["Accounts & channels", [
+        ["connections", "Connections", "Connect accounts with browser sign-in. GitHub setup, saved account, testing and disconnect; no token or server command for ordinary sign-in."],
         ["google", "Google", "Sign in with your Google account so JARVIS can read your mail and calendar."],
         ["telegram", "Telegram", "Talk to JARVIS from your phone. It answers in a Telegram chat only you can use, and asks you there when it needs your approval."],
         ["phone", "Phone", "JARVIS rings you when it needs you, and you can ring JARVIS. A voice agent at ElevenLabs does the talking; the tools stay with JARVIS."]
@@ -1238,6 +1239,85 @@ window.JarvisSettings = function (context) {
       }
       loadGoogle();
     }
+    function connectionsPanel(body) {
+      var card = el("div", "card"), current = {}, dirty = false, pending = false, loaded = false, polls = 0, statusEpoch = 0;
+      card.appendChild(el("h4", "", "GitHub"));
+      card.appendChild(el("p", "help", "Sign in in your browser; your connection is saved on this computer. No PAT, Docker or server command is needed. This connection exposes read-only GitHub tools."));
+      var line = el("p", "lead", "Checking the saved connection..."); line.setAttribute("role", "status"); card.appendChild(line);
+      var acts = el("div", "acts"), connect = el("button", "yes", "Connect GitHub"), test = el("button", "", "Test GitHub tools"), disconnect = el("button", "danger", "Disconnect GitHub"), refresh = el("button", "", "Check connection");
+      [connect, test, disconnect, refresh].forEach(function (button) { button.type = "button"; acts.appendChild(button); }); card.appendChild(acts);
+      var signIn = el("div", "acts"), out = el("p", "help", ""); out.setAttribute("role", "status"); card.appendChild(signIn); card.appendChild(out);
+      var setup = el("details"); setup.appendChild(el("summary", "", "One-time JARVIS app setup"));
+      var appHelp = el("p", "help", "Register one GitHub OAuth app for JARVIS, then save its client ID and secret here once. Later, just press Connect GitHub. The secret is write-only; it is never returned to this page."); appHelp.id = "github-app-description"; setup.appendChild(appHelp);
+      var register = el("a", "", "Register a GitHub OAuth app"); register.href = "https://github.com/settings/applications/new"; register.target = "_blank"; register.rel = "noopener noreferrer"; setup.appendChild(register);
+      var callback = el("code", "", "Loading callback address..."); setup.appendChild(el("p", "help", "Use this exact Authorization callback URL when registering the app:")); setup.appendChild(callback);
+      function field(label, id, type) {
+        var row = el("div", "set-row"), name = el("label", "name", label), input = el("input");
+        name.setAttribute("for", id); input.id = id; input.type = type; input.autocomplete = "off"; input.spellcheck = false; input.setAttribute("aria-describedby", "github-app-description");
+        row.appendChild(name); row.appendChild(input); setup.appendChild(row); return input;
+      }
+      var client = field("Client ID", "github-client-id", "text"), secret = field("Client secret", "github-client-secret", "password"), privateRepos = field("Private repositories", "github-private-repositories", "checkbox");
+      client.maxLength = 128; secret.maxLength = 4096;
+      setup.appendChild(el("p", "help", "Private repositories requests GitHub's broad repo scope, which also grants write capabilities at GitHub. JARVIS still exposes only read-only tools here; signing in never approves an action. Off requests only the basic persistent sign-in."));
+      var save = el("button", "", "Save GitHub app"); save.type = "button"; setup.appendChild(save); card.appendChild(setup); body.appendChild(card);
+      var google = el("button", "", "Connect Google"); google.type = "button"; google.addEventListener("click", function () { goTab("google"); }); body.appendChild(google);
+      function controls() {
+        connect.disabled = pending || dirty || !current.configured;
+        test.disabled = pending || dirty || !current.connected;
+        disconnect.disabled = pending || (!current.connected && !current.pending);
+        refresh.disabled = pending; save.disabled = pending;
+        client.disabled = pending; secret.disabled = pending; privateRepos.disabled = pending;
+      }
+      function paint(status) {
+        current = status;
+        if (!loaded) { if (!dirty) { client.value = status.client_id || ""; privateRepos.checked = !!status.private_repositories; } setup.open = !status.configured || dirty; loaded = true; }
+        secret.placeholder = status.client_secret_set ? "Saved; enter a replacement only to change it" : "Paste the app client secret once";
+        callback.textContent = status.callback_url || "The daemon has not reported a callback address.";
+        line.textContent = status.pending ? "Waiting for GitHub sign-in..." : status.connected ? "Signed in as " + (status.login || "your GitHub account") + " (saved connection). " + (status.restart_needed ? "Restart JARVIS to register its tools." : "Tools were registered at startup; Test checks the connection now.") : status.configured ? "Ready to sign in. Press Connect GitHub." : "Complete the one-time app setup below, then press Connect GitHub.";
+        if (status.connected && status.restart_needed) needsRestart("GitHub tools");
+        controls();
+      }
+      function active() { return !$("settings").hidden && sview.tab === "connections" && body.contains(card); }
+      function load() {
+        var epoch = ++statusEpoch;
+        return api("/github").then(function (status) { if (active() && epoch === statusEpoch && !pending) paint(status); }, function () { if (active() && epoch === statusEpoch && !pending) { line.textContent = "GitHub sign-in is unavailable. Update the daemon or check its connection."; controls(); } });
+      }
+      [client, secret].forEach(function (input) { input.addEventListener("input", function () { dirty = true; controls(); }); });
+      privateRepos.addEventListener("change", function () { dirty = true; controls(); });
+      save.addEventListener("click", function () {
+        var value = secret.value; secret.value = "";
+        if (!client.value.trim() || (!current.client_secret_set && !value.trim())) { out.textContent = "Enter the app client ID and client secret first."; return; }
+        statusEpoch += 1; pending = true; controls(); out.className = "help"; out.textContent = "Saving app setup...";
+        putJson("/github/app", "PUT", { client_id: client.value.trim(), client_secret: value.trim() || null, private_repositories: !!privateRepos.checked }).then(function (status) {
+          pending = false; dirty = false; paint(status); out.textContent = "App setup saved. Press Connect GitHub to authorize your account.";
+        }, function (error) { pending = false; out.className = "help bad"; out.textContent = explain(error, "App setup was not saved. Enter the secret again to retry."); controls(); });
+      });
+      function poll() {
+        if (!active() || pending || dirty || polls++ >= 90) return;
+        var epoch = statusEpoch;
+        api("/github").then(function (status) { if (!active() || epoch !== statusEpoch || pending || dirty) return; paint(status); if (status.pending) setTimeout(poll, 2000); else if (status.connected) signIn.replaceChildren(); }, function () {});
+      }
+      connect.addEventListener("click", function () {
+        statusEpoch += 1; pending = true; controls(); out.className = "help"; out.textContent = "Starting browser sign-in...";
+        putJson("/github/connect", "POST", {}).then(function (reply) {
+          pending = false;
+          if (!/^https:\/\/github\.com\/login\/oauth\/authorize\?/.test(reply.auth_url || "")) { out.textContent = "The daemon did not provide a valid GitHub sign-in address."; controls(); return; }
+          signIn.replaceChildren(); var link = el("a", "", "Continue on GitHub"); link.href = reply.auth_url; link.target = "_blank"; link.rel = "noopener noreferrer"; signIn.appendChild(link);
+          if (typeof window.open === "function") window.open(reply.auth_url, "_blank", "noopener,noreferrer");
+          out.textContent = "Complete sign-in on GitHub. If no page opened, use Continue on GitHub. Your password stays with GitHub.";
+          polls = 0; controls(); poll();
+        }, function (error) { pending = false; out.className = "help bad"; out.textContent = explain(error, "Could not start GitHub sign-in."); controls(); });
+      });
+      test.addEventListener("click", function () {
+        statusEpoch += 1; pending = true; controls(); out.className = "help"; out.textContent = "Testing the read-only GitHub connection...";
+        putJson("/github/test", "POST", {}).then(function (reply) { pending = false; out.textContent = reply.ok ? "GitHub answered: " + (reply.tools || []).length + " tools. This test does not execute a tool or restart JARVIS." : reply.message || "GitHub did not complete the test."; out.className = reply.ok ? "help" : "help bad"; controls(); }, function (error) { pending = false; out.className = "help bad"; out.textContent = explain(error, "GitHub test failed; check the connection or sign in again."); controls(); });
+      });
+      disconnect.addEventListener("click", function () {
+        statusEpoch += 1; pending = true; controls(); signIn.replaceChildren();
+        putJson("/github/disconnect", "POST", {}).then(function (status) { pending = false; paint(status); out.textContent = "GitHub disconnected. The app setup is kept for a later sign-in."; }, function (error) { pending = false; load().then(function () { out.className = "help bad"; out.textContent = explain(error, "Local access was removed, but GitHub revocation may need checking in your authorized apps."); }); });
+      });
+      refresh.addEventListener("click", load); controls(); load();
+    }
     // ---- Telegram: a bot token, a first message to the bot, and the code it answers with --------------------------------------
     // No restart: the daemon reads the token fresh, so the status below turns by itself as each step is done.
     var telegramPoll = 0;
@@ -1558,6 +1638,9 @@ window.JarvisSettings = function (context) {
       card.appendChild(head);
       var how = server.kind === "http" ? server.endpoint : (server.command || []).join(" ");
       card.appendChild(el("code", "", how));
+      (server.credentials || []).forEach(function (credential) {
+        card.appendChild(el("p", "help", credential.name + ": " + credential.state + " (" + credential.reference + ")"));
+      });
       if (server.state === "unreachable") card.appendChild(el("p", "help bad", server.reason || "It did not answer."));
       if (server.state === "connected") {
         var tools = server.tools || [];
@@ -1578,7 +1661,7 @@ window.JarvisSettings = function (context) {
       var out = el("span", "help", "");
       testButton.addEventListener("click", function () {
         testButton.disabled = true; out.className = "help"; out.textContent = "Connecting (a first start with npx may download the program)...";
-        putJson("/mcp/test", "POST", { name: server.name, command: server.command || [], endpoint: server.endpoint || null, read_only: server.posture === "read-only" }).then(function (reply) {
+        putJson("/mcp/test", "POST", { name: server.name, command: server.command || [], endpoint: server.endpoint || null, read_only: server.posture === "read-only", env: server.env || {}, authorization: server.authorization || null }).then(function (reply) {
           testButton.disabled = false;
           out.className = reply.ok ? "help" : "help bad";
           out.textContent = reply.ok ? "Reached it: " + (reply.tools || []).length + " tools." : (reply.message || "No answer.");
@@ -1913,6 +1996,7 @@ window.JarvisSettings = function (context) {
       voice: "M4 9v6 M8 5v14 M12 2v20 M16 5v14 M20 9v6",
       files: "M3 6h7l2 3h9v12H3z M3 6V3h7l2 3h6v3",
       permissions: "M12 2l8 3v7c0 5-8 10-8 10S4 17 4 12V5z M8 12l3 3 5-6",
+      connections: "M9 15l6-6 M8 12l-2 2a3 3 0 0 0 4 4l3-3 M16 12l2-2a3 3 0 0 0-4-4l-3 3",
       google: "M16 7a4 4 0 1 1-8 0a4 4 0 1 1 8 0 M4 21v-3c0-5 16-5 16 0v3 M17 4l3 3 2-3",
       telegram: "M3 5h18v12H11l-6 4v-4H3z M7 9h10 M7 13h6",
       phone: "M5 3h4l2 5-3 2c2 4 3 5 6 6l2-3 5 2v4c-9 4-22-9-16-16z",
@@ -2240,6 +2324,8 @@ window.JarvisSettings = function (context) {
           toolsNote.setAttribute("role", "status");
           body.appendChild(toolsNote);
         } else permissionsPanel(body);
+      } else if (sview.tab === "connections") {
+        connectionsPanel(body);
       } else if (sview.tab === "google") {
         googlePanel(body);
       } else if (sview.tab === "telegram") {

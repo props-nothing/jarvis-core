@@ -39,6 +39,8 @@ struct Behaviour {
     crash_on: Option<String>,
     /// Start only the first time: a marker file is written, and a start that finds it exits at once.
     once_marker: Option<String>,
+    /// Report this synthetic environment variable, exercising the parent's credential boundary.
+    env_report: Option<String>,
 }
 
 /// Reads arguments of the form `--name <server name>` and `--tool <tool name>`, repeatable, plus
@@ -63,6 +65,7 @@ fn parse_arguments() -> (String, Vec<String>, Behaviour) {
             }
             "--crash-on" => behaviour.crash_on = arguments.next(),
             "--once" => behaviour.once_marker = arguments.next(),
+            "--env-report" => behaviour.env_report = arguments.next(),
             // An unrecognized argument is ignored rather than refused: this is a test fixture, and a
             // fixture that exited on an unexpected flag would make a test failure look like a crash
             // in the transport instead of a mistake in the test.
@@ -124,8 +127,28 @@ fn call_result(tool: &str) -> Value {
     })
 }
 
+fn listed_tools(tools: &[String], behaviour: &Behaviour) -> Value {
+    let mut result = tools_result(tools);
+    if let Some(value) = behaviour
+        .env_report
+        .as_ref()
+        .and_then(|variable| std::env::var(variable).ok())
+        && let Some(tools) = result["tools"].as_array_mut()
+    {
+        for tool in tools {
+            tool["description"] = json!(format!("fixture credential {value}"));
+        }
+    }
+    result
+}
+
 fn main() {
     let (name, tools, behaviour) = parse_arguments();
+    if let Some(variable) = &behaviour.env_report
+        && let Ok(value) = std::env::var(variable)
+    {
+        eprintln!("synthetic credential stderr: {value}");
+    }
     if let Some(marker) = &behaviour.once_marker {
         if std::path::Path::new(marker).exists() {
             return;
@@ -167,9 +190,16 @@ fn main() {
 
         let response = match method {
             "server/discover" => {
-                json!({ "jsonrpc": "2.0", "id": id, "result": discover_result(&name) })
+                let reported = behaviour
+                    .env_report
+                    .as_ref()
+                    .and_then(|variable| std::env::var(variable).ok())
+                    .map_or_else(|| name.clone(), |value| format!("{name}-{value}"));
+                json!({ "jsonrpc": "2.0", "id": id, "result": discover_result(&reported) })
             }
-            "tools/list" => json!({ "jsonrpc": "2.0", "id": id, "result": tools_result(&tools) }),
+            "tools/list" => {
+                json!({ "jsonrpc": "2.0", "id": id, "result": listed_tools(&tools, &behaviour) })
+            }
             "tools/call" => {
                 let called = message
                     .get("params")
@@ -179,7 +209,24 @@ fn main() {
                 if behaviour.crash_on.as_deref() == Some(called) {
                     return;
                 }
-                json!({ "jsonrpc": "2.0", "id": id, "result": call_result(called) })
+                if called == "credential_error" {
+                    let value = behaviour
+                        .env_report
+                        .as_ref()
+                        .and_then(|variable| std::env::var(variable).ok())
+                        .unwrap_or_default();
+                    let response = json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": format!("credential error {value}") } });
+                    let _ = writeln!(stdout, "{response}");
+                    let _ = stdout.flush();
+                    continue;
+                }
+                let result = if let Some(variable) = &behaviour.env_report {
+                    let value = std::env::var(variable).unwrap_or_else(|_| "not set".to_owned());
+                    json!({ "resultType": "complete", "content": [{ "type": "text", "text": format!("credential: {value}") }], "structuredContent": { "credential": value }, "isError": false })
+                } else {
+                    call_result(called)
+                };
+                json!({ "jsonrpc": "2.0", "id": id, "result": result })
             }
             // An unscripted method is answered with a protocol error rather than silence, so a client
             // that calls something this fixture does not implement gets a diagnosable refusal instead

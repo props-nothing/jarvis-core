@@ -7,8 +7,9 @@
 use std::io::{IsTerminal, Read};
 use std::time::Duration;
 
+use jarvis_core::McpSecretRef;
 use jarvis_storage::settings::{self, SecretKind};
-use jarvis_storage::{AppPaths, ConfigStore};
+use jarvis_storage::{AppPaths, ConfigStore, mcp_secrets};
 
 use crate::init::flag_value;
 use crate::output::ExitStatus;
@@ -133,24 +134,130 @@ fn kind_of(word: Option<&String>) -> Result<SecretKind, String> {
 /// Reads a key from an environment variable, a file, or standard input. It is never a command-line value, which would be
 /// kept in shell history and visible to other processes.
 fn read_secret(arguments: &[String], kind: SecretKind) -> Result<String, String> {
+    settings::validate_secret(&read_secret_input(arguments, kind.default_env())?)
+}
+
+const MAX_KEY_INPUT_BYTES: usize = 8192;
+const KEY_INPUT_ERROR: &str = "the key input could not be read securely or exceeds the input limit";
+
+fn read_bounded_key(reader: impl Read) -> Result<String, String> {
+    let mut raw = String::new();
+    reader
+        .take(MAX_KEY_INPUT_BYTES as u64 + 1)
+        .read_to_string(&mut raw)
+        .map_err(|_| KEY_INPUT_ERROR.to_owned())?;
+    if raw.len() > MAX_KEY_INPUT_BYTES {
+        return Err(KEY_INPUT_ERROR.to_owned());
+    }
+    Ok(raw)
+}
+
+fn read_secret_input(arguments: &[String], prompt_label: &str) -> Result<String, String> {
     let raw = if let Some(name) = flag_value(arguments, "--from-env") {
-        std::env::var(&name).map_err(|_| format!("the environment variable {name} is not set"))?
+        std::env::var(&name).map_err(|_| KEY_INPUT_ERROR.to_owned())?
     } else if let Some(path) = flag_value(arguments, "--file") {
-        std::fs::read_to_string(&path).map_err(|_| format!("{path} could not be read"))?
+        let metadata = std::fs::metadata(&path).map_err(|_| KEY_INPUT_ERROR.to_owned())?;
+        if !metadata.is_file() || metadata.len() > MAX_KEY_INPUT_BYTES as u64 {
+            return Err(KEY_INPUT_ERROR.to_owned());
+        }
+        read_bounded_key(std::fs::File::open(path).map_err(|_| KEY_INPUT_ERROR.to_owned())?)?
     } else if std::io::stdin().is_terminal() {
-        rpassword::prompt_password(format!("Paste the {} key (hidden): ", kind.default_env()))
-            .map_err(|_| {
-                "the key could not be read securely; use --from-env or --file".to_owned()
-            })?
+        rpassword::prompt_password(format!("Paste the {prompt_label} key (hidden): "))
+            .map_err(|_| KEY_INPUT_ERROR.to_owned())?
     } else {
-        let mut all = String::new();
-        std::io::stdin()
-            .take(1024)
-            .read_to_string(&mut all)
-            .map_err(|error| error.to_string())?;
-        all
+        read_bounded_key(std::io::stdin())?
     };
-    settings::validate_secret(&raw)
+    if raw.len() > MAX_KEY_INPUT_BYTES {
+        return Err(KEY_INPUT_ERROR.to_owned());
+    }
+    Ok(raw)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum McpKeyAction {
+    Set,
+    Remove,
+    Status,
+}
+
+#[derive(Debug)]
+struct McpKeyCommand {
+    action: McpKeyAction,
+    reference: McpSecretRef,
+    json: bool,
+}
+
+const MCP_KEYS_USAGE: &str = "usage: jarvis keys set|remove|status mcp:SERVER:KEY; set reads a hidden prompt, stdin, --file FILE or --from-env NAME (one source only); never pass a key value as an argument";
+
+fn parse_mcp_key_command(arguments: &[String]) -> Result<McpKeyCommand, String> {
+    let mut words = Vec::new();
+    let mut source = None;
+    let mut json = false;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--file" | "--from-env" | "--root" => {
+                let value = arguments.next().filter(|value| !value.starts_with("--"));
+                if value.is_none() {
+                    return Err(MCP_KEYS_USAGE.to_owned());
+                }
+                if argument != "--root" && source.replace(argument.as_str()).is_some() {
+                    return Err(MCP_KEYS_USAGE.to_owned());
+                }
+            }
+            "--json" if !json => json = true,
+            word if word.starts_with('-') => return Err(MCP_KEYS_USAGE.to_owned()),
+            word => words.push(word),
+        }
+    }
+    let ["keys", action, target] = words.as_slice() else {
+        return Err(MCP_KEYS_USAGE.to_owned());
+    };
+    let reference = McpSecretRef::parse(target).map_err(|_| {
+        "invalid MCP key reference; use mcp:SERVER:KEY with lowercase portable names".to_owned()
+    })?;
+    let action = match *action {
+        "set" if !json => McpKeyAction::Set,
+        "remove" if source.is_none() && !json => McpKeyAction::Remove,
+        "status" if source.is_none() => McpKeyAction::Status,
+        _ => return Err(MCP_KEYS_USAGE.to_owned()),
+    };
+    Ok(McpKeyCommand {
+        action,
+        reference,
+        json,
+    })
+}
+
+fn mcp_key_status(paths: &AppPaths, reference: &McpSecretRef, json: bool) -> String {
+    let state = mcp_secrets::state(paths, reference);
+    if json {
+        serde_json::json!({ "reference": reference.as_str(), "state": state }).to_string()
+    } else {
+        format!("{} {state}", reference.as_str())
+    }
+}
+
+fn mcp_keys(paths: &AppPaths, arguments: &[String]) -> Result<(), String> {
+    let command = parse_mcp_key_command(arguments)?;
+    match command.action {
+        McpKeyAction::Set => {
+            let raw = read_secret_input(arguments, "MCP credential")?;
+            mcp_secrets::set(paths, &command.reference, &raw)?;
+            println!("saved. Restart JARVIS to apply MCP key changes: jarvis restart");
+        }
+        McpKeyAction::Remove => {
+            mcp_secrets::remove(paths, &command.reference)?;
+            println!("removed. Restart JARVIS to apply MCP key changes: jarvis restart");
+        }
+        McpKeyAction::Status => {
+            println!(
+                "{}",
+                mcp_key_status(paths, &command.reference, command.json)
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `jarvis keys status|set|remove|test`
@@ -160,6 +267,14 @@ pub async fn keys(
     credential: Option<String>,
 ) -> ExitStatus {
     let words = positionals(arguments);
+    if words.get(2).is_some_and(|target| {
+        target.contains(':')
+            || target
+                .get(..3)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("mcp"))
+    }) {
+        return finish(mcp_keys(paths, arguments));
+    }
     finish(match words.get(1).map(String::as_str) {
         Some("status") | None => {
             status(paths, arguments.iter().any(|argument| argument == "--json"))
@@ -340,5 +455,7 @@ async fn test_voice(paths: &AppPaths, credential: Option<String>) -> Result<(), 
     }
 }
 
+#[cfg(test)]
+mod mcp_tests;
 #[cfg(test)]
 mod tests;

@@ -1,13 +1,15 @@
 ---
 integration: model-context-protocol
 status: researched
-last_verified: 2026-10-11
+last_verified: 2026-10-15
 owners: []
 selected_spec_version: "2026-07-28"
 selected_sdk: "rmcp 3.4.0 (Apache-2.0, Tier 1)"
 ---
 
 # Model Context Protocol
+
+**2026-10-15 focused refresh:** live official index, stdio/authorization contract and pinned rmcp source/release were rechecked for `P11-001b(a)`; no SDK change required. The [stdio credential record](mcp-stdio-credentials.md) controls this new slice, including GitHub v2.0.2, named keys and real-child verification. Older unrelated sections below retain their individual access dates; this refresh does not claim every protocol surface was revalidated.
 
 ## Scope
 

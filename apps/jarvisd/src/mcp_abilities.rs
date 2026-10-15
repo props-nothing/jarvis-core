@@ -119,6 +119,8 @@ impl Ability {
             command,
             endpoint: None,
             read_only: false,
+            env: std::collections::BTreeMap::new(),
+            authorization: None,
             read_only_tools: self
                 .read_only_tools
                 .iter()

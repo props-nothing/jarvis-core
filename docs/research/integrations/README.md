@@ -7,6 +7,8 @@ Every external integration requires a dated record based on current official sou
 | Integration | Official AI/docs index | Record | Status |
 | --- | --- | --- | --- |
 | MCP | https://modelcontextprotocol.io/llms.txt | [mcp.md](mcp.md) | `P3-007` complete: spec `2026-07-28` and `rmcp` 3.4.0 selected; not implemented |
+| Local MCP credentials | https://modelcontextprotocol.io/llms.txt | [mcp-stdio-credentials.md](mcp-stdio-credentials.md) | `P11-001b(a)`: server-bound named keys, explicit child environment and literal redaction built/tested 2026-10-15; GitHub v2.0.2 live-account read/write acceptance remains open |
+| Persistent GitHub Settings OAuth | https://docs.github.com/llms.txt | [github-oauth-settings.md](github-oauth-settings.md) | Persistent PKCE/identity/refresh, current-token read-only MCP and Connections UI built/tested with local fixtures; app registration/browser consent/live GitHub acceptance remain open |
 | Playwright MCP browser | not found; official pinned README/source | [playwright-mcp.md](playwright-mcp.md) | Navigation/literal find verified against 0.0.83 on synthetic loopback pages using Windows Edge; 89 MCP tests passed; no owner-site verification |
 | Web fetch (`jarvis.web.fetch`) | not applicable; IANA special-purpose registries and the pinned `reqwest` 0.13.5 source | [web-fetch.md](web-fetch.md) | `P3-027` implemented; exfiltration through a model-chosen URL is an open question, held for approval by default |
 | Cloudflare quick tunnel (`cloudflared`) | https://developers.cloudflare.com/tunnel/llms.txt | [cloudflare-tunnel.md](cloudflare-tunnel.md) | `ADR-0173` implemented and run live on Windows (download, checksum, tunnel, calls through the public address); **not** run against ElevenLabs, macOS or Linux |

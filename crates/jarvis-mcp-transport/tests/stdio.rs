@@ -41,6 +41,9 @@ use std::path::PathBuf;
 use jarvis_mcp::ServerName;
 use jarvis_mcp_transport::{CallError, StdioCommand, ToolBuffer, connect_stdio};
 
+#[path = "support/stdio_credentials.rs"]
+mod credentials;
+
 /// Environment variable that turns a missing-fixture skip into a failure.
 ///
 /// Deliberately not prefixed `JARVIS_`: the daemon treats every unknown `JARVIS_*` variable as a

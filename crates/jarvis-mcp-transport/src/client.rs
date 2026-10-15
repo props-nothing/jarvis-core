@@ -34,8 +34,13 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::Value;
 
+use crate::credentials::{
+    CredentialEnvironment, CredentialRedactor, McpSecretResolver, UnavailableSecrets,
+    validate_references,
+};
 use crate::endpoint::{McpHttpEndpoint, build_http_client};
 use crate::error::{CallError, ConnectError, ListError};
+use crate::http_auth::{AuthorizedHttpClient, HttpCredentialProvider};
 use crate::revision::{MODERN_REVISION, modern_revision};
 
 /// Identity JARVIS advertises to a server, and the version it advertises it with.
@@ -70,6 +75,7 @@ pub enum McpEra {
 pub struct StdioCommand {
     program: String,
     args: Vec<String>,
+    credentials: CredentialEnvironment,
 }
 
 impl StdioCommand {
@@ -91,7 +97,33 @@ impl StdioCommand {
         Ok(Self {
             program: program.to_owned(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            credentials: CredentialEnvironment {
+                references: std::collections::BTreeMap::new(),
+                resolver: std::sync::Arc::new(UnavailableSecrets),
+            },
         })
+    }
+
+    /// Adds credential references for this server; values are resolved only when it starts.
+    ///
+    /// # Errors
+    ///
+    /// Refuses non-credential variable names, literal values, or another server's references.
+    pub fn with_credentials(
+        mut self,
+        server: &str,
+        environment: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Self, ConnectError> {
+        self.credentials.references =
+            validate_references(server, environment).map_err(ConnectError::Unreachable)?;
+        Ok(self)
+    }
+
+    /// Supplies the profile-owned resolver; no secret is read or retained in the command.
+    #[must_use]
+    pub fn with_secret_resolver(mut self, resolver: std::sync::Arc<dyn McpSecretResolver>) -> Self {
+        self.credentials.resolver = resolver;
+        self
     }
 
     /// Returns the program this command runs.
@@ -151,6 +183,7 @@ pub struct McpConnection {
     recipe: Option<Recipe>,
     /// When the last attempt to start it again failed. Also serialises the attempts.
     restart: tokio::sync::Mutex<Option<std::time::Instant>>,
+    redactor: std::sync::Arc<std::sync::RwLock<CredentialRedactor>>,
 }
 
 /// The SDK's running service for a client.
@@ -165,6 +198,7 @@ const RESTART_BACKOFF: Duration = Duration::from_secs(10);
 enum Recipe {
     Stdio(StdioCommand),
     Http(McpHttpEndpoint),
+    HttpWithAuth(AuthorizedHttpClient),
 }
 
 impl std::fmt::Debug for McpConnection {
@@ -240,13 +274,34 @@ impl McpConnection {
         }
         let started = match recipe {
             Recipe::Stdio(command) => match stdio_transport(command) {
-                Ok(transport) => negotiate(transport).await,
+                Ok((transport, redactor)) => {
+                    self.redactor
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .extend(redactor.values());
+                    negotiate(transport).await.map_err(|error| {
+                        let guard = self
+                            .redactor
+                            .read()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        redact_connect_error(error, &guard)
+                    })
+                }
                 Err(error) => Err(error),
             },
             Recipe::Http(endpoint) => match http_transport(endpoint) {
                 Ok(transport) => negotiate(transport).await,
                 Err(error) => Err(error),
             },
+            Recipe::HttpWithAuth(client) => negotiate(authorized_http_transport(client))
+                .await
+                .map_err(|error| {
+                    let guard = self
+                        .redactor
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    redact_connect_error(error, &guard)
+                }),
         };
         match started {
             Ok(service) => {
@@ -295,7 +350,16 @@ impl McpConnection {
             .and_then(|info| info.server_info.clone())
             .map_or_else(
                 || ReportedIdentity::new("", None),
-                |reported| ReportedIdentity::new(&reported.name, reported.title.as_deref()),
+                |reported| {
+                    ReportedIdentity::new(
+                        &self.redact(&reported.name),
+                        reported
+                            .title
+                            .as_deref()
+                            .map(|title| self.redact(title))
+                            .as_deref(),
+                    )
+                },
             )
     }
 
@@ -333,11 +397,28 @@ impl McpConnection {
         buffer: &'a mut ToolBuffer,
     ) -> Result<Vec<McpToolListing<'a>>, ListError> {
         self.ensure_live().await.map_err(ListError::Unavailable)?;
-        let tools = self
-            .live()
-            .list_all_tools()
-            .await
-            .map_err(|error| classify_list(&error))?;
+        let tools =
+            self.live()
+                .list_all_tools()
+                .await
+                .map_err(|error| match classify_list(&error) {
+                    ListError::Unavailable(text) => ListError::Unavailable(self.redact(&text)),
+                    ListError::PeerError(text) => ListError::PeerError(self.redact(&text)),
+                })?;
+        let tools = tools
+            .into_iter()
+            .map(|tool| {
+                let mut value = serde_json::to_value(tool).map_err(|_| {
+                    ListError::Unavailable("the tool list could not be normalized".to_owned())
+                })?;
+                self.redact_value(&mut value);
+                serde_json::from_value(value).map_err(|_| {
+                    ListError::Unavailable(
+                        "the redacted tool list could not be normalized".to_owned(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<Tool>, ListError>>()?;
         // The buffer is rebuilt in one pass so every borrow handed out refers to it, not to the
         // SDK's values. `list_all_tools` has already resolved pagination, so no cursor is left
         // dangling here — the SDK's own `next_cursor` handling is what `P3-007` verified.
@@ -352,16 +433,18 @@ impl McpConnection {
     /// Returns the SDK's message when cancellation failed, as text: a caller deciding whether to log
     /// a shutdown failure does not need the SDK's error type to do it.
     pub async fn close(self) -> Result<(), String> {
+        let redactor = self.redactor;
         let service = self
             .service
             .into_inner()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match std::sync::Arc::try_unwrap(service) {
-            Ok(service) => service
-                .cancel()
-                .await
-                .map(|_reason| ())
-                .map_err(|error| error.to_string()),
+            Ok(service) => service.cancel().await.map(|_reason| ()).map_err(|error| {
+                redactor
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .text(&error.to_string())
+            }),
             // A call still holds the service: stop it by token, which ends the child the same way.
             Err(shared) => {
                 shared.cancellation_token().cancel();
@@ -403,13 +486,18 @@ impl McpConnection {
         // make the caller believe work was finished that had not started.
         // Started again first if it had stopped. Failing here means nothing was sent.
         self.ensure_live().await.map_err(CallError::NotSent)?;
-        let response = self
-            .live()
-            .call_tool_once(params)
-            .await
-            .map_err(|error| CallError::from_sdk(&error))?;
+        let response = self.live().call_tool_once(params).await.map_err(|error| {
+            redact_call_error(CallError::from_sdk(&error), |text| self.redact(text))
+        })?;
         match response {
-            CallToolResponse::Complete(result) => Ok(McpCallResult::from_sdk(&result)),
+            CallToolResponse::Complete(result) => {
+                let mut result = McpCallResult::from_sdk(&result);
+                result.text = self.redact(&result.text);
+                if let Some(structured) = &mut result.structured {
+                    self.redact_value(structured);
+                }
+                Ok(result)
+            }
             CallToolResponse::InputRequired(_) => Err(CallError::InputRequired),
             CallToolResponse::Task(_) => Err(CallError::Task),
             // `CallToolResponse` is `#[non_exhaustive]`, so an SDK bump can add a response kind. It
@@ -422,6 +510,24 @@ impl McpConnection {
                     .to_owned(),
             )),
         }
+    }
+}
+
+fn redact_connect_error(error: ConnectError, redactor: &CredentialRedactor) -> ConnectError {
+    match error {
+        ConnectError::Unreachable(text) => ConnectError::Unreachable(redactor.text(&text)),
+        ConnectError::Refused(text) => ConnectError::Refused(redactor.text(&text)),
+        other @ ConnectError::DiscoveryTimedOut { .. } => other,
+    }
+}
+
+fn redact_call_error(error: CallError, redact: impl Fn(&str) -> String) -> CallError {
+    match error {
+        CallError::NotSent(text) => CallError::NotSent(redact(&text)),
+        CallError::Unavailable(text) => CallError::Unavailable(redact(&text)),
+        CallError::PeerError(text) => CallError::PeerError(redact(&text)),
+        CallError::Undecodable(text) => CallError::Undecodable(redact(&text)),
+        other @ (CallError::InputRequired | CallError::Task) => other,
     }
 }
 
@@ -639,22 +745,38 @@ pub async fn connect_stdio(
     server: &ServerName,
     command: &StdioCommand,
 ) -> Result<McpConnection, ConnectError> {
-    let transport = stdio_transport(command)?;
-    let service = negotiate(transport).await?;
-    Ok(McpConnection::new(
-        server,
-        service,
-        Some(Recipe::Stdio(command.clone())),
-    ))
+    if command
+        .credentials
+        .references
+        .values()
+        .any(|reference| reference.server() != server.as_str())
+    {
+        return Err(ConnectError::Unreachable(
+            "credential reference belongs to another server".to_owned(),
+        ));
+    }
+    let (transport, redactor) = stdio_transport(command)?;
+    let service = negotiate(transport)
+        .await
+        .map_err(|error| redact_connect_error(error, &redactor))?;
+    let connection = McpConnection::new(server, service, Some(Recipe::Stdio(command.clone())));
+    *connection
+        .redactor
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = redactor;
+    Ok(connection)
 }
 
 /// Builds the child-process transport for a command.
 fn stdio_transport(
     command: &StdioCommand,
-) -> Result<rmcp::transport::TokioChildProcess, ConnectError> {
+) -> Result<(rmcp::transport::TokioChildProcess, CredentialRedactor), ConnectError> {
     use rmcp::transport::TokioChildProcess;
     use tokio::process::Command;
 
+    let environment = command.credentials.resolve()?;
+    let mut redactor = CredentialRedactor::default();
+    redactor.extend(environment.values().cloned());
     let mut child = Command::new(command.program());
     child.args(command.args());
     // **The server starts with an allowlisted environment, not the daemon's.** The first real server
@@ -664,7 +786,17 @@ fn stdio_transport(
     // not by leaking.
     child.env_clear();
     child.envs(allowed_environment(std::env::vars_os()));
-    TokioChildProcess::new(child).map_err(|error| ConnectError::Unreachable(error.to_string()))
+    child.envs(environment);
+    // The SDK's convenience constructor inherits stderr even if Command configured it otherwise.
+    // Credential-bearing children must not print their environment into the daemon's logs.
+    let mut builder = TokioChildProcess::builder(child);
+    if !command.credentials.references.is_empty() {
+        builder = builder.stderr(std::process::Stdio::null());
+    }
+    let (transport, _) = builder
+        .spawn()
+        .map_err(|error| ConnectError::Unreachable(redactor.text(&error.to_string())))?;
+    Ok((transport, redactor))
 }
 
 /// The variables a server is given: what a program needs to start and find its way around, and nothing
@@ -769,6 +901,50 @@ pub async fn connect_http(
     ))
 }
 
+/// Connects using a current token for every HTTP operation, including reconnect and cleanup.
+///
+/// Only binding `github`, server `github` and the exact GitHub read-only endpoint are supported.
+/// No token is retained in the connection recipe; a provider refusal prevents the HTTP request.
+///
+/// # Errors
+///
+/// As [`connect_http`], plus an opaque refusal for an invalid binding or unavailable credential.
+pub async fn connect_http_with_auth(
+    server: &ServerName,
+    endpoint: &McpHttpEndpoint,
+    binding: &str,
+    provider: std::sync::Arc<dyn HttpCredentialProvider>,
+) -> Result<McpConnection, ConnectError> {
+    let client = AuthorizedHttpClient::new(server.as_str(), endpoint, binding, provider)?;
+    connect_authorized_http(server, client).await
+}
+
+pub(crate) async fn connect_authorized_http(
+    server: &ServerName,
+    client: AuthorizedHttpClient,
+) -> Result<McpConnection, ConnectError> {
+    let service = negotiate(authorized_http_transport(&client))
+        .await
+        .map_err(|error| {
+            let guard = client
+                .redactor
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            redact_connect_error(error, &guard)
+        })?;
+    let mut connection = McpConnection::new(server, service, None);
+    connection.redactor = std::sync::Arc::clone(&client.redactor);
+    connection.recipe = Some(Recipe::HttpWithAuth(client));
+    Ok(connection)
+}
+
+fn authorized_http_transport(
+    client: &AuthorizedHttpClient,
+) -> StreamableHttpClientTransport<AuthorizedHttpClient> {
+    let config = StreamableHttpClientTransportConfig::with_uri(client.endpoint().to_owned());
+    StreamableHttpClientTransport::with_client(client.clone(), config)
+}
+
 /// Builds the Streamable HTTP transport for an endpoint.
 fn http_transport(
     endpoint: &McpHttpEndpoint,
@@ -855,7 +1031,22 @@ impl McpConnection {
             service: std::sync::RwLock::new(std::sync::Arc::new(service)),
             recipe,
             restart: tokio::sync::Mutex::new(None),
+            redactor: std::sync::Arc::new(std::sync::RwLock::new(CredentialRedactor::default())),
         }
+    }
+
+    fn redact(&self, text: &str) -> String {
+        self.redactor
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .text(text)
+    }
+
+    fn redact_value(&self, value: &mut Value) {
+        self.redactor
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .value(value);
     }
 }
 

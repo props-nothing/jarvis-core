@@ -86,6 +86,10 @@ pub struct GatewayState {
     settings: Option<crate::settings_service::SettingsContext>,
     /// The Google sign-in, when settings are available (ADR-0149).
     google: Option<Arc<crate::google_account::GoogleAccount>>,
+    /// The persistent GitHub account used by Settings and the authenticated MCP transport.
+    github: Option<Arc<crate::github_account::GithubAccount>>,
+    /// The currently bound listener, which may differ from an unapplied saved setting.
+    http_port: Option<u16>,
     /// What the MCP servers turned out to be when the daemon started (`P11-001`).
     mcp: Arc<crate::mcp_admin::McpSnapshot>,
     /// The key for other apps that connect to JARVIS, when the daemon has one to manage (`ADR-0170`).
@@ -114,6 +118,8 @@ impl GatewayState {
             speech: None,
             settings: None,
             google: None,
+            github: None,
+            http_port: None,
             mcp: Arc::new(crate::mcp_admin::McpSnapshot::default()),
             mcp_access: None,
             telegram: None,
@@ -226,6 +232,28 @@ impl GatewayState {
     #[must_use]
     pub fn google(&self) -> Option<&Arc<crate::google_account::GoogleAccount>> {
         self.google.as_ref()
+    }
+
+    /// Attaches the profile-shared GitHub account.
+    #[must_use]
+    pub fn with_github(mut self, github: Arc<crate::github_account::GithubAccount>) -> Self {
+        self.github = Some(github);
+        self
+    }
+
+    pub(crate) fn github(&self) -> Option<&Arc<crate::github_account::GithubAccount>> {
+        self.github.as_ref()
+    }
+
+    /// Records the live listener port for local OAuth redirects.
+    #[must_use]
+    pub fn with_http_port(mut self, port: u16) -> Self {
+        self.http_port = Some(port);
+        self
+    }
+
+    pub(crate) const fn http_port(&self) -> Option<u16> {
+        self.http_port
     }
 
     /// Returns the settings context, when the profile location is known.
@@ -451,6 +479,10 @@ pub fn router(state: GatewayState) -> Router {
             crate::google_account::CALLBACK_PATH,
             get(crate::google_service::callback),
         )
+        .route(
+            crate::github_account::CALLBACK_PATH,
+            get(crate::github_service::callback),
+        )
         .nest("/api/v1", api)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate))
@@ -468,6 +500,7 @@ fn service_routes() -> Router<GatewayState> {
         .merge(crate::phone_service::routes())
         .merge(crate::image_store::routes())
         .merge(crate::google_service::routes())
+        .merge(crate::github_service::routes())
         .merge(crate::contacts_service::routes())
         .merge(crate::digest_service::routes())
         .merge(crate::push::routes())
@@ -490,7 +523,9 @@ async fn authenticate(State(state): State<GatewayState>, request: Request, next:
         return next.run(request).await;
     }
     // The browser's return from Google carries no credential; it is inert unless it answers a sign-in started with one.
-    if crate::google_service::is_oauth_callback(request.method(), request.uri().path()) {
+    if crate::google_service::is_oauth_callback(request.method(), request.uri().path())
+        || crate::github_service::is_oauth_callback(request.method(), request.uri().path())
+    {
         return next.run(request).await;
     }
     // A webhook delivery has no credential; its secret in the address is looked up (by hash) and answered `404` when it is not one.

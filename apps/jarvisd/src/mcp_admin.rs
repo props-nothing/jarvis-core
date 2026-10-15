@@ -139,6 +139,10 @@ pub struct Configured {
     pub endpoint: Option<String>,
     /// `read-only` or `unclassified`.
     pub posture: String,
+    /// Credential variable to named-reference mappings. No values or key file paths.
+    pub env: std::collections::BTreeMap<String, String>,
+    /// A supported account binding, never an access token.
+    pub authorization: Option<String>,
 }
 
 /// What a request asks to add or test.
@@ -160,6 +164,12 @@ pub struct ServerBody {
     /// Tools of this server that only read, by the server's own names, while the rest keep asking.
     #[serde(default)]
     pub read_only_tools: Vec<String>,
+    /// Credential variables mapped only to this server's named references.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    /// The explicitly selected OAuth account for a supported remote server.
+    #[serde(default)]
+    pub authorization: Option<String>,
 }
 
 /// Finds a program the way the operating system would, and returns the absolute path.
@@ -257,9 +267,26 @@ fn entry_table(
         (true, None) => return Err("give a command to run, or an endpoint URL".to_owned()),
         (false, Some(_)) => return Err("give a command or an endpoint, not both".to_owned()),
     }
+    if let Some(authorization) = &body.authorization {
+        if !body.command.is_empty() {
+            return Err("OAuth account binding requires a supported remote server".to_owned());
+        }
+        transport.insert("authorization".into(), authorization.clone().into());
+    }
     let mut entry = toml::Table::new();
     entry.insert("name".into(), body.name.trim().into());
     entry.insert("transport".into(), toml::Value::Table(transport));
+    if !body.env.is_empty() {
+        entry.insert(
+            "env".into(),
+            toml::Value::Table(
+                body.env
+                    .iter()
+                    .map(|(name, reference)| (name.clone(), toml::Value::String(reference.clone())))
+                    .collect(),
+            ),
+        );
+    }
     if body.read_only || !body.read_only_tools.is_empty() {
         let mut posture = toml::Table::new();
         if body.read_only {
@@ -341,6 +368,43 @@ pub fn add_to_document(
     render_checked(&table)
 }
 
+/// The owner-selected GitHub OAuth integration. Never replaces an unrelated server entry.
+pub(crate) fn github_document(document: Option<&str>) -> Result<String, String> {
+    if let Some(existing) = configured_servers(document)
+        .into_iter()
+        .find(|server| server.name == "github")
+    {
+        if existing.kind == "http"
+            && existing.endpoint.as_deref() == Some(crate::github_service::MCP_ENDPOINT)
+            && existing.authorization.as_deref() == Some("github")
+            && existing.posture == "read-only"
+        {
+            return Ok(document.unwrap_or_default().to_owned());
+        }
+        return Err("A different program named github is already configured. Remove or rename it under Advanced, Programs before connecting GitHub here.".to_owned());
+    }
+    add_to_document(
+        document,
+        &ServerBody {
+            name: "github".to_owned(),
+            command: Vec::new(),
+            endpoint: Some(crate::github_service::MCP_ENDPOINT.to_owned()),
+            read_only: true,
+            read_only_tools: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+            authorization: Some("github".to_owned()),
+        },
+        &find_program_on_path,
+    )
+}
+
+pub(crate) async fn configure_github(paths: &jarvis_storage::AppPaths) -> Result<(), String> {
+    let _guard = EDIT_LOCK.lock().await;
+    let current = read_document(paths.config())?;
+    let updated = github_document(current.as_deref())?;
+    write_document(paths.config(), &updated)
+}
+
 /// Returns the document with one server removed.
 ///
 /// # Errors
@@ -367,6 +431,9 @@ pub fn remove_from_document(document: Option<&str>, name: &str) -> Result<String
 /// Lists the servers a document configures.
 #[must_use]
 pub fn configured_servers(document: Option<&str>) -> Vec<Configured> {
+    if McpHostConfig::parse(document.unwrap_or_default()).is_err() {
+        return Vec::new();
+    }
     let Ok(table) = parse_table(document) else {
         return Vec::new();
     };
@@ -386,6 +453,21 @@ pub fn configured_servers(document: Option<&str>) -> Vec<Configured> {
                 command.extend(args.iter().filter_map(|a| a.as_str().map(str::to_owned)));
             }
             Some(Configured {
+                authorization: transport
+                    .get("authorization")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned),
+                env: entry
+                    .get("env")
+                    .and_then(toml::Value::as_table)
+                    .map(|env| {
+                        env.iter()
+                            .filter_map(|(name, reference)| {
+                                Some((name.clone(), reference.as_str()?.to_owned()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 name,
                 kind,
                 command,
@@ -429,6 +511,7 @@ fn restart_needed(loaded: Option<&str>, current: Option<&str>) -> bool {
 
 fn overview_json(state: &GatewayState, current: Option<&str>) -> serde_json::Value {
     let snapshot = state.mcp();
+    let settings = state.settings();
     let servers: Vec<_> = configured_servers(current)
         .into_iter()
         .map(|configured| {
@@ -442,6 +525,9 @@ fn overview_json(state: &GatewayState, current: Option<&str>) -> serde_json::Val
                 "command": configured.command,
                 "endpoint": configured.endpoint,
                 "posture": configured.posture,
+                "env": configured.env,
+                "authorization": configured.authorization,
+                "credentials": settings.map(|settings| crate::mcp_credentials::states(settings.paths(), &configured.env)).unwrap_or_default(),
                 // A server in the file the daemon did not start with has not been tried yet.
                 "state": status.map_or("not_started", |status| status.state),
                 "reason": status.and_then(|status| status.reason.clone()),
@@ -669,9 +755,10 @@ pub async fn remove(State(state): State<GatewayState>, UrlPath(name): UrlPath<St
 
 /// `POST /api/v1/mcp/test`: connect to a server once, list what it offers, and disconnect. Nothing is saved.
 pub async fn test(State(state): State<GatewayState>, Json(mut body): Json<ServerBody>) -> Response {
-    if let Err(response) = context(&state) {
-        return response;
-    }
+    let context = match context(&state) {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
     if body.name.trim().is_empty() {
         "test".clone_into(&mut body.name);
     }
@@ -679,8 +766,11 @@ pub async fn test(State(state): State<GatewayState>, Json(mut body): Json<Server
         Ok(text) => text,
         Err(message) => return refused(&message),
     };
-    let report = match tokio::time::timeout(TEST_DEADLINE, crate::mcp_host::try_connect(&document))
-        .await
+    let report = match tokio::time::timeout(
+        TEST_DEADLINE,
+        crate::mcp_host::try_connect(&document, context.paths()),
+    )
+    .await
     {
         Ok(report) => report,
         Err(_elapsed) => {
@@ -720,6 +810,8 @@ mod tests {
             endpoint: None,
             read_only: false,
             read_only_tools: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+            authorization: None,
         }
     }
 
@@ -732,6 +824,36 @@ mod tests {
         assert_eq!(listed[0].name, "files");
         assert_eq!(listed[0].command, ["/usr/bin/npx", "-y", "some-server"]);
         assert_eq!(listed[0].posture, "unclassified", "no class is inferred");
+    }
+
+    #[test]
+    fn credential_references_round_trip_without_changing_permission_posture() {
+        let mut request = body("github", &["github-mcp-server", "stdio"]);
+        request.env.insert(
+            "GITHUB_PERSONAL_ACCESS_TOKEN".to_owned(),
+            "mcp:github:token".to_owned(),
+        );
+        let document =
+            add_to_document(None, &request, &found).unwrap_or_else(|error| panic!("{error}"));
+        let servers = configured_servers(Some(&document));
+        assert_eq!(servers[0].env, request.env);
+        assert_eq!(servers[0].posture, "unclassified");
+        for invalid in ["synthetic-literal-key", "mcp:other:token"] {
+            request.env.insert(
+                "GITHUB_PERSONAL_ACCESS_TOKEN".to_owned(),
+                invalid.to_owned(),
+            );
+            let error = add_to_document(None, &request, &found)
+                .err()
+                .unwrap_or_else(|| panic!("must reject"));
+            assert!(!error.contains(invalid));
+        }
+        assert!(
+            configured_servers(Some(
+                &document.replace("mcp:github:token", "synthetic-literal-key")
+            ))
+            .is_empty()
+        );
     }
 
     #[test]

@@ -23,6 +23,8 @@ The phase descriptions below are gates and dependency order, **not a list of com
 
 ## Current Acceptance Slice (selected 2026-10-15)
 
+**OAuth-first Settings** was selected after the local credential slice: Settings → Connections now provides persistent GitHub app sign-in, verified account storage/refresh and a fixed hosted read-only MCP binding ([ADR-0217](docs/adr/0217-github-settings-use-persistent-pkce-sign-in-and-current-token-mcp-requests.md)). One-time registration of the owner's GitHub OAuth app remains necessary; live browser consent/provider acceptance and native platform checks stay open. Generic MCP OAuth discovery and automatic hot tool registration are not claimed. See [Connections](docs/user/connections.md) and [the acceptance evidence](TODO.md#oauth-first-settings-connections-2026-10-15).
+
 The owner selected **task-aware memory** (`P11-026`, [ADR-0215](docs/adr/0215-native-recall-searches-the-task-before-falling-back-to-recent-memory.md)) after the capability review. The native executor now searches canonical memory for the current task before falling back to recent context, supplies fenced provenance, and records its selection. A deterministic 30-question fixture benchmark retrieves the expected old fact first in 30/30 cases, versus 0/30 in the former newest-24 candidate set. This is built and tested offline; live-model answer quality and corpus latency/token comparisons remain open. It does not complete semantic, project/file or relationship retrieval under `P11-014`. See [memory behavior and limits](docs/user/memory.md) and [the acceptance ledger](TODO.md#owner-selected-task-aware-memory-2026-10-15).
 
 ## Current Direction (reviewed 2026-10-10)
@@ -53,7 +55,7 @@ Measured against the four hallmarks of a real J.A.R.V.I.S.:
 **Order of work from here** (the same list, with detail, is at the top of `TODO.md`; the reasoning is `ADR-0167`: open protocols before bespoke code):
 
 0. **Check what is only tested against stand-ins** with the owner's own accounts (OCR, the second provider, the push, a reply from another sender).
-1. ~~**MCP made real and manageable** (`P11-001`)~~ **built and run live on two real servers** (`ADR-0168`): the door to every tool that already exists as an MCP server. A server that needs a key, and a remote one, are open (`P11-001b`).
+1. ~~**MCP made real and manageable** (`P11-001`)~~ **built and run live on two real servers** (`ADR-0168`): the door to every tool that already exists as an MCP server. Local server-bound credential references are now built and tested through real child processes (`P11-001b(a)`, `ADR-0216`); GitHub account read/approval/write evidence, remote authorization and hot apply remain open. See [credential setup](docs/user/mcp.md#a-local-server-that-needs-a-key).
 2. ~~**Tool discovery** (`P11-002`)~~ **delivered** (`ADR-0176`): tools are selected for the request without making any unreachable. Meaning-based ranking and broader model comparisons remain open.
 2b. ~~**Connect apps**~~ **built** (`ADR-0170`): one switch and one key let Claude Code, Cursor, VS Code or a script use JARVIS, including starting a run with `jarvis.agent.delegate`; approvals stay with the owner.
 3. ~~**A browser**~~ **built as a one-click ability** (`P11-001c`, `ADR-0169`): JavaScript pages and acting on the web; a measured hostile-page eval is still owed (`P11-003`).

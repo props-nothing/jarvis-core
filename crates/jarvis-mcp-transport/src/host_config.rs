@@ -30,12 +30,10 @@
 //!
 //! # No credential appears in this document
 //!
-//! A server entry names a program or a URL and nothing else. A bearer token for a remote endpoint would
-//! be a secret in a plaintext configuration file that is then a substring of every log line mentioning
-//! the endpoint — the mistake `ApiKey::new` refuses for provider keys. [`McpHttpEndpoint`] refuses a URL
-//! with embedded userinfo for the same reason, so the two rules meet: the configuration cannot hold a
-//! credential even accidentally. A remote server needing authentication is a slice of its own, and it
-//! belongs in the credential store rather than here.
+//! A server entry may map credential environment names to same-server named references, never values
+//! or arbitrary file paths (`ADR-0216`). The profile's resolver supplies them only before a stdio child
+//! starts. HTTP authorization names a provider binding, never a token. The GitHub binding is restricted
+//! to the `github` server and its exact remote read-only endpoint.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -129,6 +127,9 @@ struct ServerDocument {
     /// What its tools may do. Absent means nobody has classified it.
     #[serde(default)]
     posture: PostureDocument,
+    /// Credential variables mapped to profile-owned named references, never literal values.
+    #[serde(default)]
+    env: std::collections::BTreeMap<String, String>,
 }
 
 /// How a server is reached.
@@ -169,6 +170,9 @@ struct StdioDocument {
 struct HttpDocument {
     /// The endpoint URL, validated by [`McpHttpEndpoint`].
     endpoint: String,
+    /// An optional account binding; never a literal credential.
+    #[serde(default)]
+    authorization: Option<String>,
 }
 
 /// The posture an operator stated.
@@ -223,6 +227,13 @@ pub enum ServerTransport {
     Stdio(StdioCommand),
     /// A remote endpoint, already validated.
     Http(McpHttpEndpoint),
+    /// A remote endpoint with a validated, server-bound account reference, never a token.
+    HttpWithAuth {
+        /// The exact supported destination.
+        endpoint: McpHttpEndpoint,
+        /// The supported account binding.
+        binding: String,
+    },
 }
 
 /// A validated host configuration: what to connect to, and what each server's tools may do.
@@ -282,7 +293,29 @@ impl McpHostConfig {
                     server: name.to_string(),
                 });
             }
-            let transport = ServerTransport::from_document(&name, entry.transport)?;
+            let mut transport = ServerTransport::from_document(&name, entry.transport)?;
+            match &mut transport {
+                ServerTransport::Stdio(command) => {
+                    *command = command
+                        .clone()
+                        .with_credentials(name.as_str(), &entry.env)
+                        .map_err(|error| HostConfigError::Transport {
+                            server: name.to_string(),
+                            reason: error.to_string(),
+                        })?;
+                }
+                ServerTransport::Http(_) | ServerTransport::HttpWithAuth { .. }
+                    if !entry.env.is_empty() =>
+                {
+                    return Err(HostConfigError::Transport {
+                        server: name.to_string(),
+                        reason:
+                            "environment credentials are supported only for local stdio servers"
+                                .to_owned(),
+                    });
+                }
+                ServerTransport::Http(_) | ServerTransport::HttpWithAuth { .. } => {}
+            }
             servers.push(ConfiguredServer {
                 name,
                 policy: entry
@@ -372,6 +405,42 @@ impl McpHostConfig {
         &self,
         seen_before: &[jarvis_mcp::ObservedServer],
     ) -> Result<McpHost, HostError> {
+        self.connect_with_secrets(
+            seen_before,
+            Arc::new(crate::credentials::UnavailableSecrets),
+        )
+        .await
+    }
+
+    /// Connects with a profile-owned resolver for explicit stdio credential references.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`]. A missing credential makes only its server unreadable before spawn.
+    pub async fn connect_with_secrets(
+        &self,
+        seen_before: &[jarvis_mcp::ObservedServer],
+        resolver: Arc<dyn crate::McpSecretResolver>,
+    ) -> Result<McpHost, HostError> {
+        self.connect_with_auth(
+            seen_before,
+            resolver,
+            Arc::new(crate::UnavailableHttpCredentials),
+        )
+        .await
+    }
+
+    /// Connects with independent stdio secret and current HTTP token providers.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`]. An unavailable credential makes only its server unreadable.
+    pub async fn connect_with_auth(
+        &self,
+        seen_before: &[jarvis_mcp::ObservedServer],
+        stdio_resolver: Arc<dyn crate::McpSecretResolver>,
+        http_provider: Arc<dyn crate::HttpCredentialProvider>,
+    ) -> Result<McpHost, HostError> {
         let strategy = self.naming;
         if self.servers.is_empty() {
             return Err(HostError::NoServers);
@@ -387,13 +456,22 @@ impl McpHostConfig {
         // Connected **at the same time**: each can take most of the handshake deadline (a first start of
         // `npx` downloads the program), and one after another a slow or dead server delayed the daemon's
         // start by its whole wait. The order of the results is the order configured.
-        let attempts =
-            self.servers
-                .iter()
-                .zip(&self.transports)
-                .map(|(configured, transport)| async move {
-                    (configured, transport.connect(&configured.name).await)
-                });
+        let attempts = self
+            .servers
+            .iter()
+            .zip(&self.transports)
+            .map(|(configured, transport)| {
+                let resolver = Arc::clone(&stdio_resolver);
+                let provider = Arc::clone(&http_provider);
+                async move {
+                    (
+                        configured,
+                        transport
+                            .connect(&configured.name, resolver, provider)
+                            .await,
+                    )
+                }
+            });
         for (configured, outcome) in futures_util::future::join_all(attempts).await {
             match outcome {
                 Ok(connection) => opened.push((configured.clone(), connection)),
@@ -484,23 +562,46 @@ impl ServerTransport {
                 })?;
                 Ok(Self::Stdio(command))
             }
-            TransportDocument::Http(HttpDocument { endpoint }) => {
+            TransportDocument::Http(HttpDocument {
+                endpoint,
+                authorization,
+            }) => {
+                if let Some(binding) = &authorization {
+                    crate::http_auth::validate_binding(server.as_str(), &endpoint, binding)
+                        .map_err(|reason| HostConfigError::Transport {
+                            server: server.to_string(),
+                            reason,
+                        })?;
+                }
                 let endpoint = McpHttpEndpoint::parse(&endpoint).map_err(|error| {
                     HostConfigError::Transport {
                         server: server.to_string(),
                         reason: describe_endpoint_error(&error),
                     }
                 })?;
-                Ok(Self::Http(endpoint))
+                Ok(match authorization {
+                    Some(binding) => Self::HttpWithAuth { endpoint, binding },
+                    None => Self::Http(endpoint),
+                })
             }
         }
     }
 
     /// Connects to the server this transport describes.
-    async fn connect(&self, server: &ServerName) -> Result<std::sync::Arc<McpConnection>, String> {
+    async fn connect(
+        &self,
+        server: &ServerName,
+        resolver: Arc<dyn crate::McpSecretResolver>,
+        provider: Arc<dyn crate::HttpCredentialProvider>,
+    ) -> Result<std::sync::Arc<McpConnection>, String> {
         let connection = match self {
-            Self::Stdio(command) => crate::connect_stdio(server, command).await,
+            Self::Stdio(command) => {
+                crate::connect_stdio(server, &command.clone().with_secret_resolver(resolver)).await
+            }
             Self::Http(endpoint) => crate::connect_http(server, endpoint).await,
+            Self::HttpWithAuth { endpoint, binding } => {
+                crate::connect_http_with_auth(server, endpoint, binding, provider).await
+            }
         };
         connection.map(std::sync::Arc::new).map_err(|error| {
             // The transport's own message is the actionable part, and it already distinguishes an

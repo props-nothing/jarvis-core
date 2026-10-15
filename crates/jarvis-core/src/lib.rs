@@ -105,7 +105,7 @@ pub use schedule::{
     MAX_SCHEDULES_PER_WORKSPACE, MIN_INTERVAL_SECONDS, QuietHours, WallClock, Weekdays,
     parse_interval, system_zone, validate_objective,
 };
-pub use secret::{SecretRef, SecretRefValidationError};
+pub use secret::{McpSecretRef, SecretRef, SecretRefValidationError};
 pub use sensitivity::{InvalidSensitivity, Sensitivity};
 pub use session::{InvalidSessionField, MAX_SESSION_TITLE_CHARS, SessionChannel, SessionStatus};
 pub use skill::{

@@ -193,12 +193,22 @@ pub(crate) fn statuses_of(host: &McpHost) -> Vec<crate::mcp_admin::ServerStatus>
 ///
 /// For the **test** button and `jarvis mcp test`: the same parser, the same connection code and the same tool
 /// translation the daemon uses at start, so a server that passes here is one the daemon will serve the same way.
-pub(crate) async fn try_connect(document: &str) -> serde_json::Value {
+pub(crate) async fn try_connect(
+    document: &str,
+    paths: &jarvis_storage::AppPaths,
+) -> serde_json::Value {
     let config = match McpHostConfig::parse(document) {
         Ok(config) => config,
         Err(error) => return serde_json::json!({ "ok": false, "message": error.to_string() }),
     };
-    let host = match config.connect(&[]).await {
+    let host = match config
+        .connect_with_auth(
+            &[],
+            Arc::new(crate::mcp_credentials::ProfileSecrets(paths.clone())),
+            Arc::new(crate::mcp_credentials::ProfileHttpSecrets::new(paths)),
+        )
+        .await
+    {
         Ok(host) => host,
         Err(error) => return serde_json::json!({ "ok": false, "message": error.to_string() }),
     };
@@ -291,8 +301,28 @@ pub fn load_document(directory: &Path) -> Result<Option<String>, HostComposeErro
 /// for a configuration whose servers collide. Note that a server which cannot be **contacted** is not an
 /// error: it is reported in [`ComposedHost::unreadable`], because one flaky third-party process must not
 /// remove the others' tools.
+#[cfg(test)]
 pub async fn compose_host(
     document: Option<&str>,
+) -> Result<Option<ComposedHost>, HostComposeError> {
+    compose_host_resolved(document, None).await
+}
+
+/// Composes the host with credentials from this daemon's own profile.
+///
+/// # Errors
+///
+/// As [`HostComposeError`]; an unavailable credential degrades only its server.
+pub async fn compose_host_with_paths(
+    document: Option<&str>,
+    paths: &jarvis_storage::AppPaths,
+) -> Result<Option<ComposedHost>, HostComposeError> {
+    compose_host_resolved(document, Some(paths)).await
+}
+
+async fn compose_host_resolved(
+    document: Option<&str>,
+    paths: Option<&jarvis_storage::AppPaths>,
 ) -> Result<Option<ComposedHost>, HostComposeError> {
     let Some(document) = document else {
         return Ok(None);
@@ -315,10 +345,19 @@ pub async fn compose_host(
     // No `seen_before` observation is passed: persistence of a server's self-report across restarts is not
     // built, so every build is a first build and a drift is invisible across a restart. That limit is
     // recorded in `TODO.md` rather than implied here.
-    let host = config
-        .connect(&[])
-        .await
-        .map_err(HostComposeError::Connect)?;
+    let host = match paths {
+        Some(paths) => {
+            config
+                .connect_with_auth(
+                    &[],
+                    Arc::new(crate::mcp_credentials::ProfileSecrets(paths.clone())),
+                    Arc::new(crate::mcp_credentials::ProfileHttpSecrets::new(paths)),
+                )
+                .await
+        }
+        None => config.connect(&[]).await,
+    }
+    .map_err(HostComposeError::Connect)?;
 
     // Each adapter is built from the **catalog's own routing**, so an adapter's definitions and the registry's
     // come from one source. The transport pairs them, because it is the only place that knows which server
