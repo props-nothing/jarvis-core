@@ -15,6 +15,8 @@ const CONTENT: &str = "http://schemas.openxmlformats.org/package/2006/content-ty
 pub(super) const MAX_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PART: u64 = 24 * 1024 * 1024;
 const MAX_UNPACKED: u64 = 48 * 1024 * 1024;
+const MAX_XML_DEPTH: usize = 128;
+const INVALID_XML: &str = "the workbook contains invalid or unsupported XML";
 
 #[derive(Debug)]
 pub(super) struct CellEdit {
@@ -95,8 +97,66 @@ pub(super) fn edit(bytes: &[u8], edits: &[CellEdit]) -> Result<Vec<u8>, String> 
         .map_err(|_| "the workbook could not be parsed safely".to_owned())?
 }
 
+fn skip_xml_markup<'a>(bytes: &'a [u8], end: &[u8]) -> Result<&'a [u8], String> {
+    let at = bytes
+        .windows(end.len())
+        .position(|window| window == end)
+        .ok_or(INVALID_XML)?;
+    Ok(&bytes[at + end.len()..])
+}
+
+fn check_xml_depth(text: &str) -> Result<(), String> {
+    // roxmltree 0.21.1 recurses per element; a post-parse check cannot protect its stack.
+    let mut remaining = text.as_bytes();
+    let mut depth = 0_usize;
+    while let Some(start) = remaining.iter().position(|&byte| byte == b'<') {
+        remaining = &remaining[start..];
+        remaining = if let Some(body) = remaining.strip_prefix(b"<!--") {
+            skip_xml_markup(body, b"-->")?
+        } else if let Some(body) = remaining.strip_prefix(b"<![CDATA[") {
+            skip_xml_markup(body, b"]]>")?
+        } else if let Some(body) = remaining.strip_prefix(b"<?") {
+            skip_xml_markup(body, b"?>")?
+        } else {
+            if remaining.starts_with(b"<!") {
+                return Err(INVALID_XML.into());
+            }
+            let closing = remaining.starts_with(b"</");
+            if !closing && depth >= MAX_XML_DEPTH {
+                return Err("workbook XML is nested too deeply".into());
+            }
+            let mut quote = None;
+            let end = remaining
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find_map(|(at, &byte)| {
+                    match (quote, byte) {
+                        (Some(delimiter), value) if delimiter == value => quote = None,
+                        (None, b'\'' | b'"') => quote = Some(byte),
+                        (None, b'>') => return Some(at),
+                        _ => {}
+                    }
+                    None
+                })
+                .ok_or(INVALID_XML)?;
+            if closing {
+                depth = depth.checked_sub(1).ok_or(INVALID_XML)?;
+            } else if remaining[end - 1] != b'/' {
+                depth += 1;
+            }
+            &remaining[end + 1..]
+        };
+    }
+    if depth != 0 {
+        return Err(INVALID_XML.into());
+    }
+    Ok(())
+}
+
 fn parse_xml(bytes: &[u8]) -> Result<Document<'_>, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "workbook XML must be UTF-8")?;
+    check_xml_depth(text)?;
     let document = Document::parse_with_options(
         text,
         ParsingOptions {
@@ -105,10 +165,10 @@ fn parse_xml(bytes: &[u8]) -> Result<Document<'_>, String> {
             ..ParsingOptions::default()
         },
     )
-    .map_err(|_| "the workbook contains invalid or unsupported XML")?;
+    .map_err(|_| INVALID_XML)?;
     if document
         .descendants()
-        .any(|n| n.ancestors().take(130).count() > 129)
+        .any(|n| n.ancestors().take(MAX_XML_DEPTH + 2).count() > MAX_XML_DEPTH + 1)
     {
         return Err("workbook XML is nested too deeply".into());
     }

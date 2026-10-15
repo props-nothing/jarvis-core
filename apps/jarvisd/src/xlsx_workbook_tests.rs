@@ -362,17 +362,135 @@ fn xml_dtd_invalid_untouched_parts_and_depth_are_refused() {
     let dtd = br#"<!DOCTYPE root [<!ENTITY x "expanded">]><root>&x;</root>"#;
     for xml in [
         dtd.to_vec(),
+        b"<!DOCTYPE root><root/>".to_vec(),
         b"<broken>".to_vec(),
-        format!("{}{}", "<a>".repeat(130), "</a>".repeat(130)).into_bytes(),
+        nested_xml(MAX_XML_DEPTH + 1).into_bytes(),
+        nested_xml(130).into_bytes(),
+        nested_xml(16_384).into_bytes(),
     ] {
-        assert!(
-            edit(
-                &change(&fixture(SHEET), "custom/hostile.xml", &xml),
-                &single("A1", json!(1))
-            )
-            .is_err()
-        );
+        for name in ["custom/hostile.xml", "custom/hostile.rels"] {
+            assert!(
+                edit(
+                    &change(&fixture(SHEET), name, &xml),
+                    &single("A1", json!(1))
+                )
+                .is_err()
+            );
+        }
     }
+}
+
+fn nested_xml(depth: usize) -> String {
+    format!("{}{}", "<a>".repeat(depth), "</a>".repeat(depth))
+}
+
+#[test]
+fn xml_depth_boundary_includes_empty_elements_and_non_element_nodes() {
+    for depth in [1, MAX_XML_DEPTH - 1, MAX_XML_DEPTH] {
+        let xml = nested_xml(depth);
+        assert!(parse_xml(xml.as_bytes()).is_ok(), "depth {depth}");
+        let xml = format!(
+            "{}<a/>{}",
+            "<a>".repeat(depth - 1),
+            "</a>".repeat(depth - 1)
+        );
+        assert!(parse_xml(xml.as_bytes()).is_ok(), "empty at depth {depth}");
+    }
+    let xml = format!(
+        "{}<a/>{}",
+        "<a>".repeat(MAX_XML_DEPTH),
+        "</a>".repeat(MAX_XML_DEPTH)
+    );
+    assert_eq!(
+        parse_xml(xml.as_bytes()).err().as_deref(),
+        Some("workbook XML is nested too deeply")
+    );
+    for leaf in ["text", "<!--comment-->", "<![CDATA[text]]>", "<?pi value?>"] {
+        for depth in [MAX_XML_DEPTH - 1, MAX_XML_DEPTH] {
+            let xml = format!("{}{leaf}{}", "<a>".repeat(depth), "</a>".repeat(depth));
+            assert_eq!(parse_xml(xml.as_bytes()).is_ok(), depth < MAX_XML_DEPTH);
+        }
+    }
+}
+
+#[test]
+fn xml_depth_preflight_ignores_lexical_decoys_but_keeps_parser_validation() {
+    let decoy = format!(
+        "{}{}<!DOCTYPE ignored>",
+        "<a>".repeat(256),
+        "</a>".repeat(256)
+    );
+    let xml = format!(
+        "<?xml version='1.0'?><?pi {decoy}?><!--{decoy}--><root a='>/>&lt;/a>' b=\">/&gt;&quot;\"><![CDATA[{decoy}]]>{}</root>",
+        nested_xml(MAX_XML_DEPTH - 1)
+    );
+    assert!(parse_xml(xml.as_bytes()).is_ok());
+    for xml in [
+        "<a></b>",
+        "<a><b/></a></b>",
+        "<a><b></a>",
+        "<a attr='unterminated>",
+        "<a><!--unterminated</a>",
+        "<a><![CDATA[unterminated</a>",
+        "<a><?pi unterminated</a>",
+        "<a>&unknown;</a>",
+        "<a attr='<b>'/>",
+        "<a/><a/>",
+        "<!DOCTYPE a><a/>",
+        "<!DOCTYPE a [<!ENTITY x '<b/>'>]><a>&x;</a>",
+    ] {
+        assert!(parse_xml(xml.as_bytes()).is_err(), "{xml}");
+    }
+    assert!(parse_xml(&[0xff]).is_err());
+}
+
+#[test]
+fn xml_depth_is_refused_before_recursive_parser_on_bounded_stack() {
+    const CHILD_ENV: &str = "JARVIS_XLSX_XML_DEPTH_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        std::thread::Builder::new()
+            .name("xlsx-depth-small-stack".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                assert!(parse_xml(b"<root/>").is_ok());
+                for depth in [MAX_XML_DEPTH + 1, 130, 16_384] {
+                    let xml = nested_xml(depth);
+                    assert_eq!(
+                        parse_xml(xml.as_bytes()).err().as_deref(),
+                        Some("workbook XML is nested too deeply"),
+                        "depth {depth}"
+                    );
+                }
+            })
+            .unwrap_or_else(|e| panic!("spawn bounded-stack guard: {e}"))
+            .join()
+            .unwrap_or_else(|e| panic!("bounded-stack guard panicked: {e:?}"));
+        return;
+    }
+    // libtest names omit the crate prefix included in module_path!().
+    let qualified_name = concat!(
+        module_path!(),
+        "::xml_depth_is_refused_before_recursive_parser_on_bounded_stack"
+    );
+    let (_, test_name) = qualified_name
+        .split_once("::")
+        .unwrap_or_else(|| panic!("missing test module"));
+    // A parser overflow aborts the child, not the rest of the daemon's test suite.
+    let output = std::process::Command::new(
+        std::env::current_exe().unwrap_or_else(|e| panic!("test executable: {e}")),
+    )
+    .args(["--exact", test_name, "--nocapture"])
+    .env(CHILD_ENV, "1")
+    .output()
+    .unwrap_or_else(|e| panic!("run bounded-stack child: {e}"));
+    assert!(
+        output.status.success(),
+        "bounded-stack child failed ({}):\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
 }
 
 #[test]

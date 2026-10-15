@@ -18,6 +18,58 @@ use super::*;
 use crate::context::{ContextPriority, ContextSourceKind};
 use crate::id::MemoryId;
 
+#[test]
+fn provenance_is_fenced_sized_and_does_not_upgrade_trust() {
+    let claim = record(
+        MemorySourceKind::ExternalContent,
+        "Élodie uses tea\u{202e}",
+        MemoryConfidence::Uncertain,
+    );
+    let plain = must(RetrievedMemory::new(&claim, &[], at(1)));
+    let cited = must(RetrievedMemory::with_provenance(&claim, &[], at(1)));
+    let body = cited.isolated().body();
+    assert!(body.contains(&format!("memory_id: {}", claim.id())));
+    assert!(body.contains("source_kind: external_content"));
+    assert!(body.contains(claim.source().locator()));
+    assert!(body.contains("confidence: uncertain"));
+    assert!(body.contains("valid_from:"));
+    assert!(body.contains("valid_until: unspecified"));
+    assert!(!body.contains('\u{202e}'));
+    assert!(cited.isolated().was_altered());
+    assert_eq!(cited.trust(), plain.trust());
+    assert_eq!(cited.reference(), plain.reference());
+    assert_eq!(
+        usize::try_from(cited.item().token_estimate()).unwrap_or(usize::MAX),
+        cited.isolated().render().len()
+    );
+    assert!(cited.item().token_estimate() > plain.item().token_estimate());
+}
+
+#[test]
+fn provenance_does_not_make_an_unusable_or_expired_claim_eligible() {
+    let unusable = record(
+        MemorySourceKind::UserStatement,
+        "\u{200b}\u{202e}",
+        MemoryConfidence::Confirmed,
+    );
+    assert!(matches!(
+        RetrievedMemory::with_provenance(&unusable, &[], at(1)),
+        Err(MemoryContextRefusal::Content(_))
+    ));
+    let deleted = must(
+        record(
+            MemorySourceKind::UserStatement,
+            "An old claim",
+            MemoryConfidence::Confirmed,
+        )
+        .delete(at(1)),
+    );
+    assert!(matches!(
+        RetrievedMemory::with_provenance(&deleted, &[], at(2)),
+        Err(MemoryContextRefusal::NotCurrent(_))
+    ));
+}
+
 const WORKSPACE: &str = "0198f000-0000-7000-8000-000000000001";
 const ACTOR: &str = "0198f000-0000-7000-8000-0000000000a1";
 

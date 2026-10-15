@@ -8,7 +8,7 @@ This roadmap is ordered by risk. Each phase must leave a runnable vertical slice
 
 ## At A Glance
 
-Documentation snapshot: **2026-10-14**. This summarizes recorded delivery evidence, not a fresh run of every provider or platform gate. The platform and separate website now use Apache-2.0 for original code and docs; third-party and prototype terms remain separate.
+Documentation snapshot: **2026-10-15**. This summarizes recorded delivery evidence, not a fresh run of every provider or platform gate. The platform and separate website now use Apache-2.0 for original code and docs; third-party and prototype terms remain separate.
 
 | Track | Current position | Next proof |
 | --- | --- | --- |
@@ -20,6 +20,10 @@ Documentation snapshot: **2026-10-14**. This summarizes recorded delivery eviden
 | Scale | Local SQLite is the default. | Server/multi-device work only with a named requirement and proven ownership semantics. |
 
 The phase descriptions below are gates and dependency order, **not a list of completed features**. [TODO.md](TODO.md) records the individual slices and unresolved checks.
+
+## Current Acceptance Slice (selected 2026-10-15)
+
+The owner selected **task-aware memory** (`P11-026`, [ADR-0215](docs/adr/0215-native-recall-searches-the-task-before-falling-back-to-recent-memory.md)) after the capability review. The native executor now searches canonical memory for the current task before falling back to recent context, supplies fenced provenance, and records its selection. A deterministic 30-question fixture benchmark retrieves the expected old fact first in 30/30 cases, versus 0/30 in the former newest-24 candidate set. This is built and tested offline; live-model answer quality and corpus latency/token comparisons remain open. It does not complete semantic, project/file or relationship retrieval under `P11-014`. See [memory behavior and limits](docs/user/memory.md) and [the acceptance ledger](TODO.md#owner-selected-task-aware-memory-2026-10-15).
 
 ## Current Direction (reviewed 2026-10-10)
 

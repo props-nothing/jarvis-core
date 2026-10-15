@@ -1819,7 +1819,13 @@ impl MemoryRecord {
         // The content was validated at construction, so this cannot fail for length; it can fail for a
         // payload that was *only* a fence token, which neutralises to nothing.
         let isolated = IsolatedText::new(&self.content).map_err(MemoryContextRefusal::Content)?;
+        self.context_item_for_payload(&isolated)
+    }
 
+    fn context_item_for_payload(
+        &self,
+        isolated: &IsolatedText,
+    ) -> Result<ContextItem, MemoryContextRefusal> {
         let trust = self.context_trust();
         let source = ContextSource::new(
             ContextSourceKind::Memory,
@@ -1841,7 +1847,7 @@ impl MemoryRecord {
             // The estimate is of the **isolated rendering**, because that is what would be sent. Estimating
             // the raw content would under-count the fence and the neutralisation and let the budget be
             // exceeded by the difference.
-            estimate_isolated_tokens(&isolated),
+            estimate_isolated_tokens(isolated),
             InclusionReason::RetrievedMatch,
             trust.is_external(),
         )
@@ -2258,6 +2264,37 @@ impl RetrievedMemory {
             isolated,
             item,
         })
+    }
+
+    /// Builds a fenced claim with its citation, origin, confidence and validity metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same eligibility or isolation refusal as [`Self::new`]. Metadata is data too,
+    /// and the context budget includes its complete isolated rendering.
+    pub fn with_provenance(
+        record: &MemoryRecord,
+        allowed_types: &[MemoryType],
+        now: UtcTimestamp,
+    ) -> Result<Self, MemoryContextRefusal> {
+        let mut retrieved = Self::new(record, allowed_types, now)?;
+        let payload = format!(
+            "memory_id: {}\nsource_kind: {}\nsource: {}\nconfidence: {}\ncreated_at: {}\nvalid_from: {}\nvalid_until: {}\nclaim:\n{}",
+            record.id(),
+            record.source().kind().as_str(),
+            record.source().locator(),
+            record.confidence().as_str(),
+            record.created_at(),
+            record.valid_from(),
+            record
+                .valid_until()
+                .map_or_else(|| "unspecified".to_owned(), |at| at.to_string()),
+            record.content(),
+        );
+        let isolated = IsolatedText::new(&payload).map_err(MemoryContextRefusal::Content)?;
+        retrieved.item = record.context_item_for_payload(&isolated)?;
+        retrieved.isolated = isolated;
+        Ok(retrieved)
     }
 
     /// Returns the source reference the manifest records.

@@ -177,6 +177,14 @@ Combine independently inspectable signals:
 
 No single signal may dominate by accident. Store component scores and the final inclusion reason. Diversify results across memory types/entities and enforce per-source/per-category budgets.
 
+### Native task-aware recall (2026-10-15)
+
+[ADR-0215](../adr/0215-native-recall-searches-the-task-before-falling-back-to-recent-memory.md) wires a bounded lexical search into native context assembly instead of loading only the newest 24 memory rows. Candidate lookup spans canonical workspace memory; query-word coverage precedes recency, then existing multi-signal scores break ties. Eligibility is applied before the 128-candidate limit, including across pages of expired claims. Up to 24 usable records are offered to the unchanged context budget.
+
+Native records include fenced memory IDs, source references, confidence and validity metadata, sized together with the claim. The context event records references and selection reasons without copying claim text. Ordinary context fallback is labelled as such, not as a question match. Shared keyword normalization follows stored search keys' Unicode/punctuation rules; English/Dutch question filler removal applies only to native task queries, not canonical keys.
+
+This is not an embedding index, alias/relationship traversal, or automatic project/file retrieval. The scan uses existing search keys and bounds results/pages, not total database work. The [user guide](../user/memory.md) and [acceptance ledger](../../TODO.md#owner-selected-task-aware-memory-2026-10-15) distinguish tested fixture behavior from the outstanding live-provider and corpus-latency checks.
+
 ## Context Assembly
 
 Context sources include identity policy, workspace policy, current input, recent conversation, active run/workflow state, relevant memories, documents, events, tool observations, and runtime-specific instructions.

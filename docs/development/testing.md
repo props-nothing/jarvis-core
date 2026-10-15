@@ -90,7 +90,11 @@ bash scripts/test-package-release.sh
 
 These dependency-free fixtures exercise eligible CI events, exact commit selection, quality/draft job wiring, checksum and license refusal, and draft-only attachment. They also execute the production CI lint/test commands with a failing Cargo stand-in under Bash `-eo pipefail`: diagnostics must reach both the live log and the annotation file, and the step must still fail. Real hosted triggers, all platform archives and GitHub uploads need native Actions evidence.
 
-The background coding-activity test waits for both public snapshots before requesting Stop. Cancelling after just the first snapshot can prevent the second from arriving, contradicting its later two-update assertion. Bounded 30-second readiness/completion waits allow loaded native runners without changing production deadlines or retrying a failing assertion.
+The background coding-activity test waits for both public snapshots before requesting Stop. Cancelling after just the first snapshot can prevent the second from arriving, contradicting its later two-update assertion. Bounded 30-second readiness/completion waits allow loaded native runners without changing production deadlines or retrying a failing assertion. Its scratch path includes `private` on every OS, matching macOS canonical temporary paths: secrecy assertions reject the exact fixture thought/input/output markers, never a legitimate path component.
+
+CI annotates stack overflows, fatal runtime errors and aborted harness exits separately from ordinary panics. An abort can prevent libtest from printing its accumulated failure details. The annotation fixtures place crash evidence before the final log tail and include a successful test named with `assertion`; neither the fatal error nor the distinction between success and panic may be lost.
+
+Workbook XML nesting must be checked before entering the recursive XML parser, not only on the parsed tree. Excessive-depth fixtures run in bounded-stack child processes so a regression cannot abort the entire test harness. A mutation restoring parse-first behavior must fail that child-process regression.
 
 ## Deterministic Agent Tests
 

@@ -233,3 +233,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0212](0212-browser-reading-is-explicit-bounded-and-literal.md) | Browser reading is explicit, bounded and literal | Accepted |
 | [0213](0213-discovery-enumerates-the-full-registry-before-deferring-tools.md) | Discovery enumerates the full registry before deferring tools | Accepted |
 | [0214](0214-first-run-tests-model-and-required-voice-before-saving.md) | First run tests the model and required voice before saving | Accepted |
+| [0215](0215-native-recall-searches-the-task-before-falling-back-to-recent-memory.md) | Native recall searches the task before falling back to recent memory | Accepted |

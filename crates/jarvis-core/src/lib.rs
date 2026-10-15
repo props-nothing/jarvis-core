@@ -88,8 +88,8 @@ pub use retrieval::{
     ScoredMemory, ScoringContext, SelectionReason, SemanticAbsence, SemanticNormalization,
     SemanticOutcome, SemanticVector, SignalScore, SignalWeights, TOTAL_WEIGHT, diversify,
     entity_overlap_signal, exact_identifier_signal, importance_signal, keyword_signal,
-    may_be_offered_as_fact, rank, reason_for, recency_signal, reinforcement_signal, score,
-    signals_for, source_reliability_signal, temporal_signal,
+    may_be_offered_as_fact, memory_query_terms, rank, reason_for, recency_signal,
+    reinforcement_signal, score, signals_for, source_reliability_signal, temporal_signal,
 };
 pub use risk::{MAX_RISK_LEVEL, Risk, RiskError};
 pub use run::{

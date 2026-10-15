@@ -122,6 +122,40 @@ exit ${exitCode}
   }
 }
 
+const annotationScript = ci.split('      - name: Annotate test failures\n')[1]
+  .split('        run: |\n')[1].split('\n      - name: ')[0]
+  .split('\n').map(line => line.replace(/^          /, '')).join('\n');
+
+for (const [name, kind, lines] of [
+  ['stack overflow before the log tail', 'crash', [
+    "thread 'xml_depth' (123) has overflowed its stack",
+    'fatal runtime error: stack overflow, aborting',
+    "  process didn't exit successfully: `test-harness` (signal: 6, SIGABRT: process abort signal)",
+  ]],
+  ['ordinary assertion failure', 'panic', [
+    "thread 'activity' (123) panicked at fixture.rs:1:1:",
+    'assertion `left == right` failed',
+    '  left: 1',
+    ' right: 2',
+  ]],
+]) {
+  test(`CI annotates ${name} without treating successful test names as panics`, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-ci-annotations-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'test.txt'), [
+        'test readiness::only_derived_items_are_free_of_an_assertion ... ok',
+        'test fixture::failure ... FAILED', ...lines,
+        ...Array(60).fill('test result: ok. 0 passed; 0 failed;'),
+      ].join('\n') + '\n');
+      const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', annotationScript], { cwd: dir, encoding: 'utf8' });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      for (const line of lines) assert.ok(result.stdout.includes(`::error::${kind}: ${line}`), result.stdout);
+      assert.doesNotMatch(result.stdout, /::error::panic: test readiness/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
 const draftScript = job('draft').split('      - name: Verify checksums and attach to a draft only\n')[1]
   .split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
 

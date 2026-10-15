@@ -40,6 +40,7 @@ mod mcp_serve;
 mod mcp_tunnel;
 mod memory_manage;
 mod memory_propose;
+mod memory_recall;
 mod memory_search;
 mod memory_service;
 mod model_fallback;

@@ -164,8 +164,12 @@ jobs:
           grep -a -E '^test .* FAILED|^failures:' test.txt | head -n 8 | while IFS= read -r line; do
             echo "::error::failed: $line"
           done
-          grep -a -E 'panicked at|assertion|left:|right:' test.txt | head -n 10 | while IFS= read -r line; do
+          grep -a -E '^thread .*panicked at|^assertion.*failed|^[[:space:]]+(left|right):' test.txt | head -n 10 | while IFS= read -r line; do
             echo "::error::panic: $line"
+          done
+          # An abort can prevent libtest from printing any panic summary at all.
+          grep -a -E 'has overflowed its stack|^fatal runtime error:|^[[:space:]]+process didn.t exit successfully:' test.txt | head -n 6 | while IFS= read -r line; do
+            echo "::error::crash: $line"
           done
           grep -a -E '^test result: FAILED' test.txt | head -n 4 | while IFS= read -r line; do
             echo "::error::summary: $line"
@@ -175,7 +179,7 @@ jobs:
           done
 
           echo "===== failures and panics ====="
-          grep -a -B2 -A12 -E '^failures:|panicked at' test.txt | head -n 120 || true
+          grep -a -B2 -A12 -E '^failures:|panicked at|has overflowed its stack|^fatal runtime error:|signal: [0-9]+' test.txt | head -n 120 || true
           echo "===== tail 30 ====="
           tail -n 30 test.txt || true
       - name: Phase 1 acceptance gate

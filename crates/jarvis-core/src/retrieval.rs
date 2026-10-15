@@ -1560,17 +1560,35 @@ pub fn reason_for(signals: &MemorySignals, weights: &SignalWeights) -> Selection
     }
 }
 
-/// Splits content into distinct words, whitespace-collapsed and ASCII-case-folded.
+/// Normalizes a bounded question using the memory search key's Unicode word rules.
 ///
-/// The same normalization the search key uses, deliberately: if the two disagreed, a claim could match a
-/// query's words and not its own key, and "which memories are about this" would have two answers.
+/// Punctuation is removed, case is folded and repeated words count once. No search syntax is accepted.
+#[must_use]
+pub fn memory_query_terms(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for word in text.split_whitespace() {
+        let normalized: String = word
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect();
+        if normalized.is_empty()
+            || normalized.chars().count() > crate::memory::MAX_SEARCH_KEY_WORD_CHARS
+            || words.contains(&normalized)
+        {
+            continue;
+        }
+        words.push(normalized);
+        if words.len() == crate::memory::MAX_SEARCH_KEY_WORDS {
+            break;
+        }
+    }
+    words
+}
+
 fn distinct_words(content: &str) -> Vec<String> {
-    let mut words: Vec<String> = content
-        .split_whitespace()
-        .map(str::to_ascii_lowercase)
-        .collect();
+    let mut words = memory_query_terms(content);
     words.sort_unstable();
-    words.dedup();
     words
 }
 

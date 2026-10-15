@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::{DEFAULT_DATABASE_FILENAME, LOCAL_USER_ID, SqliteDatabase};
 
+#[path = "memory_recall_tests.rs"]
+mod recall_tests;
+
 const WORKSPACE: &str = "0198f000-0000-7000-8000-000000000001";
 const OTHER_WORKSPACE: &str = "0198f000-0000-7000-8000-000000000002";
 

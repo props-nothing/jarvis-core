@@ -46,6 +46,10 @@ use sqlx::sqlite::SqliteRow;
 
 use crate::database::{DatabaseError, SqliteDatabase};
 
+#[path = "memory_recall_repository.rs"]
+mod recall;
+pub use recall::{MAX_RECALL_CANDIDATES, read_task_memory_candidates};
+
 /// The kinds of thing an entity can be.
 ///
 /// Duplicated from the schema's `CHECK` as a Rust enum because a decode has to name a value it read, and

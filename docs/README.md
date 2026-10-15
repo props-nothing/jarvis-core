@@ -17,6 +17,7 @@
 | Add capabilities without rebuilding the core | [Abilities](user/abilities.md) / [MCP](user/mcp.md) |
 | Connect an editor, agent or script | [Connect apps](user/connect-apps.md) |
 | Give recurring work a goal and context | [Projects](user/projects.md) / [triggers](user/triggers.md) |
+| Find a relevant remembered fact and its source | [Memory and current recall limits](user/memory.md) |
 | Teach an approved procedure | [Skills](user/skills.md) |
 | Delegate a coding task | [Coding agents and current limits](user/code-agents.md) |
 | Measure whether a change helped | [Evaluations](user/evals.md) |

@@ -89,21 +89,9 @@ const PER_SOURCE_CAP_TOKENS: u32 = 24_000;
 /// oldest **with a recorded reason**, which is what makes a truncated history visible rather than silent.
 const MAX_HISTORY_TURNS: u32 = 40;
 
-/// Stored memories read as retrieval candidates for one model call.
-///
-/// A **candidate window**, not a result set: the read returns this many newest rows and the assembler
-/// decides which of them fit. Bounded rather than unlimited because an unbounded read grows with the
-/// user's history, and the bound is what makes the cost of assembling one request a constant.
-///
-/// Larger than [`MAX_HISTORY_TURNS`] because memory is the point of this slice and a conversation turn is
-/// already replayable from storage. Small enough that the budget below — not the window — is what
-/// constrains the request, which is the property that makes `P4-004`'s ranking meaningful when it arrives
-/// in front of this read.
-const MAX_MEMORIES_LOADED: u32 = 24;
-
 /// Stored skill revisions read as selection candidates for one model call.
 ///
-/// The same reasoning as [`MAX_MEMORIES_LOADED`]: a candidate window, so assembling one request costs a
+/// Like the memory recall window: a candidate window, so assembling one request costs a
 /// constant. It is deliberately **larger than the offered count** ([`MAX_SELECTED_SKILLS`]) because the
 /// selection rule — not the read — is what decides which candidates are usable, and a read bounded at the
 /// offered count would make that rule unreachable for the rows it exists to filter.
@@ -1041,15 +1029,7 @@ async fn assemble_context_messages(
     correlation_id: CorrelationId,
 ) -> Result<Vec<ChatMessage>, DatabaseError> {
     let database = deps.database;
-    let budget = ContextBudget::new(
-        TOTAL_CONTEXT_TOKENS,
-        RESERVED_POLICY_TOKENS,
-        RESERVED_USER_INTENT_TOKENS,
-        PER_SOURCE_CAP_TOKENS,
-    )
-    .map_err(|_| DatabaseError::InvalidRunRequest {
-        field: "context_budget",
-    })?;
+    let budget = context_budget()?;
 
     let policy = ContextItem::new(
         ContextSource::new(ContextSourceKind::IdentityPolicy, "policy:native-v1")
@@ -1123,8 +1103,16 @@ async fn assemble_context_messages(
     // Retrieved memory, isolated and offered through the same assembler. A claim whose type the use case
     // does not allow, or which is not current truth, is **refused by conversion** and never offered — that
     // is the eligibility half of `P4-004`, applied to the item that is actually built.
-    let memories = load_memories(database, run, UtcTimestamp::now(&SystemClock)).await?;
-    for memory in &memories {
+    let recall = crate::memory_recall::recall(
+        database,
+        workspace_id,
+        run.objective(),
+        UtcTimestamp::now(&SystemClock),
+        ceiling,
+    )
+    .await?;
+    let memories = &recall.memories;
+    for memory in memories {
         offered.push(memory.item().clone());
     }
 
@@ -1151,7 +1139,7 @@ async fn assemble_context_messages(
         run,
         RunEventKind::ActivityUpdated,
         Some("context assembled"),
-        &context_summary(&manifest, &history, &memories, &skills),
+        &context_summary(&manifest, &history, memories, &skills, &recall.summary),
         correlation_id,
     )
     .await?;
@@ -1163,11 +1151,23 @@ async fn assemble_context_messages(
     messages_from_manifest(
         &manifest,
         &history,
-        &memories,
+        memories,
         &skills,
         project.as_ref(),
         run.objective(),
     )
+}
+
+fn context_budget() -> Result<ContextBudget, DatabaseError> {
+    ContextBudget::new(
+        TOTAL_CONTEXT_TOKENS,
+        RESERVED_POLICY_TOKENS,
+        RESERVED_USER_INTENT_TOKENS,
+        PER_SOURCE_CAP_TOKENS,
+    )
+    .map_err(|_| DatabaseError::InvalidRunRequest {
+        field: "context_budget",
+    })
 }
 
 /// One selected skill, already isolated and rendered as the item assembly will offer.
@@ -1398,6 +1398,7 @@ fn context_summary(
     history: &[HistoryTurn],
     memories: &[RetrievedMemory],
     skills: &[RetrievedSkill],
+    memory_retrieval: &serde_json::Value,
 ) -> String {
     let included = |memory: &RetrievedMemory| {
         manifest
@@ -1427,7 +1428,7 @@ fn context_summary(
         .count();
 
     format!(
-        r#"{{"included":{},"excluded":{},"used_tokens":{},"instruction_tokens":{},"untrusted_tokens":{},"history_offered":{},"memories_offered":{},"memories_included":{},"memories_altered":{},"skills_offered":{},"skills_included":{}}}"#,
+        r#"{{"included":{},"excluded":{},"used_tokens":{},"instruction_tokens":{},"untrusted_tokens":{},"history_offered":{},"memories_offered":{},"memories_included":{},"memories_altered":{},"skills_offered":{},"skills_included":{},"memory_retrieval":{}}}"#,
         manifest.included().len(),
         manifest.excluded().len(),
         manifest.used_tokens(),
@@ -1439,66 +1440,8 @@ fn context_summary(
         memories_altered,
         skills.len(),
         skills_included,
+        memory_retrieval,
     )
-}
-
-/// Loads the workspace's retrievable memories and converts the eligible ones.
-///
-/// # Why conversion is where eligibility for a *prompt* is decided
-///
-/// The read already excludes deleted, proposed, and superseded rows, and model inferences, so what arrives
-/// here is a candidate set rather than a decision. Two rules remain that need the clock or a policy the
-/// query does not carry, and they are applied by
-/// [`MemoryRecord::context_item`]:
-///
-/// - **Current truth at this instant.** Expiry is evaluated against the clock rather than in SQL, because
-///   the stored timestamp is RFC 3339 with an omitted fraction at a whole second and comparing it as text
-///   is the lexicographic trap `ADR-0034` recorded.
-/// - **The type the use case allows.** A model answer is not a memory use case, so the allow-list is
-///   explicit rather than empty. `Working` is excluded because a run's own scratch state is not a durable
-///   fact about the user; `Conversation` because the transcript is already replayed through history, and
-///   offering it twice would present one turn as independent corroboration of itself.
-///
-/// A claim that is refused is **dropped with a count**, not turned into an error: a stale memory is normal
-/// and refusing the run over one would make an ordinary expiry a failure.
-async fn load_memories(
-    database: &Arc<SqliteDatabase>,
-    run: &StoredRun,
-    now: UtcTimestamp,
-) -> Result<Vec<RetrievedMemory>, DatabaseError> {
-    // The run's **own** workspace, parsed from the stored row rather than taken from the local identity.
-    // Substituting the local workspace would look identical in a single-workspace deployment and would
-    // retrieve another workspace's memories the moment a second one existed — the isolation rule this
-    // whole phase is built around, broken by a convenience. The stored value was validated when the run
-    // was created and an FK enforces it, so a parse failure means a corrupt row rather than bad input.
-    let workspace_id: jarvis_core::WorkspaceId =
-        run.workspace_id()
-            .parse()
-            .map_err(|_| DatabaseError::InvalidRunRequest {
-                field: "workspace_id",
-            })?;
-
-    let stored =
-        jarvis_storage::read_retrievable_memories(database, workspace_id, MAX_MEMORIES_LOADED)
-            .await?;
-
-    let mut offered = Vec::with_capacity(stored.len());
-    for memory in &stored {
-        match RetrievedMemory::new(memory.record(), &MODEL_MEMORY_TYPES, now) {
-            Ok(item) => offered.push(item),
-            Err(refusal) => {
-                // Recorded rather than silent. A memory that vanished between being stored and being
-                // offered is exactly the question "why was this not used" asks, and a count per reason is
-                // what makes it answerable without storing the content.
-                tracing::debug!(
-                    memory_id = %memory.record().id(),
-                    reason = refusal.as_str(),
-                    "a stored memory was not offered as context"
-                );
-            }
-        }
-    }
-    Ok(offered)
 }
 
 /// One conversation turn offered to the assembler.
@@ -3410,6 +3353,58 @@ mod tests {
 
     use jarvis_models::{ScriptedModel, Turn, scripted};
     use jarvis_storage::{API_SESSION_CHANNEL, LOCAL_USER_ID, StartRunInput, start_run};
+
+    #[tokio::test]
+    async fn task_memory_recall_reaches_the_actual_model_request_and_selection_audit() {
+        let (_profile, database) = database().await;
+        let target = remember(
+            &database,
+            MemoryType::Semantic,
+            jarvis_core::MemorySourceKind::UserStatement,
+            jarvis_core::MemoryConfidence::Confirmed,
+            "Acme renews in November",
+        )
+        .await;
+        for number in 0..30 {
+            remember(
+                &database,
+                MemoryType::Semantic,
+                jarvis_core::MemorySourceKind::UserStatement,
+                jarvis_core::MemoryConfidence::Confirmed,
+                &format!("Unrelated inventory observation {number}"),
+            )
+            .await;
+        }
+        let run = start(&database, "When does ACME renew?").await;
+        let model = model(vec![Turn::answer("November.")]);
+        execute_run(&database, &model, run.id())
+            .await
+            .unwrap_or_else(|error| panic!("run: {error}"));
+        let requests = model.seen_messages();
+        let texts = requests[0]
+            .iter()
+            .map(ChatMessage::text)
+            .collect::<Vec<_>>();
+        let message = texts
+            .iter()
+            .find(|text| text.contains("Acme renews in November"))
+            .unwrap_or_else(|| panic!("the old answer must reach the model: {texts:?}"));
+        assert!(message.contains(&format!("memory_id: {target}")));
+        assert!(message.contains("source: session:fixture"));
+        assert!(message.find(jarvis_core::FENCE_OPEN) < message.find("Acme renews in November"));
+        let payload: serde_json::Value =
+            serde_json::from_str(&context_event_payload(&database, run.id()).await)
+                .unwrap_or_else(|error| panic!("context JSON: {error}"));
+        assert_eq!(payload["memory_retrieval"]["strategy"], "task_lexical_v1");
+        assert!(
+            payload["memory_retrieval"]["selected"][0]["reference"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&target)
+        );
+        assert_eq!(payload["memories_offered"], 24);
+        database.close().await;
+    }
 
     /// **The deterministic model builds with no provider coordinates, and names its own identifier.**
     ///

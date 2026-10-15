@@ -13,6 +13,20 @@ selected_sdk: cargo-deny-action 2.1.1 / cargo-deny 0.20.2
 
 This record covers CI on GitHub-hosted Windows, macOS, and Linux runners, Rust dependency policy, and the CI-gated archive/draft-release flow. Public release publishing, signing, deployment, self-hosted runners, and provider credentials are out of scope.
 
+## macOS crash diagnostics follow-up (2026-10-15)
+
+The complete logs of macOS job `116412648139` in CI `38732260620` show an XLSX XML-depth test overflowing its stack and
+aborting the daemon harness with SIGABRT. This abort prevents libtest from printing ordinary panic summaries, even though
+an earlier activity test already reported FAILED. The previous annotation filter also matched a successful test whose name
+contained `assertion`, filling a panic annotation with unrelated output.
+
+Official workflow syntax and https://docs.github.com/llms.txt were re-read during this follow-up. No new action/API/version,
+auth scope, permission, artifact retention or release-policy change is needed. JARVIS decision: separately annotate fatal
+runtime/stack-overflow/process-exit evidence and anchor ordinary panic/assertion lines, while keeping Cargo's nonzero exit
+and the release gate intact. The cheapest falsifier executes the actual annotation shell on a fatal crash placed well before
+the log tail and a successful test containing `assertion`; the crash must appear and the successful test must not be labelled
+a panic. Hosted native rerun remains required after the source fixes land.
+
 ## Failure diagnostics refresh (2026-10-15)
 
 Live official sources re-read on 2026-10-15 (UTC): https://docs.github.com/llms.txt,

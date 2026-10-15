@@ -1,7 +1,7 @@
 ---
 integration: xlsx-editing
 status: implemented
-last_verified: 2026-10-14
+last_verified: 2026-10-15
 owners: []
 selected_spec_version: "ECMA-376 / ISO 29500 SpreadsheetML transitional; Microsoft Open XML SDK reference 3.0.1"
 selected_sdk: "zip 9.0.1; roxmltree 0.21.1 (existing workspace dependencies)"
@@ -59,6 +59,23 @@ No egress, subprocesses, additional service cost or persistent copies. The origi
 
 Reuse workspace-constrained `zip = 9.0.1` with only `deflate-flate2` and `roxmltree = 0.21.1`; no new crate ecosystem. Versioned source/changelogs checked; no relevant API deprecation observed. The daemon must promote its existing test-only ZIP dependency and add its already-workspace XML dependency as normal dependencies.
 
+## XML depth boundary recheck (2026-10-15 UTC)
+
+Narrow question: refuse excessive XML nesting before the selected parser consumes recursive stack, including untouched `.xml` and `.rels` members. No dependency/version, package format, authorization, egress or effect changes.
+
+Live official sources re-fetched before implementation:
+
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/v0.21.1/llms.txt — 404, no index.
+- https://docs.rs/roxmltree/0.21.1/roxmltree/struct.ParsingOptions.html — only `allow_dtd`, `nodes_limit` and `entity_resolver`; no element-depth setting. Node-count limits bound allocation, not recursive stack.
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/v0.21.1/src/tokenizer.rs — `parse_element` calls `parse_content`, which calls `parse_element` for each nested element. The existing post-parse ancestor check cannot protect this recursion. Stack overflow aborts rather than becoming a `catch_unwind` error.
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/v0.21.1/src/parse.rs — DTD remains disabled and no entity resolver is supplied. The API documentation's empty-DTD exception conflicts with the pinned changelog's 0.19.0 fix; refuse declarations during preflight as well as retaining parser DTD refusal.
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/v0.21.1/CHANGELOG.md — no relevant released fix or API deprecation in the selected version.
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/master/CHANGELOG.md — an **unreleased** fix replaces nested-element recursion with iteration. This is not an available pinned-version guarantee and is not adopted.
+
+JARVIS decision: use an allocation-free, iterative lexical preflight before `Document::parse_with_options`. Count element openings (including empty elements), skip quoted attributes, comments, CDATA and processing instructions, and reject declarations. The parser still performs authoritative XML/namespace validation with `allow_dtd: false`, no resolver and the unchanged 2,000,000-node ceiling. Retain the existing tree-node ancestor limit as a second check, including text/comment/PI nodes. Never enlarge stacks or ignore tests.
+
+Falsification plan: run over-limit input at 129, 130 and thousands of element levels on an explicitly small stack inside a subprocess. Require the exact depth refusal and successful child completion; an overflow is a parent-test failure, not an abort of the entire test suite. Check the inclusive 128-element boundary, empty-element counting, XML lexical decoys and malformed markup, and retain package-wide rejection tests. Mutate away only the preflight call in an isolated build to prove the new guard test fails against the old parser ordering. Native macOS remains required to verify the original hosted runner; bounded-stack Windows execution is portable regression evidence, not a macOS run.
+
 ## JARVIS Mapping
 
 `document_write_tool::EditSpreadsheetTool` owns definition, schema, confined file replacement and bounded output. A dedicated pure workbook helper owns parser types and surgical ZIP/XML edits; no provider types cross domain boundaries. Output is a receipt (path, edit count, bytes, recalculation notice), not workbook contents. Registration/executor wiring remains with the composition root.
@@ -97,4 +114,5 @@ Reuse workspace-constrained `zip = 9.0.1` with only `deflate-flate2` and `roxmlt
 
 | Date | Versions checked | Evidence | Researcher |
 | --- | --- | --- | --- |
+| 2026-10-15 | roxmltree 0.21.1; existing zip 9.0.1 | `cargo test -p jarvisd --lib document_write_tool -- --test-threads=1`: **31 passed**, including 22 workbook tests, exact 128/129-element boundaries, lexical decoys, untouched XML/rels refusal and the 256 KiB stack/subprocess guard. Isolated `clippy-driver --test --edition=2024 - --crate-name xlsx_depth_guard -L dependency=target\debug\deps --extern "zip=$zip" --extern "roxmltree=$xml" --extern "serde_json=$json" -W clippy::all -W clippy::pedantic -D warnings -o target\debug\xlsx-depth-guard.exe`: **passed**, with stdin `#[path = r"<absolute workbook source path>"] mod xlsx_workbook;` and `$zip`, `$xml`, `$json` selecting existing workspace rlibs. `target\debug\xlsx-depth-guard.exe --test-threads=1`: **22 passed**. Isolated old-order mutation (remove only `check_xml_depth(text)?;`, no production-file mutation): new regression **failed as intended**, child stack overflow `0xc00000fd`, parent test exit 101 without aborting the suite. `rustfmt --edition 2024 --check apps\jarvisd\src\xlsx_workbook.rs apps\jarvisd\src\xlsx_workbook_tests.rs` and scoped `git diff --check`: **passed**. `cargo clippy -p jarvisd --lib --tests -- -D warnings`: **blocked by unrelated concurrent memory code**, `clippy::cast_possible_truncation` at `crates\jarvis-storage\src\memory_recall_repository.rs:87`; untouched. Windows execution only; native macOS rerun still required. | Copilot |
 | 2026-10-14 | zip 9.0.1; roxmltree 0.21.1; Open XML SDK reference 3.0.1 | Live official docs/source/changelogs reviewed before implementation. `cargo test -p jarvisd document_write_tool --lib -- --test-threads=1`: **28 passed**, including 19 pure package tests and 9 tool/creation tests. Isolated helper `clippy-driver --test --edition=2024 - --crate-name xlsx_workbook_tests -L dependency=target\debug\deps --extern "zip=$zip" --extern "roxmltree=$xml" --extern "serde_json=$json" -W clippy::all -W clippy::pedantic -D warnings -o target\debug\xlsx-workbook-tests.exe`: **passed** (stdin wrapper includes `xlsx_workbook.rs`; variables select existing pinned workspace rlibs), then `target\debug\xlsx-workbook-tests.exe --test-threads=1`: **19 passed**. Owned files formatted. Workspace `cargo fmt --check` blocked by concurrent parent-owned Google test formatting; `cargo clippy -p jarvisd --lib --all-features -- -D warnings` blocked by parent-owned ACP `question_mark` lint at `acp.rs:1016`. Composition-root registration/index links are parent-owned. No live Excel/LibreOffice check performed. | Copilot |

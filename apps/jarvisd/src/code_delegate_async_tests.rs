@@ -39,7 +39,8 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 }
 async fn rig(script: &str) -> (Scratch, Arc<SqliteDatabase>, AsyncCodeDelegateTool) {
-    let root = std::env::temp_dir().join(format!("jasync-{}", jarvis_core::scratch_tag()));
+    // Canonical macOS temporary paths contain `private`; reproduce that on every platform.
+    let root = std::env::temp_dir().join(format!("jasync-private-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(root.join("repo")).unwrap();
     git(&root.join("repo"), &["init", "-q", "-b", "main"]);
     std::fs::write(root.join("repo/a.txt"), "a\n").unwrap();
@@ -130,12 +131,19 @@ async fn live_activity_is_persisted_before_completion_and_fenced_for_models() {
     assert_eq!(task.status, "running");
     assert!(task.result_json.is_none());
     assert!(task.activity[0].summary.contains("a.txt"));
+    assert!(task.activity[0].summary.contains("jasync-private-"));
     assert!(
+        task.activity.iter().all(|entry| [
+            "private thought",
+            "private input",
+            "private output",
+            "unrelated session",
+            "Internal planning",
+        ]
+        .iter()
+        .all(|hidden| !entry.summary.contains(hidden))),
+        "{:?}",
         task.activity
-            .iter()
-            .all(|entry| !entry.summary.contains("private")
-                && !entry.summary.contains("unrelated")
-                && !entry.summary.contains("Internal planning"))
     );
     let model = manager.status(&json!({"task_id":id})).await.unwrap();
     let console = render_console(&task);

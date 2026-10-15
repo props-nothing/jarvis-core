@@ -15,6 +15,33 @@ use crate::memory::{
 };
 use crate::timestamp::UtcTimestamp;
 
+#[test]
+fn task_query_words_match_unicode_case_and_punctuation_without_search_syntax() {
+    assert_eq!(
+        memory_query_terms("ÉLODIE? élodie CONTRACT! contract"),
+        ["élodie", "contract"]
+    );
+    assert!(memory_query_terms("% _ \" *").is_empty());
+    let oversized = (0..100)
+        .map(|index| format!("term{index}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        memory_query_terms(&oversized).len(),
+        crate::MAX_SEARCH_KEY_WORDS
+    );
+    let record = memory(
+        "Élodie reviews the contract.",
+        MemoryType::Semantic,
+        vec![EntityRef::confirmed(entity())],
+    );
+    assert_eq!(
+        keyword_signal(&record, &query().with_text("ÉLODIE? CONTRACT!")),
+        SIGNAL_SCALE
+    );
+    assert_eq!(keyword_signal(&record, &query().with_text("tractor")), 0);
+}
+
 const ACTOR: &str = "local-user";
 
 fn must<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
