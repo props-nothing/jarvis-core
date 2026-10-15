@@ -16,6 +16,7 @@ pub(super) const MAX_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PART: u64 = 24 * 1024 * 1024;
 const MAX_UNPACKED: u64 = 48 * 1024 * 1024;
 const MAX_XML_DEPTH: usize = 128;
+const XML_PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;
 const INVALID_XML: &str = "the workbook contains invalid or unsupported XML";
 
 #[derive(Debug)]
@@ -157,15 +158,27 @@ fn check_xml_depth(text: &str) -> Result<(), String> {
 fn parse_xml(bytes: &[u8]) -> Result<Document<'_>, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "workbook XML must be UTF-8")?;
     check_xml_depth(text)?;
-    let document = Document::parse_with_options(
-        text,
-        ParsingOptions {
-            allow_dtd: false,
-            nodes_limit: 2_000_000,
-            ..ParsingOptions::default()
-        },
-    )
-    .map_err(|_| INVALID_XML)?;
+    // Even allowed nesting can overflow a caller's stack with the selected recursive parser.
+    let document = std::thread::scope(|scope| {
+        let parser = std::thread::Builder::new()
+            .name("jarvis-xlsx-xml".into())
+            .stack_size(XML_PARSER_STACK_BYTES)
+            .spawn_scoped(scope, || {
+                Document::parse_with_options(
+                    text,
+                    ParsingOptions {
+                        allow_dtd: false,
+                        nodes_limit: 2_000_000,
+                        ..ParsingOptions::default()
+                    },
+                )
+                .map_err(|_| INVALID_XML.to_owned())
+            })
+            .map_err(|_| "the workbook XML parser could not be started".to_owned())?;
+        parser
+            .join()
+            .map_err(|_| "the workbook could not be parsed safely".to_owned())?
+    })?;
     if document
         .descendants()
         .any(|n| n.ancestors().take(MAX_XML_DEPTH + 2).count() > MAX_XML_DEPTH + 1)

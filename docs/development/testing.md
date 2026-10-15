@@ -94,7 +94,7 @@ The background coding-activity test waits for both public snapshots before reque
 
 CI annotates stack overflows, fatal runtime errors and aborted harness exits separately from ordinary panics. An abort can prevent libtest from printing its accumulated failure details. The annotation fixtures place crash evidence before the final log tail and include a successful test named with `assertion`; neither the fatal error nor the distinction between success and panic may be lost.
 
-Workbook XML nesting must be checked before entering the recursive XML parser, not only on the parsed tree. Excessive-depth fixtures run in bounded-stack child processes so a regression cannot abort the entire test harness. A mutation restoring parse-first behavior must fail that child-process regression.
+Workbook XML nesting must be checked before entering the recursive XML parser, not only on the parsed tree. The selected parser also needs a fixed adapter-owned stack budget for **accepted** nesting: the 128-level bound alone does not guarantee that it fits macOS or another small-stack caller. Parsing runs on a joined scoped worker with a 16 MiB stack; caller/CI stack settings, DTD and node/depth bounds stay unchanged. Bounded-stack child regressions cover accepted 127/128-level forms, empty elements, text/comment/PI boundary behavior and lexical decoys as well as over-limit refusal. A refusal-only small-stack test misses the accepted-depth overflow. Restoring caller-stack parsing must fail the expanded child regression without aborting the parent harness.
 
 ## Deterministic Agent Tests
 

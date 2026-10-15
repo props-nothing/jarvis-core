@@ -452,7 +452,8 @@ fn xml_depth_is_refused_before_recursive_parser_on_bounded_stack() {
             .name("xlsx-depth-small-stack".into())
             .stack_size(256 * 1024)
             .spawn(|| {
-                assert!(parse_xml(b"<root/>").is_ok());
+                xml_depth_boundary_includes_empty_elements_and_non_element_nodes();
+                xml_depth_preflight_ignores_lexical_decoys_but_keeps_parser_validation();
                 for depth in [MAX_XML_DEPTH + 1, 130, 16_384] {
                     let xml = nested_xml(depth);
                     assert_eq!(

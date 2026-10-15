@@ -76,6 +76,36 @@ JARVIS decision: use an allocation-free, iterative lexical preflight before `Doc
 
 Falsification plan: run over-limit input at 129, 130 and thousands of element levels on an explicitly small stack inside a subprocess. Require the exact depth refusal and successful child completion; an overflow is a parent-test failure, not an abort of the entire test suite. Check the inclusive 128-element boundary, empty-element counting, XML lexical decoys and malformed markup, and retain package-wide rejection tests. Mutate away only the preflight call in an isolated build to prove the new guard test fails against the old parser ordering. Native macOS remains required to verify the original hosted runner; bounded-stack Windows execution is portable regression evidence, not a macOS run.
 
+## Allowed-depth stack budget correction (2026-10-15 UTC)
+
+CI `38738538886`, macOS job `116433947041`, proves that even **allowed** nesting at the 128-element boundary can overflow
+roxmltree 0.21.1 on the caller's stack. The previous preflight fixes over-limit input but does not bound the recursive
+parser's stack consumption for accepted input; its old small-stack test exercised only refusals and missed this case.
+
+Official sources re-read live before this repair:
+
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/v0.21.1/llms.txt — 404; no index.
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/v0.21.1/src/tokenizer.rs — nested `parse_element` / `parse_content` calls recurse.
+- https://docs.rs/roxmltree/0.21.1/roxmltree/struct.ParsingOptions.html — no recursion/stack-budget option.
+- https://raw.githubusercontent.com/RazrFalcon/roxmltree/v0.21.1/CHANGELOG.md and https://raw.githubusercontent.com/RazrFalcon/roxmltree/master/CHANGELOG.md — iterative parsing remains an unreleased change; do not adopt a floating Git dependency.
+- https://doc.rust-lang.org/1.98.1/std/thread/struct.Builder.html#method.stack_size — explicit stack size in bytes; the platform may allocate a larger minimum.
+- https://doc.rust-lang.org/1.98.1/std/thread/struct.Builder.html#method.spawn_scoped and https://doc.rust-lang.org/std/thread/fn.scope.html — safe scoped borrowing, `Send` return values, OS thread-creation failure returned as `io::Result`, and manual join allows panic-to-error mapping.
+
+JARVIS decision: preserve the existing 128-level/node/DTD/package limits and give the selected recursive parser its own
+fixed 16 MiB scoped worker stack, joined before returning the borrowed document. The allocation-free preflight remains
+on the caller; rejected nesting never starts a worker. No global or CI/test-runner stack setting is changed, no depth
+allowance is raised, and no dependency or SDK version changes. This supersedes the earlier blanket stack-enlargement
+rejection: an adapter-owned finite parser budget, unlike raising `RUST_MIN_STACK`, also protects small-stack production
+callers while keeping previously accepted workbooks accepted. Thread creation or parser panic fails closed before any
+file replacement; errors do not contain workbook data. There is one joined worker per parsed part, not a detached task,
+new process or background service. Peak reserved parser stack is fixed per concurrent parse; thread-start overhead is
+accepted for this bounded local operation until a released iterative parser can replace the worker.
+
+Cheapest falsifier: run **both valid boundary and rejected over-limit fixtures** from a 256 KiB caller stack in a child
+process. Before the worker fix, accepted-depth recursion must fail this regression without aborting the parent harness;
+afterward, valid 127/128-element forms and lexical decoys must still parse, while depth/DTD/malformed input still refuses.
+A native macOS run remains required; local Windows execution is not claimed as native macOS evidence.
+
 ## JARVIS Mapping
 
 `document_write_tool::EditSpreadsheetTool` owns definition, schema, confined file replacement and bounded output. A dedicated pure workbook helper owns parser types and surgical ZIP/XML edits; no provider types cross domain boundaries. Output is a receipt (path, edit count, bytes, recalculation notice), not workbook contents. Registration/executor wiring remains with the composition root.
@@ -114,5 +144,6 @@ Falsification plan: run over-limit input at 129, 130 and thousands of element le
 
 | Date | Versions checked | Evidence | Researcher |
 | --- | --- | --- | --- |
+| 2026-10-15 | roxmltree 0.21.1; Rust 1.98.1 scoped threads | Expanded the bounded-stack child with accepted-depth boundary/lexical cases; before the worker repair, exact regression failed with child stack overflow `0xc00000fd` while the parent returned ordinary exit 101. With the fixed 16 MiB parser budget, `cargo test -p jarvisd --lib document_write_tool::xlsx_workbook::tests::xml_depth_is_refused_before_recursive_parser_on_bounded_stack --all-features --locked -- --exact --nocapture` **passed**; `cargo test -p jarvisd --lib document_write_tool --all-features --locked -- --test-threads=1` **31 passed**. `cargo fmt --check` and `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` **passed**; `cargo test --workspace --all-features --locked --no-fail-fast` **2,932 passed, 0 failed, 1 ignored**. Native macOS rerun pending; no global stack or CI gate change. | Copilot |
 | 2026-10-15 | roxmltree 0.21.1; existing zip 9.0.1 | `cargo test -p jarvisd --lib document_write_tool -- --test-threads=1`: **31 passed**, including 22 workbook tests, exact 128/129-element boundaries, lexical decoys, untouched XML/rels refusal and the 256 KiB stack/subprocess guard. Isolated `clippy-driver --test --edition=2024 - --crate-name xlsx_depth_guard -L dependency=target\debug\deps --extern "zip=$zip" --extern "roxmltree=$xml" --extern "serde_json=$json" -W clippy::all -W clippy::pedantic -D warnings -o target\debug\xlsx-depth-guard.exe`: **passed**, with stdin `#[path = r"<absolute workbook source path>"] mod xlsx_workbook;` and `$zip`, `$xml`, `$json` selecting existing workspace rlibs. `target\debug\xlsx-depth-guard.exe --test-threads=1`: **22 passed**. Isolated old-order mutation (remove only `check_xml_depth(text)?;`, no production-file mutation): new regression **failed as intended**, child stack overflow `0xc00000fd`, parent test exit 101 without aborting the suite. `rustfmt --edition 2024 --check apps\jarvisd\src\xlsx_workbook.rs apps\jarvisd\src\xlsx_workbook_tests.rs` and scoped `git diff --check`: **passed**. `cargo clippy -p jarvisd --lib --tests -- -D warnings`: **blocked by unrelated concurrent memory code**, `clippy::cast_possible_truncation` at `crates\jarvis-storage\src\memory_recall_repository.rs:87`; untouched. Windows execution only; native macOS rerun still required. | Copilot |
 | 2026-10-14 | zip 9.0.1; roxmltree 0.21.1; Open XML SDK reference 3.0.1 | Live official docs/source/changelogs reviewed before implementation. `cargo test -p jarvisd document_write_tool --lib -- --test-threads=1`: **28 passed**, including 19 pure package tests and 9 tool/creation tests. Isolated helper `clippy-driver --test --edition=2024 - --crate-name xlsx_workbook_tests -L dependency=target\debug\deps --extern "zip=$zip" --extern "roxmltree=$xml" --extern "serde_json=$json" -W clippy::all -W clippy::pedantic -D warnings -o target\debug\xlsx-workbook-tests.exe`: **passed** (stdin wrapper includes `xlsx_workbook.rs`; variables select existing pinned workspace rlibs), then `target\debug\xlsx-workbook-tests.exe --test-threads=1`: **19 passed**. Owned files formatted. Workspace `cargo fmt --check` blocked by concurrent parent-owned Google test formatting; `cargo clippy -p jarvisd --lib --all-features -- -D warnings` blocked by parent-owned ACP `question_mark` lint at `acp.rs:1016`. Composition-root registration/index links are parent-owned. No live Excel/LibreOffice check performed. | Copilot |
