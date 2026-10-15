@@ -354,6 +354,174 @@ fn actor() -> ToolActor {
     ToolActor::workspace_reader(LOCAL_WORKSPACE_ID, RUN, SessionChannel::Cli, "policy-1")
 }
 
+async fn suppressed_contact_pipeline(
+    policy: WorkspacePolicy,
+) -> (TempRoot, Arc<SqliteDatabase>, ToolPipeline, String) {
+    let (directory, database) = database_with_run().await;
+    let (contact, _) = must(
+        jarvis_storage::save_contact(
+            &database,
+            LOCAL_WORKSPACE_ID,
+            None,
+            &jarvis_storage::ContactInput {
+                company: Some("Suppressed".to_owned()),
+                email: Some("suppressed@example.test".to_owned()),
+                status: Some(jarvis_storage::ContactStatus::DoNotContact),
+                ..jarvis_storage::ContactInput::default()
+            },
+            true,
+            at(0),
+        )
+        .await,
+    );
+    let tool = crate::contacts_tool::ContactsTool::new(Arc::clone(&database));
+    let pipeline = must(ToolPipeline::with_adapters(
+        Arc::clone(&database),
+        None,
+        policy,
+        vec![(
+            must(crate::contacts_tool::ContactsTool::definitions()),
+            Arc::new(tool),
+        )],
+    ));
+    (directory, database, pipeline, contact.id)
+}
+
+#[tokio::test]
+async fn contact_deletion_requires_permission_and_a_positive_approval_even_when_suppressed() {
+    for approve in [false, true] {
+        let (_root, database, pipeline, id) =
+            suppressed_contact_pipeline(WorkspacePolicy::default()).await;
+        let tool = crate::contacts_tool::DELETE_TOOL;
+        let arguments = json!({ "id": id });
+        let missing_scope = must(
+            pipeline
+                .call_tool(tool, arguments.clone(), &actor(), CorrelationId::new())
+                .await,
+        );
+        assert!(matches!(missing_scope, ToolPipelineOutcome::Refused { .. }));
+        let actor = ToolActor::for_composed_tools(
+            LOCAL_WORKSPACE_ID,
+            RUN,
+            SessionChannel::Cli,
+            "policy-1",
+            &must(pipeline.definitions()),
+        );
+        let held = must(
+            pipeline
+                .call_tool(tool, arguments.clone(), &actor, CorrelationId::new())
+                .await,
+        );
+        let ToolPipelineOutcome::AwaitingApproval {
+            call_id,
+            approval_id,
+            ..
+        } = held
+        else {
+            panic!("contact deletion must wait: {held:?}");
+        };
+        assert!(matches!(
+            pipeline
+                .resume(&call_id, arguments.clone(), &actor, CorrelationId::new())
+                .await,
+            Err(ToolPipelineError::ResumeRefused { .. })
+        ));
+        assert_eq!(
+            must(
+                jarvis_storage::contact_status_for_email(
+                    &database,
+                    LOCAL_WORKSPACE_ID,
+                    "suppressed@example.test",
+                )
+                .await
+            ),
+            Some(jarvis_storage::ContactStatus::DoNotContact)
+        );
+        let outcome = if approve {
+            jarvis_core::ApprovalDecisionOutcome::Approve
+        } else {
+            jarvis_core::ApprovalDecisionOutcome::Deny
+        };
+        let decision = must(jarvis_core::ApprovalDecision::new(
+            outcome,
+            jarvis_core::ApprovalChannel::Cli,
+            at(0),
+            LOCAL_USER_ID,
+        ));
+        must(jarvis_storage::record_decision(&database, &approval_id, &decision).await);
+        let resumed = pipeline
+            .resume(&call_id, arguments, &actor, CorrelationId::new())
+            .await;
+        if approve {
+            let ToolPipelineOutcome::Executed(result) = must(resumed) else {
+                panic!("approved contact deletion must execute");
+            };
+            assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+            let output: serde_json::Value = must(serde_json::from_str(
+                result
+                    .output()
+                    .unwrap_or_else(|| panic!("deletion receipt"))
+                    .content(),
+            ));
+            assert_eq!(output, json!({ "id": id, "deleted": true }));
+            assert_eq!(
+                must(pipeline.call(&call_id).await).outcome(),
+                ToolOutcome::Confirmed
+            );
+        } else {
+            assert!(matches!(
+                resumed,
+                Err(ToolPipelineError::ResumeRefused { .. })
+            ));
+        }
+        assert_eq!(
+            must(
+                jarvis_storage::contact_status_for_email(
+                    &database,
+                    LOCAL_WORKSPACE_ID,
+                    "suppressed@example.test",
+                )
+                .await
+            ),
+            (!approve).then_some(jarvis_storage::ContactStatus::DoNotContact)
+        );
+    }
+}
+
+#[tokio::test]
+async fn contact_deletion_with_explicit_standing_trust_removes_suppressed_contacts() {
+    let tool = crate::contacts_tool::DELETE_TOOL;
+    let policy = WorkspacePolicy::default().trusting(must(ToolId::new(tool)));
+    let (_root, database, pipeline, id) = suppressed_contact_pipeline(policy).await;
+    let actor = ToolActor::for_composed_tools(
+        LOCAL_WORKSPACE_ID,
+        RUN,
+        SessionChannel::Cli,
+        "policy-1",
+        &must(pipeline.definitions()),
+    );
+    let outcome = must(
+        pipeline
+            .call_tool(tool, json!({ "id": id }), &actor, CorrelationId::new())
+            .await,
+    );
+    let ToolPipelineOutcome::Executed(result) = outcome else {
+        panic!("explicit owner trust must permit contact deletion: {outcome:?}");
+    };
+    assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+    assert_eq!(
+        must(
+            jarvis_storage::contact_status_for_email(
+                &database,
+                LOCAL_WORKSPACE_ID,
+                "suppressed@example.test",
+            )
+            .await
+        ),
+        None
+    );
+}
+
 #[tokio::test]
 async fn file_deletion_waits_for_approval_and_records_a_recoverable_receipt() {
     let directory = TempRoot::new();

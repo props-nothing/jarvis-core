@@ -1052,7 +1052,7 @@ async fn assemble_context_messages(
         ContextTrust::User,
         Sensitivity::Internal,
         ContextPriority::Required,
-        estimate_tokens(run.objective()),
+        estimate_tokens(&objective_for_model(run.objective())),
         InclusionReason::CurrentUserIntent,
         false,
     )
@@ -1693,7 +1693,7 @@ fn messages_from_manifest(
     }
 
     if included(ContextSourceKind::CurrentInput) {
-        messages.push(ChatMessage::user(objective));
+        messages.push(ChatMessage::user(objective_for_model(objective)));
     }
     Ok(messages)
 }
@@ -3282,6 +3282,17 @@ fn estimate_tokens(text: &str) -> u32 {
     // At least one, because the context contract rejects a zero estimate and an empty objective is
     // already refused by the storage schema.
     u32::try_from(text.len()).unwrap_or(u32::MAX).max(1)
+}
+
+fn objective_for_model(objective: &str) -> String {
+    const INLINE_CHARS: usize = 4000;
+    if objective.chars().count() <= INLINE_CHARS {
+        return objective.to_owned();
+    }
+    let preview: String = objective.chars().take(INLINE_CHARS).collect();
+    format!(
+        "{preview}\n\n[JARVIS: This is only the first {INLINE_CHARS} characters of the owner's stored request. Before acting, read the remainder with jarvis.context.read, source=input, offset={INLINE_CHARS}, following next_offset until null. The full input is retained, not discarded.]"
+    )
 }
 
 /// Builds a bounded source reference for an objective.

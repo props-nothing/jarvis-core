@@ -181,15 +181,32 @@ pub async fn read_messages(
     session_id: &str,
     limit: u32,
 ) -> Result<Vec<StoredMessage>, DatabaseError> {
+    read_messages_from(database, session_id, 0, limit).await
+}
+
+/// Reads a session transcript page starting at a sequence, without replaying earlier pages.
+///
+/// # Errors
+/// Returns [`DatabaseError`] for an invalid page or a failed read.
+pub async fn read_messages_from(
+    database: &SqliteDatabase,
+    session_id: &str,
+    from: i64,
+    limit: u32,
+) -> Result<Vec<StoredMessage>, DatabaseError> {
+    if from < 0 {
+        return Err(DatabaseError::InvalidMessageRequest { field: "from" });
+    }
     if limit == 0 || limit > MAX_MESSAGE_PAGE {
         return Err(DatabaseError::InvalidMessageRequest { field: "limit" });
     }
     let rows = sqlx::query(
         "SELECT id, session_id, sequence, role, source, content, run_id, created_at \
-         FROM messages WHERE session_id = ?1 ORDER BY sequence ASC LIMIT ?2",
+         FROM messages WHERE session_id = ?1 AND sequence >= ?3 ORDER BY sequence ASC LIMIT ?2",
     )
     .bind(session_id)
     .bind(i64::from(limit))
+    .bind(from)
     .fetch_all(database.pool())
     .await
     .map_err(|source| DatabaseError::Sqlite {

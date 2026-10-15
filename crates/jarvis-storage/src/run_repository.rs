@@ -37,8 +37,12 @@ use sqlx::Row;
 use crate::database::{DatabaseError, SqliteDatabase, require_run_transition};
 use crate::run_event_repository::NewRunEvent;
 
-/// Maximum objective length, matching the migration's `CHECK`.
-pub const MAX_OBJECTIVE_CHARS: usize = 4096;
+/// Maximum accepted objective length; the full text is stored separately from the legacy preview.
+pub const MAX_OBJECTIVE_CHARS: usize = 200_000;
+
+pub(crate) fn objective_preview(objective: &str) -> String {
+    objective.chars().take(4096).collect()
+}
 
 /// One agent run as stored, limited to what the state machine reads and writes.
 ///
@@ -227,16 +231,17 @@ pub async fn create_run(
     sqlx::query(
         "INSERT INTO agent_runs (\
             id, session_id, workspace_id, user_id, objective, state, \
-            started_at, updated_at, correlation_id, version\
-         ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1)",
+                started_at, updated_at, correlation_id, version, full_objective\
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1, ?8)",
     )
     .bind(&new.id)
     .bind(&new.session_id)
     .bind(&new.workspace_id)
     .bind(&new.user_id)
-    .bind(&new.objective)
+    .bind(objective_preview(&new.objective))
     .bind(new.started_at.to_string())
     .bind(new.correlation_id.to_string())
+    .bind(&new.objective)
     .execute(database.pool())
     .await
     .map_err(map_insert_error)?;
@@ -421,7 +426,7 @@ pub async fn continuable_interrupted_runs(
             break;
         }
         let row = sqlx::query(
-            "SELECT id, session_id, objective FROM agent_runs AS run \
+            "SELECT id, session_id, COALESCE(full_objective, objective) AS objective FROM agent_runs AS run \
              WHERE id = ?1 AND state = 'failed' AND error_code = ?2 AND started_at >= ?3 \
                AND NOT EXISTS (SELECT 1 FROM agent_runs AS later \
                                WHERE later.session_id = run.session_id AND later.id > run.id)",
@@ -473,7 +478,7 @@ pub async fn continuable_interrupted_runs(
 /// [`DatabaseError::Sqlite`] when the read fails.
 pub async fn find_run(database: &SqliteDatabase, id: &str) -> Result<StoredRun, DatabaseError> {
     let row = sqlx::query(
-        "SELECT id, session_id, workspace_id, objective, state, version, \
+        "SELECT id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
                 cancellation_requested_at, terminal_outcome, completed_at, error_code, \
                 started_at \
          FROM agent_runs WHERE id = ?1",
@@ -527,7 +532,7 @@ pub async fn read_recent_runs(
     limit: u32,
 ) -> Result<Vec<StoredRun>, DatabaseError> {
     let rows = sqlx::query(
-        "SELECT id, session_id, workspace_id, objective, state, version, \
+        "SELECT id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
                 cancellation_requested_at, terminal_outcome, completed_at, error_code, \
                 started_at \
          FROM agent_runs WHERE workspace_id = ?1 ORDER BY id DESC LIMIT ?2",
@@ -1773,6 +1778,7 @@ mod tests {
         ));
         let stored = must(create_run(&database, &accepted).await);
         assert_eq!(stored.state(), RunState::Received);
+        assert_eq!(stored.objective(), "é".repeat(MAX_OBJECTIVE_CHARS));
 
         // One character more is refused before SQLite sees it.
         let too_long = "é".repeat(MAX_OBJECTIVE_CHARS + 1);
@@ -1788,6 +1794,71 @@ mod tests {
             ),
             Err(DatabaseError::InvalidRunRequest { field: "objective" })
         ));
+    }
+
+    #[tokio::test]
+    async fn upgrading_legacy_runs_preserves_relationships_and_accepts_full_objectives() {
+        let (_directory, database) = seeded_database().await;
+        let original = must(NewRun::new(
+            RUN_A,
+            SESSION,
+            WORKSPACE,
+            USER,
+            "legacy input",
+            CorrelationId::new(),
+            at(0),
+        ));
+        must(create_run(&database, &original).await);
+        let path = database.path().to_owned();
+        must(
+            sqlx::query("ALTER TABLE agent_runs DROP COLUMN full_objective")
+                .execute(database.pool())
+                .await,
+        );
+        must(
+            sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 28")
+                .execute(database.pool())
+                .await,
+        );
+        must(
+            sqlx::query(
+                "UPDATE jarvis_storage_metadata SET schema_version = 27 WHERE singleton = 1",
+            )
+            .execute(database.pool())
+            .await,
+        );
+        must(
+            sqlx::query("PRAGMA user_version = 27")
+                .execute(database.pool())
+                .await,
+        );
+        database.close().await;
+        let database = must(SqliteDatabase::open(&path).await);
+        assert!(database.pre_migration_backup().is_some());
+        let legacy = must(find_run(&database, RUN_A).await);
+        assert_eq!(legacy.objective(), "legacy input");
+        assert_eq!(legacy.session_id(), SESSION);
+        assert!(
+            must(
+                sqlx::query("PRAGMA foreign_key_check")
+                    .fetch_all(database.pool())
+                    .await
+            )
+            .is_empty()
+        );
+        let text = format!("{}TAIL", "long input\n".repeat(2000));
+        let input = must(NewRun::new(
+            RUN_B,
+            SESSION,
+            WORKSPACE,
+            USER,
+            &text,
+            CorrelationId::new(),
+            at(1),
+        ));
+        let stored = must(create_run(&database, &input).await);
+        assert_eq!(stored.objective(), text);
+        database.close().await;
     }
 
     #[tokio::test]

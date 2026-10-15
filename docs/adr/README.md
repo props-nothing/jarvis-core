@@ -236,3 +236,6 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0215](0215-native-recall-searches-the-task-before-falling-back-to-recent-memory.md) | Native recall searches the task before falling back to recent memory | Accepted |
 | [0216](0216-local-mcp-credentials-are-named-profile-secrets-not-inherited-environment.md) | Local MCP credentials are named profile secrets, not inherited environment | Accepted |
 | [0217](0217-github-settings-use-persistent-pkce-sign-in-and-current-token-mcp-requests.md) | GitHub Settings use persistent PKCE sign-in and current-token MCP requests | Accepted |
+| [0218](0218-contact-deletion-removes-the-record-and-its-suppression-under-normal-policy.md) | Contact deletion removes the record and its suppression under normal policy | Accepted |
+| [0219](0219-remote-mcp-tokens-are-named-server-bound-request-credentials.md) | Remote MCP tokens are named server-bound request credentials | Accepted |
+| [0220](0220-generic-mcp-oauth-binds-preregistered-clients-to-resource-and-issuer.md) | Generic MCP OAuth binds pre-registered clients to resource and issuer | Accepted |

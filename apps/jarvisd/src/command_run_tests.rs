@@ -171,6 +171,7 @@ fn a_node_exit_crash_after_complete_output_carries_a_note() {
         head: text.as_bytes().to_vec(),
         tail: Vec::new(),
         omitted: 0,
+        ..Ends::default()
     };
     let crash = ends(
         "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 94",
@@ -458,6 +459,39 @@ async fn a_flood_of_output_keeps_the_start_and_the_end_and_fits_the_budget() {
         "the end is kept: that is where the error is"
     );
     assert!(stdout.contains("omitted"), "what was left out is stated");
+    assert_eq!(output["capture_complete"], true);
+    let path = output["stdout_path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("missing capture path"));
+    let capture =
+        std::fs::read_to_string(scratch.0.join(path)).unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        capture.contains("line-3000-padding"),
+        "the omitted middle must remain recoverable"
+    );
+    assert!(capture.contains("line-6000-padding"));
+}
+
+#[test]
+fn escaped_previews_never_hide_the_capture_paths() {
+    let scratch = Scratch::new();
+    let tool = tool_in(&scratch);
+    let stream = Ends {
+        head: "\\\"".repeat(1500).into_bytes(),
+        capture: b"complete".to_vec(),
+        capture_complete: true,
+        ..Ends::default()
+    };
+    let now = UtcTimestamp::now(&SystemClock);
+    let result = report(Some(0), false, &stream, &stream, false, Duration::ZERO, now);
+    let result = tool.with_captures(&result, &stream, &stream, false, now);
+    let output = result.output().unwrap_or_else(|| panic!("missing output"));
+    assert!(output.content().chars().count() <= jarvis_tools::MAX_MODEL_FACING_RESULT_CHARS);
+    let body: Value =
+        serde_json::from_str(output.content()).unwrap_or_else(|error| panic!("{error}"));
+    assert!(body["stdout_path"].is_string());
+    assert!(body["stderr_path"].is_string());
+    assert_eq!(body["capture_complete"], true);
 }
 
 /// **Output cannot close its own fence** and pose as the tool's words.

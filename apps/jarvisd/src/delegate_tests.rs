@@ -114,6 +114,142 @@ fn tool_results(model: &jarvis_models::ScriptedModel) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[tokio::test]
+async fn retained_context_recovers_a_large_input_without_reading_another_conversation() {
+    let fixture = fixture().await;
+    let foreign = start(&fixture, "PRIVATE-OTHER-CONVERSATION").await;
+    let messages = jarvis_storage::read_messages(&fixture.database, &foreign.session_id, 10)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let original = format!("{}TAIL-OF-THE-FULL-REQUEST", "a".repeat(80_000));
+    let parent = start(&fixture, &original).await;
+    let model = parent_model(vec![
+        Turn::tool_call("page", CONTEXT_TOOL, r#"{"source":"input","offset":80000}"#),
+        Turn::tool_call(
+            "foreign",
+            CONTEXT_TOOL,
+            &json!({"source":"message", "id": messages[0].id()}).to_string(),
+        ),
+        Turn::answer("finished"),
+    ]);
+    let settled = drive_parent(&fixture, &model, &parent.run_id).await;
+    assert_eq!(settled.objective(), original);
+    assert_eq!(settled.terminal_outcome(), Some(RunOutcome::Succeeded));
+    let results = tool_results(&model);
+    let page: serde_json::Value =
+        serde_json::from_str(&results[0]).unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        page["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("TAIL-OF-THE-FULL-REQUEST")
+    );
+    assert!(page["next_offset"].is_null());
+    assert!(results[1].contains("not available in this conversation"));
+    assert!(!results[1].contains("PRIVATE-OTHER-CONVERSATION"));
+    let seen = model.seen_messages();
+    let initial = &seen[0];
+    assert!(
+        initial
+            .iter()
+            .any(|message| message.text().contains("jarvis.context.read"))
+    );
+    assert!(
+        !initial
+            .iter()
+            .any(|message| message.text().contains("TAIL-OF-THE-FULL-REQUEST"))
+    );
+    fixture.database.close().await;
+}
+
+#[tokio::test]
+async fn history_paging_discovers_messages_older_than_the_context_window() {
+    let fixture = fixture().await;
+    let first = start(&fixture, "oldest-message").await;
+    for index in 0..45 {
+        fixture
+            .runs
+            .start(&StartRunRequest {
+                objective: format!("later-message-{index}"),
+                session_id: Some(first.session_id.clone()),
+                idempotency_key: None,
+                project_id: None,
+            })
+            .await
+            .unwrap_or_else(|error| panic!("{error:?}"));
+    }
+    let run = jarvis_storage::find_run(&fixture.database, &first.run_id)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let agent = AgentTool::new(Arc::clone(&fixture.database), Arc::clone(&fixture.executor));
+    let mut offset = 0;
+    let mut found = String::new();
+    loop {
+        let page = agent
+            .context_history(&run, &json!({"offset": offset}))
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        found.push_str(
+            page["content"]
+                .as_str()
+                .unwrap_or_else(|| panic!("missing fenced history")),
+        );
+        let Some(next) = page["next_offset"].as_i64() else {
+            break;
+        };
+        assert!(next > offset);
+        offset = next;
+    }
+    let messages = jarvis_storage::read_messages(&fixture.database, &first.session_id, 100)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(messages.len(), 46);
+    for message in messages {
+        assert!(found.contains(message.id()));
+    }
+    assert!(found.contains("oldest-message"));
+    assert!(found.contains("later-message-44"));
+    fixture.database.close().await;
+}
+
+#[tokio::test]
+async fn a_long_delegated_answer_has_recoverable_pages() {
+    let fixture = fixture().await;
+    let child = start(&fixture, &format!("{DELEGATED_NOTICE}read everything")).await;
+    let original = format!("{}LAST-PAGE", "full answer\n".repeat(1000));
+    let model = parent_model(vec![Turn::answer(&original)]);
+    let run = drive_parent(&fixture, &model, &child.run_id).await;
+    let agent = AgentTool::new(Arc::clone(&fixture.database), Arc::clone(&fixture.executor));
+    let mut offset = 0;
+    loop {
+        let page = agent
+            .describe(&run, offset)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(page.to_string().chars().count() <= MAX_MODEL_FACING_RESULT_CHARS);
+        assert_eq!(page["total_chars"], original.chars().count());
+        let expected: String = original
+            .chars()
+            .skip(offset)
+            .take(MAX_ANSWER_CHARS)
+            .collect();
+        assert_eq!(
+            page["answer"],
+            json!(IsolatedText::new(&expected).ok().map(|text| text.render()))
+        );
+        let Some(next) = page["next_offset"].as_u64() else {
+            break;
+        };
+        assert_eq!(page["truncated"], true);
+        let next = usize::try_from(next).unwrap_or_else(|error| panic!("{error}"));
+        assert!(next > offset);
+        offset = next;
+    }
+    assert!(offset > 3000);
+    assert_eq!(model.calls(), 1);
+    fixture.database.close().await;
+}
+
 /// **A parent run delegates, the sub-agent runs as an ordinary run, and its answer comes back fenced.**
 #[tokio::test]
 async fn a_delegated_task_runs_as_a_sub_agent_and_its_answer_is_fenced() {

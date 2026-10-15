@@ -141,7 +141,7 @@ pub struct Configured {
     pub posture: String,
     /// Credential variable to named-reference mappings. No values or key file paths.
     pub env: std::collections::BTreeMap<String, String>,
-    /// A supported account binding, never an access token.
+    /// A same-server key reference or supported account binding, never an access token.
     pub authorization: Option<String>,
 }
 
@@ -167,7 +167,7 @@ pub struct ServerBody {
     /// Credential variables mapped only to this server's named references.
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
-    /// The explicitly selected OAuth account for a supported remote server.
+    /// A same-server named token reference or an explicitly selected OAuth account binding.
     #[serde(default)]
     pub authorization: Option<String>,
 }
@@ -269,7 +269,9 @@ fn entry_table(
     }
     if let Some(authorization) = &body.authorization {
         if !body.command.is_empty() {
-            return Err("OAuth account binding requires a supported remote server".to_owned());
+            return Err(
+                "HTTP authorization requires a remote server, not a local command".to_owned(),
+            );
         }
         transport.insert("authorization".into(), authorization.clone().into());
     }
@@ -519,6 +521,21 @@ fn overview_json(state: &GatewayState, current: Option<&str>) -> serde_json::Val
                 .servers
                 .iter()
                 .find(|status| status.name == configured.name);
+            let mut credentials = settings
+                .map(|settings| crate::mcp_credentials::states(settings.paths(), &configured.env))
+                .unwrap_or_default();
+            if let (Some(settings), Some(endpoint), Some(binding)) = (
+                settings,
+                configured.endpoint.as_deref(),
+                configured.authorization.as_deref(),
+            ) && let Some(credential) = crate::mcp_credentials::http_state(
+                settings.paths(),
+                &configured.name,
+                endpoint,
+                binding,
+            ) {
+                credentials.push(credential);
+            }
             json!({
                 "name": configured.name,
                 "kind": configured.kind,
@@ -527,7 +544,10 @@ fn overview_json(state: &GatewayState, current: Option<&str>) -> serde_json::Val
                 "posture": configured.posture,
                 "env": configured.env,
                 "authorization": configured.authorization,
-                "credentials": settings.map(|settings| crate::mcp_credentials::states(settings.paths(), &configured.env)).unwrap_or_default(),
+                "oauth": configured.authorization.as_deref().filter(|binding| binding.starts_with("oauth:"))
+                    .and(configured.endpoint.as_deref())
+                    .and_then(|endpoint| crate::mcp_oauth_service::status_value(state, &configured.name, endpoint)),
+                "credentials": credentials,
                 // A server in the file the daemon did not start with has not been tried yet.
                 "state": status.map_or("not_started", |status| status.state),
                 "reason": status.and_then(|status| status.reason.clone()),
@@ -854,6 +874,43 @@ mod tests {
             ))
             .is_empty()
         );
+    }
+
+    #[test]
+    fn named_http_authorization_round_trips_and_cannot_become_a_literal_or_local_environment() {
+        let mut request = body("remote", &[]);
+        request.endpoint = Some("https://tools.example/mcp".to_owned());
+        request.authorization = Some("mcp:remote:token".to_owned());
+        let document =
+            add_to_document(None, &request, &found).unwrap_or_else(|error| panic!("{error}"));
+        let servers = configured_servers(Some(&document));
+        assert_eq!(
+            servers[0].authorization.as_deref(),
+            Some("mcp:remote:token")
+        );
+        assert_eq!(servers[0].posture, "unclassified");
+        assert!(servers[0].env.is_empty());
+        for invalid in ["synthetic-literal-secret", "mcp:other:token", ""] {
+            request.authorization = Some(invalid.to_owned());
+            let error = add_to_document(None, &request, &found)
+                .err()
+                .unwrap_or_else(|| panic!("must refuse"));
+            if !invalid.is_empty() {
+                assert!(!error.contains(invalid));
+            }
+        }
+        request.authorization = Some("mcp:remote:token".to_owned());
+        request.endpoint = Some("https://tools.example/mcp?token=synthetic-private".to_owned());
+        assert!(add_to_document(None, &request, &found).is_err());
+        request.endpoint = None;
+        request.command = vec!["local-server".to_owned()];
+        assert!(add_to_document(None, &request, &found).is_err());
+        request.command.clear();
+        request.endpoint = Some("https://tools.example/mcp".to_owned());
+        request
+            .env
+            .insert("API_KEY".to_owned(), "mcp:remote:token".to_owned());
+        assert!(add_to_document(None, &request, &found).is_err());
     }
 
     #[test]

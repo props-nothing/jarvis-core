@@ -84,6 +84,7 @@ const TAIL_CHARS: usize = MAX_STREAM_CHARS - HEAD_CHARS;
 /// Bytes kept from each stream while it is read: the first and the last. The middle is read and dropped.
 const HEAD_BYTES: usize = 8 * 1024;
 const TAIL_BYTES: usize = 32 * 1024;
+const CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 
 /// How long to wait for a stream's reader once the process is gone.
 const READER_GRACE: Duration = Duration::from_secs(3);
@@ -213,6 +214,9 @@ const OUTPUT_SCHEMA: &str = r#"{
     "exit_code": { "type": ["integer", "null"], "description": "The exit status. Zero means success. Absent after a timeout." },
     "stdout": { "type": ["string", "null"], "description": "Standard output (start and end), fenced as untrusted data." },
     "stderr": { "type": ["string", "null"], "description": "Standard error (start and end), fenced as untrusted data." },
+    "stdout_path": { "type": ["string", "null"], "description": "Captured standard output in the granted folder. Read with jarvis.files.read and follow next_offset; do not rerun the command to recover output." },
+    "stderr_path": { "type": ["string", "null"], "description": "Captured standard error, readable with jarvis.files.read." },
+    "capture_complete": { "type": "boolean", "description": "False if a stream failed, exceeded the 16 MiB capture ceiling or could not be saved. Paths then contain only captured text." },
     "truncated": { "type": "boolean", "description": "Part of the output was left out." },
     "seconds": { "type": "number" },
     "note": { "type": "string", "description": "Present when the exit status is known not to mean what it usually means." }
@@ -490,7 +494,7 @@ impl CommandRunTool {
 
         let (stdout, stdout_cut) = collect(stdout).await;
         let (stderr, stderr_cut) = collect(stderr).await;
-        Ok(report(
+        let result = report(
             status.as_ref().and_then(std::process::ExitStatus::code),
             status.is_none(),
             &stdout,
@@ -498,7 +502,59 @@ impl CommandRunTool {
             stdout_cut || stderr_cut,
             started.elapsed(),
             now,
-        ))
+        );
+        Ok(self.with_captures(&result, &stdout, &stderr, stdout_cut || stderr_cut, now))
+    }
+
+    fn with_captures(
+        &self,
+        result: &ToolCallResult,
+        stdout: &Ends,
+        stderr: &Ends,
+        stream_cut: bool,
+        now: UtcTimestamp,
+    ) -> ToolCallResult {
+        let roots = jarvis_tools::WorkspaceRoots::new(&self.roots).ok();
+        let capture_id = jarvis_core::RunId::new();
+        let mut complete = !stream_cut && stdout.capture_complete && stderr.capture_complete;
+        let mut paths = Vec::new();
+        for (stream, name) in [(stdout, "stdout"), (stderr, "stderr")] {
+            let path = format!(".jarvis-output/{capture_id}.{name}.txt");
+            let saved = roots
+                .as_ref()
+                .and_then(|roots| {
+                    let text = clean(&String::from_utf8_lossy(&stream.capture));
+                    roots
+                        .write_file(Path::new(&path), text.as_bytes(), false)
+                        .ok()
+                })
+                .is_some();
+            complete &= saved;
+            paths.push(saved.then_some(path));
+        }
+        let mut body: Value = result
+            .output()
+            .and_then(|output| serde_json::from_str(output.content()).ok())
+            .unwrap_or_else(|| json!({}));
+        body["stdout_path"] = json!(paths[0]);
+        body["stderr_path"] = json!(paths[1]);
+        body["capture_complete"] = json!(complete);
+        let mut preview_chars = MAX_STREAM_CHARS;
+        while body.to_string().chars().count() > jarvis_tools::MAX_MODEL_FACING_RESULT_CHARS {
+            preview_chars /= 2;
+            body["stdout"] = json!(fenced_with_limit(stdout, preview_chars).0);
+            body["stderr"] = json!(fenced_with_limit(stderr, preview_chars).0);
+            body["truncated"] = json!(true);
+        }
+        ToolCallResult::new(
+            result.record().clone(),
+            result.evidence().cloned(),
+            Some(BoundedOutput::from_bounded(
+                body.to_string(),
+                result.output().is_some_and(BoundedOutput::is_truncated),
+            )),
+            now,
+        )
     }
 }
 
@@ -674,12 +730,21 @@ where
     let mut head: Vec<u8> = Vec::new();
     let mut tail: Vec<u8> = Vec::new();
     let mut total = 0_usize;
+    let mut capture = Vec::new();
+    let mut capture_complete = true;
     let mut buffer = [0_u8; 8192];
     loop {
         match reader.read(&mut buffer).await {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            Err(_) => {
+                capture_complete = false;
+                break;
+            }
             Ok(count) => {
                 total += count;
+                let room = CAPTURE_BYTES.saturating_sub(capture.len());
+                capture.extend_from_slice(&buffer[..count.min(room)]);
+                capture_complete &= count <= room;
                 let room = HEAD_BYTES.saturating_sub(head.len());
                 let (to_head, to_tail) = buffer[..count].split_at(count.min(room));
                 head.extend_from_slice(to_head);
@@ -700,6 +765,8 @@ where
         head,
         tail,
         omitted,
+        capture,
+        capture_complete,
     }
 }
 
@@ -709,6 +776,8 @@ struct Ends {
     head: Vec<u8>,
     tail: Vec<u8>,
     omitted: usize,
+    capture: Vec<u8>,
+    capture_complete: bool,
 }
 
 /// Waits briefly for a reader task and returns what it kept, and whether anything is known to be missing.
@@ -718,7 +787,7 @@ async fn collect(handle: Option<tokio::task::JoinHandle<Ends>>) -> (Ends, bool) 
     };
     match tokio::time::timeout(READER_GRACE, handle).await {
         Ok(Ok(ends)) => {
-            let cut = ends.omitted > 0;
+            let cut = !ends.capture_complete;
             (ends, cut)
         }
         // A reader that did not finish (a grandchild still holding the pipe) is reported as cut rather than waited on.
@@ -768,6 +837,10 @@ pub fn clean(text: &str) -> String {
 
 /// Fences one stream's kept ends as untrusted text, or `None` when it is empty. Returns whether it was cut.
 fn fenced(ends: &Ends) -> (Option<String>, bool) {
+    fenced_with_limit(ends, MAX_STREAM_CHARS)
+}
+
+fn fenced_with_limit(ends: &Ends, limit: usize) -> (Option<String>, bool) {
     let whole = ends.omitted == 0;
     let joined = if whole {
         let mut all = ends.head.clone();
@@ -781,13 +854,15 @@ fn fenced(ends: &Ends) -> (Option<String>, bool) {
         )
     };
     let length = joined.chars().count();
-    let (text, cut) = if length > MAX_STREAM_CHARS {
-        let head: String = joined.chars().take(HEAD_CHARS).collect();
-        let tail: String = joined.chars().skip(length - TAIL_CHARS).collect();
+    let (text, cut) = if length > limit {
+        let head_chars = HEAD_CHARS.min(limit / 5);
+        let tail_chars = TAIL_CHARS.min(limit.saturating_sub(head_chars));
+        let head: String = joined.chars().take(head_chars).collect();
+        let tail: String = joined.chars().skip(length - tail_chars).collect();
         (
             format!(
                 "{head}\n[... {} characters omitted ...]\n{tail}",
-                length - HEAD_CHARS - TAIL_CHARS
+                length - head_chars - tail_chars
             ),
             true,
         )

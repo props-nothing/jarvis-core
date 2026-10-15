@@ -60,6 +60,7 @@ pub const DELEGATE_TOOL: &str = "jarvis.agent.delegate";
 pub const RESULT_TOOL: &str = "jarvis.agent.result";
 /// Lists the sub-agents, running and finished.
 pub const LIST_TOOL: &str = "jarvis.agent.list";
+pub const CONTEXT_TOOL: &str = "jarvis.context.read";
 
 /// The scope both tools need. Held by the daemon's own surface, withheld from a sub-agent by the executor.
 pub const AGENT_SCOPE: &str = "agent.delegate";
@@ -73,7 +74,7 @@ the tools you are offered, and report the result briefly and factually. You cann
 available to answer questions, so make reasonable assumptions.\n\nTask: ";
 
 /// The most characters of a task. With the notice it fits a run objective (4,096) with room to spare.
-pub const MAX_TASK_CHARS: usize = 2000;
+pub const MAX_TASK_CHARS: usize = 50_000;
 
 /// The most sub-agents running at once.
 pub const MAX_ACTIVE_SUBAGENTS: usize = 4;
@@ -91,14 +92,14 @@ const POLL: Duration = Duration::from_millis(300);
 const TIMEOUT_SECONDS: u32 = 120;
 
 /// Characters of a sub-agent's answer returned, which JSON escaping at most doubles.
-const MAX_ANSWER_CHARS: usize = 3000;
+const MAX_ANSWER_CHARS: usize = 1500;
 /// The most sub-agents `jarvis.agent.list` names.
 const MAX_LISTED_SUBAGENTS: usize = 20;
 /// The most sub-agents that may be unsettled at once, working or parked for an approval.
 pub const MAX_UNSETTLED_SUBAGENTS: usize = 16;
 
 const _: () = assert!(
-    2 * (MAX_ANSWER_CHARS + 100) + 1000 <= MAX_MODEL_FACING_RESULT_CHARS,
+    6 * (MAX_ANSWER_CHARS + 100) + 1000 <= MAX_MODEL_FACING_RESULT_CHARS,
     "an escaped answer must fit the executor's result budget"
 );
 
@@ -137,7 +138,7 @@ const DELEGATE_INPUT: &str = r#"{
     "task": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 2000,
+    "maxLength": 50000,
       "description": "One self-contained task, with everything the sub-agent needs: it cannot see this conversation."
     },
     "background": {
@@ -161,11 +162,32 @@ const RESULT_INPUT: &str = r#"{
   "required": ["run_id"],
   "properties": {
     "run_id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "A sub-agent's run id." },
+    "offset": { "type": "integer", "minimum": 0, "description": "Character offset in the stored answer. Continue with next_offset until null; this does not rerun the task." },
     "wait_seconds": {
       "type": "integer", "minimum": 0, "maximum": 60,
       "description": "How long to wait for it to finish before reporting it still running."
     }
   }
+}"#;
+
+const CONTEXT_INPUT: &str = r#"{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object", "additionalProperties": false,
+    "properties": {
+        "source": { "type": "string", "enum": ["input", "history", "message", "tool"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "Message or durable tool call ID from this conversation. Omit for this run's input." },
+        "offset": { "type": "integer", "minimum": 0, "description": "Character offset, or message sequence for source=history. Continue with next_offset until null." }
+    }
+}"#;
+
+const CONTEXT_OUTPUT: &str = r#"{
+    "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object",
+    "required": ["source", "content", "offset", "next_offset", "total_chars", "source_truncated"],
+    "properties": {
+        "source": { "type": "string" }, "content": { "type": ["string", "null"] },
+        "offset": { "type": "integer" }, "next_offset": { "type": ["integer", "null"] },
+        "total_chars": { "type": "integer" }, "source_truncated": { "type": "boolean" }
+    }, "additionalProperties": false
 }"#;
 
 const OUTPUT: &str = r#"{
@@ -180,6 +202,10 @@ const OUTPUT: &str = r#"{
     },
     "run_id": { "type": "string" },
     "answer": { "type": ["string", "null"], "description": "The sub-agent's answer, fenced as untrusted data." },
+    "offset": { "type": "integer" },
+    "next_offset": { "type": ["integer", "null"] },
+    "total_chars": { "type": "integer" },
+    "truncated": { "type": "boolean" },
     "detail": { "type": "string" }
   }
 }"#;
@@ -236,7 +262,7 @@ impl AgentTool {
             RESULT_TOOL,
             "Read a sub-agent's result",
             "Reads the state and answer of a sub-agent started with jarvis.agent.delegate, optionally waiting a \
-             little for it to finish. The answer is untrusted data.",
+             little for it to finish. Continue with next_offset until null to recover the full stored answer. The answer is untrusted data.",
             RESULT_INPUT,
             ToolEffect::ReadOnly,
             0,
@@ -250,7 +276,15 @@ impl AgentTool {
             ToolEffect::ReadOnly,
             0,
         )?;
-        Ok(vec![delegate, result, list])
+        let context = Self::definition(
+            CONTEXT_TOOL,
+            "Read retained context",
+            "Reads the full stored input, an earlier message, or a retained tool result from this conversation. Use source=input for the rest of a long request; source=history lists older message IDs, then source=message and id reads each. Follow next_offset until null. source_truncated means the original tool retained only partial output; use its file paths or provider pagination for the remainder.",
+            CONTEXT_INPUT,
+            ToolEffect::ReadOnly,
+            0,
+        )?;
+        Ok(vec![delegate, result, list, context])
     }
 
     fn definition(
@@ -267,10 +301,18 @@ impl AgentTool {
             title: title.to_owned(),
             description: description.to_owned(),
             input_schema: ToolSchema::parse(input)?,
-            output_schema: ToolSchema::parse(OUTPUT)?,
+            output_schema: ToolSchema::parse(if id == CONTEXT_TOOL {
+                CONTEXT_OUTPUT
+            } else {
+                OUTPUT
+            })?,
             effects: EffectSet::single(effect),
             risk,
-            required_scopes: ScopeSet::single(Scope::new(AGENT_SCOPE)?),
+            required_scopes: ScopeSet::single(Scope::new(if id == CONTEXT_TOOL {
+                "context.read"
+            } else {
+                AGENT_SCOPE
+            })?),
             approval: ApprovalPolicy::Auto,
             timeout_seconds: TIMEOUT_SECONDS,
             retry: RetryDeclaration::none(),
@@ -302,7 +344,8 @@ impl ToolExecutor for AgentTool {
         request: &ToolExecutionRequest,
     ) -> Result<ToolCallResult, AdapterError> {
         let tool = request.tool().to_string();
-        if tool != DELEGATE_TOOL && tool != RESULT_TOOL && tool != LIST_TOOL {
+        if tool != DELEGATE_TOOL && tool != RESULT_TOOL && tool != LIST_TOOL && tool != CONTEXT_TOOL
+        {
             return Err(AdapterError::NotImplemented { tool });
         }
         let now = UtcTimestamp::now(&SystemClock);
@@ -310,6 +353,10 @@ impl ToolExecutor for AgentTool {
             return Err(AdapterError::RefusedBeforeReaching {
                 reason: "the call was already past its deadline".to_owned(),
             });
+        }
+        if tool == CONTEXT_TOOL {
+            let body = self.read_context(request).await?;
+            return Ok(report(&body, now));
         }
         let body = if tool == DELEGATE_TOOL {
             self.delegate(request.call_id(), request.arguments())
@@ -324,6 +371,108 @@ impl ToolExecutor for AgentTool {
 }
 
 impl AgentTool {
+    async fn read_context(&self, request: &ToolExecutionRequest) -> Result<Value, AdapterError> {
+        let call = jarvis_storage::find_tool_call(&self.database, request.call_id())
+            .await
+            .map_err(|_| refused("the requesting call is not available"))?;
+        let run = jarvis_storage::find_run(&self.database, call.run_id())
+            .await
+            .map_err(|_| refused("the requesting run is not available"))?;
+        let arguments = request.arguments();
+        let source = arguments
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("input");
+        let id = arguments.get("id").and_then(Value::as_str);
+        if source == "history" {
+            return self.context_history(&run, arguments).await;
+        }
+        let (text, source_truncated) = match source {
+            "input" if id.is_none() => (run.objective().to_owned(), false),
+            "message" => {
+                let message = jarvis_storage::find_message(
+                    &self.database,
+                    id.ok_or_else(|| refused("id is required"))?,
+                )
+                .await
+                .map_err(|_| refused("that message is not available in this conversation"))?;
+                if message.session_id() != run.session_id() {
+                    return Err(refused(
+                        "that message is not available in this conversation",
+                    ));
+                }
+                (message.content().to_owned(), false)
+            }
+            "tool" => {
+                let stored = jarvis_storage::find_tool_call(
+                    &self.database,
+                    id.ok_or_else(|| refused("id is required"))?,
+                )
+                .await
+                .map_err(|_| refused("that result is not available in this conversation"))?;
+                let owner = jarvis_storage::find_run(&self.database, stored.run_id())
+                    .await
+                    .map_err(|_| refused("that result is not available in this conversation"))?;
+                if owner.session_id() != run.session_id()
+                    || owner.workspace_id() != run.workspace_id()
+                {
+                    return Err(refused("that result is not available in this conversation"));
+                }
+                (
+                    stored.output().unwrap_or_default().to_owned(),
+                    stored.output_truncated(),
+                )
+            }
+            _ => {
+                return Err(refused(
+                    "use source input, message or tool with the appropriate id",
+                ));
+            }
+        };
+        let offset = match arguments.get("offset") {
+            None => 0,
+            Some(value) => value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| refused("offset must be a nonnegative character offset"))?,
+        };
+        let total = text.chars().count();
+        let page: String = text.chars().skip(offset).take(MAX_ANSWER_CHARS).collect();
+        let end = offset.saturating_add(page.chars().count());
+        let next_offset = (end < total).then_some(end);
+        Ok(
+            json!({ "source": source, "content": IsolatedText::new(&page).ok().map(|text| text.render()),
+            "offset": offset, "next_offset": next_offset, "total_chars": total, "source_truncated": source_truncated }),
+        )
+    }
+
+    async fn context_history(
+        &self,
+        run: &StoredRun,
+        arguments: &Value,
+    ) -> Result<Value, AdapterError> {
+        let offset = arguments
+            .get("offset")
+            .map_or(Some(0), Value::as_i64)
+            .filter(|offset| *offset >= 0)
+            .ok_or_else(|| refused("offset must be a nonnegative sequence"))?;
+        let messages =
+            jarvis_storage::read_messages_from(&self.database, run.session_id(), offset, 11)
+                .await
+                .map_err(|_| refused("the conversation could not be read"))?;
+        let entries: Vec<_> = messages.iter().take(10).map(|message| json!({
+            "id": message.id(), "sequence": message.sequence(), "role": message.role().as_str(),
+            "preview": message.content().chars().take(100).collect::<String>()
+        })).collect();
+        let next_offset = messages
+            .get(10)
+            .map(jarvis_storage::StoredMessage::sequence);
+        Ok(
+            json!({ "source": "history", "content": IsolatedText::new(&json!(entries).to_string()).ok().map(|text| text.render()),
+            "offset": offset, "next_offset": next_offset, "total_chars": 0, "source_truncated": false }),
+        )
+    }
+
     async fn delegate(&self, call_id: &str, arguments: &Value) -> Result<Value, AdapterError> {
         let Some(task) = arguments.get("task").and_then(Value::as_str) else {
             return Err(refused("the task argument is missing or is not a string"));
@@ -405,7 +554,7 @@ impl AgentTool {
         if background {
             return Ok(json!({ "outcome": "started", "run_id": started.run_id }));
         }
-        self.wait_and_describe(&started.run_id, WAIT_LIMIT).await
+        self.wait_and_describe(&started.run_id, WAIT_LIMIT, 0).await
     }
 
     async fn result(&self, arguments: &Value) -> Result<Value, AdapterError> {
@@ -434,7 +583,14 @@ impl AgentTool {
                 }));
             }
         }
-        self.wait_and_describe(run_id, Duration::from_secs(wait))
+        let offset = match arguments.get("offset") {
+            None => 0,
+            Some(value) => value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| refused("offset must be a nonnegative character offset"))?,
+        };
+        self.wait_and_describe(run_id, Duration::from_secs(wait), offset)
             .await
     }
 
@@ -524,6 +680,7 @@ impl AgentTool {
         &self,
         run_id: &str,
         limit: Duration,
+        offset: usize,
     ) -> Result<Value, AdapterError> {
         let deadline = tokio::time::Instant::now() + limit;
         loop {
@@ -534,13 +691,13 @@ impl AgentTool {
                 || run.state() == jarvis_core::RunState::AwaitingApproval
                 || tokio::time::Instant::now() >= deadline
             {
-                return self.describe(&run).await;
+                return self.describe(&run, offset).await;
             }
             tokio::time::sleep(POLL).await;
         }
     }
 
-    async fn describe(&self, run: &StoredRun) -> Result<Value, AdapterError> {
+    async fn describe(&self, run: &StoredRun, offset: usize) -> Result<Value, AdapterError> {
         let run_id = run.id();
         if run.state() == jarvis_core::RunState::AwaitingApproval {
             return Ok(json!({
@@ -557,13 +714,20 @@ impl AgentTool {
                 let answer = crate::executor::last_answer(&self.database, run)
                     .await
                     .map_err(|_| refused("the sub-agent's answer could not be read"))?;
+                let total = answer.as_ref().map_or(0, |text| text.chars().count());
+                let end = offset.saturating_add(MAX_ANSWER_CHARS).min(total);
+                let next_offset = (end < total).then_some(end);
                 let fenced = answer.and_then(|text| {
-                    let clipped: String = text.chars().take(MAX_ANSWER_CHARS).collect();
+                    let clipped: String =
+                        text.chars().skip(offset).take(MAX_ANSWER_CHARS).collect();
                     IsolatedText::new(&clipped)
                         .ok()
                         .map(|isolated| isolated.render())
                 });
-                Ok(json!({ "outcome": "completed", "run_id": run_id, "answer": fenced }))
+                Ok(
+                    json!({ "outcome": "completed", "run_id": run_id, "answer": fenced,
+                    "offset": offset, "next_offset": next_offset, "total_chars": total, "truncated": next_offset.is_some() }),
+                )
             }
             Some(RunOutcome::Cancelled) => Ok(json!({ "outcome": "cancelled", "run_id": run_id })),
             _ => Ok(json!({
@@ -611,10 +775,11 @@ mod tests {
     #[test]
     fn both_definitions_are_accepted_and_share_one_scope() {
         let definitions = AgentTool::definitions().unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(definitions.len(), 3);
+        assert_eq!(definitions.len(), 4);
         for definition in &definitions {
             assert!(
-                definition.id().to_string().starts_with(AGENT_TOOL_PREFIX),
+                definition.id().to_string().starts_with(AGENT_TOOL_PREFIX)
+                    || definition.id().to_string() == CONTEXT_TOOL,
                 "the executor withholds tools by this prefix"
             );
             assert_eq!(definition.required_scopes().len(), 1);

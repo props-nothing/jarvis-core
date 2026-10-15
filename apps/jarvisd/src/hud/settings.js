@@ -1630,8 +1630,123 @@ window.JarvisSettings = function (context) {
       if (started || current) parts.push(current);
       return parts;
     }
+    function mcpOAuthAddress(reply) {
+      function parse(value) {
+        if (typeof value !== "string" || /[\u0000-\u0020\u007f\\]/.test(value)) return null;
+        var original = /^(https?):\/\/([^/?#]+)(?:[/?#]|$)/i.exec(value);
+        if (!original || original[2].indexOf("@") >= 0 || value.indexOf("#") >= 0) return null;
+        var parsed = new URL(value);
+        // Do not let URL normalization replace the authority supplied by the daemon.
+        if (parsed.username || parsed.password || parsed.origin.toLowerCase() !== (original[1] + "://" + original[2]).toLowerCase()) return null;
+        return parsed;
+      }
+      try {
+        var address = parse(reply.auth_url), endpoint = parse(reply.authorization_endpoint);
+        if (!address || !endpoint || address.origin !== endpoint.origin || address.pathname !== endpoint.pathname) return null;
+        if (address.protocol !== "https:") {
+          var local = /^(127\.0\.0\.1|localhost|\[::1\])$/;
+          if (!window.location || window.location.protocol !== "http:" || !local.test(window.location.hostname) || !local.test(address.hostname)) return null;
+        }
+        return address.href;
+      } catch (_) { return null; }
+    }
+    function mcpOAuthPanel(server) {
+      var panel = el("div"), current = server.oauth || {}, dirty = false, pending = false;
+      var base = "/mcp/servers/" + encodeURIComponent(server.name) + "/oauth", prefix = "mcp-oauth-" + server.name + "-";
+      panel.id = prefix + "panel";
+      var line = el("p", "lead"), out = el("p", "help"), signIn = el("div", "acts");
+      line.setAttribute("role", "status"); out.setAttribute("role", "status"); panel.appendChild(line);
+      panel.appendChild(el("p", "help", "A saved OAuth grant is not a live health check or a verified account identity. Test tools only lists tools; it executes none. Signing in never approves a tool action."));
+      var acts = el("div", "acts"), connect = el("button", "yes", "Connect"), check = el("button", "", "Check sign-in"), test = el("button", "", "Test tools"), disconnect = el("button", "danger", "Disconnect");
+      [connect, check, test, disconnect].forEach(function (button) { button.type = "button"; acts.appendChild(button); });
+      panel.appendChild(acts); panel.appendChild(signIn); panel.appendChild(out);
+      var setup = el("details"); setup.open = !current.configured;
+      setup.appendChild(el("summary", "", "One-time OAuth app setup"));
+      var help = el("p", "help", "Register an OAuth app at your provider once using the exact callback below. Copy the expected issuer URL from the provider's documentation, enter the registered client ID and request only the minimal scopes needed. JARVIS does not register an app automatically. Later, press Connect; sign-in is saved on this computer.");
+      help.id = prefix + "help"; setup.appendChild(help);
+      setup.appendChild(el("p", "help", "Register this exact callback URL:"));
+      var callback = el("code"); callback.id = prefix + "callback"; setup.appendChild(callback);
+      function field(label, suffix, type) {
+        var row = el("div", "set-row"), labelNode = el("label", "name", label), input = el("input");
+        input.id = prefix + suffix; input.type = type; input.autocomplete = "off"; input.spellcheck = false; input.setAttribute("aria-describedby", help.id);
+        labelNode.setAttribute("for", input.id); row.appendChild(labelNode); row.appendChild(input); setup.appendChild(row); return input;
+      }
+      var issuer = field("Expected issuer URL", "issuer", "text"), client = field("Client ID", "client-id", "text"), secret = field("Client secret (optional, write-only)", "client-secret", "password"), scopes = field("Scopes (space-separated)", "scopes", "text");
+      issuer.value = current.issuer || ""; client.value = current.client_id || ""; scopes.value = (current.scopes || []).join(" ");
+      issuer.placeholder = "Issuer URL from the provider's documentation";
+      setup.appendChild(el("p", "help", "Public clients need no secret. An empty secret preserves the saved secret only for the same issuer and client ID. If either changes, re-enter the secret if the new registration requires one. Secrets are write-only and never saved in browser storage. Leave scopes blank if none are required; do not copy a provider's entire scope catalog."));
+      var save = el("button", "", "Save OAuth app"); save.type = "button"; setup.appendChild(save); panel.appendChild(setup);
+      function controls() {
+        connect.disabled = pending || dirty || !current.configured;
+        test.disabled = pending || dirty || !current.connected;
+        disconnect.disabled = pending || (!current.connected && !current.pending);
+        check.disabled = pending; save.disabled = pending;
+        [issuer, client, secret, scopes].forEach(function (input) { input.disabled = pending; });
+      }
+      function paint(status) {
+        current = Object.assign({}, current, status);
+        callback.textContent = current.callback_url || "The daemon has not reported a callback address.";
+        secret.placeholder = current.client_secret_set ? "Saved for this client; leave empty to keep it" : "Optional for public clients";
+        line.textContent = current.pending ? "Waiting for browser sign-in. Finish at the provider, then press Check sign-in." : current.connected ? "OAuth grant saved on this computer. Test tools checks reachability now." : current.configured ? "App setup saved. Press Connect to sign in." : "Complete the one-time app setup, then press Connect.";
+        if (!current.pending) signIn.replaceChildren();
+        if (current.restart_needed) needsRestart("OAuth tools: " + server.name);
+        controls();
+      }
+      function fail(message) { pending = false; out.className = "help bad"; out.textContent = message; controls(); }
+      [issuer, client, secret, scopes].forEach(function (input) { input.addEventListener("input", function () { dirty = true; controls(); }); });
+      save.addEventListener("click", function () {
+        var value = secret.value; secret.value = "";
+        if (!issuer.value.trim() || !client.value.trim()) { fail("Enter the expected issuer URL and registered client ID first."); return; }
+        var payload = { issuer: issuer.value.trim(), client_id: client.value.trim(), scopes: scopes.value.trim() ? scopes.value.trim().split(/\s+/) : [] };
+        if (value) payload.client_secret = value;
+        pending = true; controls(); signIn.replaceChildren(); out.className = "help"; out.textContent = "Saving OAuth app setup...";
+        putJson(base + "/setup", "PUT", payload).then(function (status) {
+          pending = false; dirty = false; paint(status); out.textContent = "OAuth app setup saved. Press Connect to sign in.";
+        }, function () { fail("OAuth app setup was not saved. Re-enter the secret if needed to retry."); });
+      });
+      connect.addEventListener("click", function () {
+        var popup = null;
+        function closeBlank() { if (popup) { try { popup.close(); } catch (_) {} popup = null; } }
+        try { popup = window.open("about:blank", "_blank"); if (popup) popup.opener = null; } catch (_) { closeBlank(); }
+        pending = true; controls(); signIn.replaceChildren(); out.className = "help"; out.textContent = "Starting browser sign-in...";
+        putJson(base + "/connect", "POST", {}).then(function (reply) {
+          pending = false;
+          if ($("settings").hidden || sview.tab !== "advanced" || !$("settings-body").contains(panel)) { closeBlank(); return; }
+          var address = mcpOAuthAddress(reply);
+          if (!address) { closeBlank(); fail("The daemon did not provide a valid provider sign-in address. No provider page was opened."); return; }
+          var opened = false;
+          if (popup) { try { if (!popup.closed) { popup.location.replace(address); opened = true; } } catch (_) {} }
+          if (!opened) {
+            closeBlank(); var link = el("a", "", "Continue sign-in"); link.href = address; link.target = "_blank"; link.rel = "noopener noreferrer"; signIn.appendChild(link);
+          }
+          paint({ pending: true });
+          out.textContent = opened ? "Complete sign-in at the provider, then press Check sign-in. Your password stays with the provider." : "The sign-in window could not open. Use Continue sign-in, then press Check sign-in.";
+        }, function () { closeBlank(); fail("Could not start browser sign-in. Check the saved app setup and try again."); });
+      });
+      check.addEventListener("click", function () {
+        pending = true; controls(); out.className = "help"; out.textContent = "Checking saved sign-in...";
+        api(base).then(function (status) { pending = false; paint(status); out.textContent = "Saved sign-in checked; no tool was executed."; }, function () { fail("Could not check saved sign-in. Check the daemon connection and try again."); });
+      });
+      test.addEventListener("click", function () {
+        pending = true; controls(); out.className = "help"; out.textContent = "Listing tools to test reachability...";
+        putJson(base + "/test", "POST", {}).then(function (reply) {
+          pending = false; out.className = reply.ok ? "help" : "help bad";
+          out.textContent = reply.ok ? "Reached it: " + (reply.tools || []).length + " tools. No tool was executed." : reply.message || "The provider did not complete the test. Check sign-in or connect again."; controls();
+        }, function () { fail("The tool-list test failed. Check sign-in or connect again."); });
+      });
+      disconnect.addEventListener("click", function () {
+        pending = true; controls(); signIn.replaceChildren(); out.className = "help"; out.textContent = "Disconnecting...";
+        putJson(base + "/disconnect", "POST", {}).then(function (status) {
+          pending = false; paint(Object.assign({}, status, { connected: false, pending: false }));
+          out.textContent = status.revoked ? "Disconnected locally and provider revocation confirmed. App setup is kept for later sign-in." : "Disconnected locally. Provider revocation was not confirmed; review the provider's authorized apps. App setup is kept for later sign-in.";
+        }, function () { fail("Disconnect was not confirmed. Press Check sign-in before relying on removal, and review the provider's authorized apps."); });
+      });
+      paint(current);
+      return panel;
+    }
     function mcpServerCard(server, reload) {
       var card = el("div", "card");
+      var browserOAuth = server.kind === "http" && server.authorization === "oauth:" + server.name;
       var head = el("h4", "", server.name + " ");
       var stateText = server.state === "connected" ? "connected" : server.state === "unreachable" ? "not reachable" : "starts after a restart";
       head.appendChild(el("span", "badge " + (server.state === "connected" ? "on" : "off"), stateText));
@@ -1640,6 +1755,7 @@ window.JarvisSettings = function (context) {
       card.appendChild(el("code", "", how));
       (server.credentials || []).forEach(function (credential) {
         card.appendChild(el("p", "help", credential.name + ": " + credential.state + " (" + credential.reference + ")"));
+        if (credential.name === "Authorization") card.appendChild(el("p", "help", "Set or replace this key with jarvis keys set " + credential.reference + ". The terminal prompts privately; no token value belongs here."));
       });
       if (server.state === "unreachable") card.appendChild(el("p", "help bad", server.reason || "It did not answer."));
       if (server.state === "connected") {
@@ -1674,21 +1790,25 @@ window.JarvisSettings = function (context) {
           settingsNote(server.name + " removed. Restart to apply."); needsRestart("Tool program removed"); reload();
         }, function (error) { settingsNote(explain(error, "Could not remove it."), true); remove.disabled = false; });
       });
-      acts.appendChild(testButton); acts.appendChild(remove); acts.appendChild(out);
+      if (browserOAuth) card.appendChild(mcpOAuthPanel(server));
+      else acts.appendChild(testButton);
+      acts.appendChild(remove); acts.appendChild(out);
       card.appendChild(acts);
       return card;
     }
     function mcpAddForm(reload) {
       var card = el("div", "card");
       card.appendChild(el("h4", "", "Add a program"));
-      var name = el("input"); name.type = "text"; name.placeholder = "A short name, for example files"; name.autocomplete = "off"; name.spellcheck = false;
-      var command = el("input"); command.type = "text"; command.placeholder = "The command that starts it, or a web address"; command.autocomplete = "off"; command.spellcheck = false;
+      var name = el("input"); name.id = "mcp-program-name"; name.type = "text"; name.placeholder = "A short name, for example files"; name.autocomplete = "off"; name.spellcheck = false;
+      var command = el("input"); command.id = "mcp-program-command"; command.type = "text"; command.placeholder = "The command that starts it, or a web address"; command.autocomplete = "off"; command.spellcheck = false;
       var nameRow = el("div", "set-row");
-      nameRow.appendChild(el("span", "name", "Name"));
+      var nameLabel = el("label", "name", "Name"); nameLabel.setAttribute("for", name.id);
+      nameRow.appendChild(nameLabel);
       nameRow.appendChild(name);
       nameRow.appendChild(el("span"));
       var commandRow = el("div", "set-row");
-      commandRow.appendChild(el("span", "name", "Command or address"));
+      var commandLabel = el("label", "name", "Command or address"); commandLabel.setAttribute("for", command.id);
+      commandRow.appendChild(commandLabel);
       commandRow.appendChild(command);
       var example = el("button", "", "Example");
       example.type = "button";
@@ -1696,11 +1816,36 @@ window.JarvisSettings = function (context) {
       example.addEventListener("click", function () {
         if (!name.value.trim()) name.value = "files";
         command.value = "npx -y @modelcontextprotocol/server-filesystem C:\\Users\\you\\Documents";
+        updateBearer();
         command.focus();
       });
       var exampleBox = el("div", "acts"); exampleBox.appendChild(example);
       commandRow.appendChild(exampleBox);
       commandRow.appendChild(el("span", "help", "A program on this computer is started with its command, for example npx -y followed by a package name. A remote server is its web address, starting with https."));
+      var auth = el("select"); auth.id = "mcp-authorization";
+      [["bearer", "Manual bearer (optional)"], ["oauth", "Browser OAuth"]].forEach(function (choice) { var option = el("option", "", choice[1]); option.value = choice[0]; auth.appendChild(option); }); auth.value = "bearer";
+      var authRow = el("div", "set-row"); authRow.id = "mcp-authorization-row";
+      var authLabel = el("label", "name", "Remote authorization"); authLabel.setAttribute("for", auth.id); authRow.appendChild(authLabel); authRow.appendChild(auth);
+      var oauthHelp = el("p", "help", "Add this server first, then complete One-time OAuth app setup on its saved card using your pre-registered app and the exact callback URL. After that, use Connect for persistent browser sign-in. No automatic app registration. Test tools becomes available after sign-in."); oauthHelp.id = "mcp-oauth-add-help"; authRow.appendChild(oauthHelp); auth.setAttribute("aria-describedby", oauthHelp.id);
+      var bearer = el("input"); bearer.id = "mcp-bearer-ref"; bearer.type = "text"; bearer.autocomplete = "off"; bearer.spellcheck = false;
+      bearer.setAttribute("aria-describedby", "mcp-bearer-help");
+      var bearerRow = el("div", "set-row"); bearerRow.id = "mcp-bearer-row";
+      var bearerLabel = el("label", "name", "Bearer key reference (optional)"); bearerLabel.setAttribute("for", bearer.id);
+      var bearerHelp = el("span", "help"); bearerHelp.id = "mcp-bearer-help";
+      bearerRow.appendChild(bearerLabel); bearerRow.appendChild(bearer); bearerRow.appendChild(el("span")); bearerRow.appendChild(bearerHelp);
+      function updateBearer() {
+        var remote = /^https?:\/\//i.test(command.value.trim());
+        if (!remote) auth.value = "bearer";
+        var oauth = remote && auth.value === "oauth";
+        authRow.hidden = !remote; auth.disabled = !remote; oauthHelp.hidden = !oauth;
+        bearerRow.hidden = !remote || oauth; bearer.disabled = !remote || oauth;
+        if (!remote || oauth) bearer.value = "";
+        if (test) test.disabled = oauth;
+        bearer.placeholder = "mcp:" + (name.value.trim() || "NAME") + ":KEY";
+        bearerHelp.textContent = "If this remote server needs a bearer token, first run jarvis keys set " + bearer.placeholder + " in a terminal. Its prompt is hidden. Enter only that reference here, never the token. Use this server's name and an address without a query. Leave blank for no authorization. GitHub sign-in stays under Connections.";
+      }
+      command.addEventListener("input", updateBearer); name.addEventListener("input", updateBearer); auth.addEventListener("change", updateBearer);
+      updateBearer();
       var only = el("input"); only.type = "checkbox";
       var readRow = el("div", "set-row toggle");
       readRow.appendChild(el("span", "name", "It only reads"));
@@ -1716,13 +1861,32 @@ window.JarvisSettings = function (context) {
       var test = el("button", "", "Test");
       var add = el("button", "yes", "Add");
       function body() {
+        updateBearer();
         var text = command.value.trim();
         var remote = /^https?:\/\//i.test(text);
-        return { name: name.value.trim(), command: remote ? [] : splitCommand(text), endpoint: remote ? text : null, read_only: only.checked };
+        var payload = { name: name.value.trim(), command: remote ? [] : splitCommand(text), endpoint: remote ? text : null, read_only: only.checked };
+        if (remote && auth.value === "oauth") {
+          if (!payload.name) { out.className = "help bad"; out.textContent = "Enter a name for this OAuth server first."; return null; }
+          payload.authorization = "oauth:" + payload.name;
+        } else if (remote) {
+          var reference = bearer.value.trim();
+          var parts = /^mcp:([^:\s]+):([^:\s]+)$/.exec(reference);
+          if (reference && (!parts || parts[1] !== payload.name)) {
+            out.className = "help bad"; out.textContent = "Use a key reference mcp:NAME:KEY with this server's name, never a token value. Set the key first with jarvis keys set mcp:NAME:KEY.";
+            return null;
+          }
+          if (reference && text.indexOf("?") >= 0) {
+            out.className = "help bad"; out.textContent = "A remote server using a bearer key needs an address without a query.";
+            return null;
+          }
+          payload.authorization = reference || null;
+        }
+        return payload;
       }
       test.addEventListener("click", function () {
+        var payload = body(); if (!payload) return;
         test.disabled = true; out.className = "help"; out.textContent = "Connecting (a first start with npx may download the program)...";
-        putJson("/mcp/test", "POST", body()).then(function (reply) {
+        putJson("/mcp/test", "POST", payload).then(function (reply) {
           test.disabled = false;
           if (!reply.ok) { out.className = "help bad"; out.textContent = reply.message || "No answer."; return; }
           out.className = "help";
@@ -1732,9 +1896,10 @@ window.JarvisSettings = function (context) {
         }, function (error) { test.disabled = false; out.className = "help bad"; out.textContent = explain(error, "The test failed."); });
       });
       add.addEventListener("click", function () {
+        var payload = body(); if (!payload) return;
         add.disabled = true;
-        putJson("/mcp/servers", "POST", body()).then(function () {
-          settingsNote("Program added. Restart to apply."); needsRestart("Tool program added"); name.value = ""; command.value = ""; only.checked = false; state.textContent = "No"; add.disabled = false; reload();
+        putJson("/mcp/servers", "POST", payload).then(function () {
+          settingsNote("Program added. Restart to apply."); needsRestart("Tool program added"); name.value = ""; command.value = ""; bearer.value = ""; updateBearer(); only.checked = false; state.textContent = "No"; add.disabled = false; reload();
         }, function (error) { add.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That was refused."); });
       });
       var actionRow = el("div", "set-row");
@@ -1742,7 +1907,7 @@ window.JarvisSettings = function (context) {
       var buttons = el("div", "acts"); buttons.appendChild(test); buttons.appendChild(add);
       actionRow.appendChild(buttons);
       actionRow.appendChild(el("span"));
-      [nameRow, commandRow, readRow, actionRow].forEach(function (node) { card.appendChild(node); });
+      [nameRow, commandRow, authRow, bearerRow, readRow, actionRow].forEach(function (node) { card.appendChild(node); });
       card.appendChild(out);
       return card;
     }    // Connect apps: let other AI apps (Claude Code, Cursor, VS Code, a script) hand JARVIS a task. One switch, one key, copy-paste lines.

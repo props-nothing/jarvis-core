@@ -565,44 +565,19 @@ pub async fn delete_contact(
     Ok(done.rows_affected() > 0)
 }
 
-/// Removes a contact for an automated caller, but never erases an owner's suppression.
-/// An approval to delete is not permission to lift `do_not_contact`: the owner must change that status explicitly first.
+/// Removes a contact for an automated caller authorized by the tool pipeline.
+/// Deletion removes the whole record, including `do_not_contact`; approval and standing trust are enforced by the caller.
 /// Returns whether a contact existed in this workspace.
 ///
 /// # Errors
 ///
-/// Returns [`DatabaseError::InvalidContact`] with field `status` for a suppressed contact, and [`DatabaseError::Sqlite`] on failure.
+/// Returns [`DatabaseError`] when the write fails.
 pub async fn delete_contact_for_model(
     database: &SqliteDatabase,
     workspace_id: &str,
     id: &str,
 ) -> Result<bool, DatabaseError> {
-    let mut transaction = database
-        .pool()
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(sqlite("begin deleting a contact"))?;
-    let status: Option<String> =
-        sqlx::query_scalar("SELECT status FROM contacts WHERE workspace_id = ?1 AND id = ?2")
-            .bind(workspace_id)
-            .bind(id)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(sqlite("check a contact before deleting"))?;
-    if status.as_deref() == Some(ContactStatus::DoNotContact.as_str()) {
-        return Err(invalid("status"));
-    }
-    let done = sqlx::query("DELETE FROM contacts WHERE workspace_id = ?1 AND id = ?2")
-        .bind(workspace_id)
-        .bind(id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(sqlite("delete an automated contact"))?;
-    transaction
-        .commit()
-        .await
-        .map_err(sqlite("commit deleting a contact"))?;
-    Ok(done.rows_affected() > 0)
+    delete_contact(database, workspace_id, id).await
 }
 
 /// Two entries that look like one person or company, with the one to keep named first.

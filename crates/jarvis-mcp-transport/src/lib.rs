@@ -109,7 +109,7 @@ pub use host::{HostBuild, HostedServer, UnreadableServer, build_catalog};
 pub use host_config::{
     HostConfigError, HostError, MAX_HOST_CONFIG_BYTES, McpHost, McpHostConfig, ServerTransport,
 };
-pub use http_auth::{HttpCredentialProvider, UnavailableHttpCredentials};
+pub use http_auth::{HttpCredentialProvider, UnavailableHttpCredentials, validate_http_binding};
 pub use images::{ImageSink, install_image_sink};
 pub use serve::{
     JarvisMcpServer, SERVER_NAME, SERVER_VERSION, ServedToolRunner, served_protocol_version,

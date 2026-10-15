@@ -4,10 +4,10 @@ JARVIS keeps contacts in its own local database. Saving or importing a contact d
 
 - Ask to find contacts: `jarvis.contacts.search` searches company, person, email and notes; `jarvis.contacts.stats` counts statuses.
 - Ask to save or update a contact: `jarvis.contacts.save` matches email without regard to case, otherwise company and person when the stored contact has no email.
-- Ask to delete a contact: `jarvis.contacts.delete` takes its `id` from search and **asks for approval by default**. It removes that contact from JARVIS, not from Google, email or another address book. Contacts have no trash folder. A missing id reports `deleted: false`.
+- Ask to delete a contact: `jarvis.contacts.delete` takes its `id` from search and **asks for approval by default**, including contacts marked `do_not_contact`. It removes the whole contact and its restriction from JARVIS, not from Google, email or another address book. Contacts have no trash folder. A missing id reports `deleted: false`.
 - Ask to import contacts from a CSV in a folder granted in Settings: `jarvis.contacts.import` takes a relative `path` and **asks for approval by default**. Both `files.read` and `contacts.write` permissions are required. The CSV file is not changed.
 
-The normal approval policy applies: explicit standing trust ("Run without asking") can allow future calls without another question. It never lifts `do_not_contact`.
+The normal approval policy applies: explicit standing trust ("Run without asking") can allow future calls without another question. For deletion, that trust also allows removing a `do_not_contact` contact and its restriction. Keep the contact if its address must remain blocked.
 
 ## CSV format
 
@@ -41,4 +41,6 @@ Import uses the same matching rules as save, including matches created by earlie
 
 **Every row succeeds or nothing changes.** A later invalid row, storage failure, capacity limit or forbidden status change rolls back earlier creates and updates. The result reports processed rows as `imported`, plus `created` and `updated` row counts; repeated matches count as updates, not additional contacts.
 
-A model cannot lift `do_not_contact`, through save, import **or approved deletion**. Deletion of a suppressed contact is refused, preventing deletion followed by reimport from erasing the owner's suppression. An import explicitly changing such a contact to another status is refused in full; omit its status or keep `do_not_contact`. Only an explicit owner status change through the existing owner contact controls can lift that restriction.
+Save and import cannot change an existing `do_not_contact` contact to another status. An import explicitly changing such a contact is refused in full; omit its status or keep `do_not_contact`. Merging preserves suppression from either entry, and Gmail send/draft continue to refuse a stored suppressed address.
+
+Deletion is different: after normal policy authorization (approval or explicit standing trust), it removes the record **and** its `do_not_contact` restriction. No hidden suppression entry remains. Saving or importing that address later creates a new contact under the usual rules; deletion itself never sends anything. This owner-selected behavior is recorded in [ADR-0218](../adr/0218-contact-deletion-removes-the-record-and-its-suppression-under-normal-policy.md).

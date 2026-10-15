@@ -44,14 +44,53 @@ impl HttpCredentialProvider for UnavailableHttpCredentials {
     }
 }
 
-pub(crate) fn validate_binding(server: &str, endpoint: &str, binding: &str) -> Result<(), String> {
-    if binding != "github" || server != "github" || endpoint != GITHUB_ENDPOINT {
-        return Err(
-            "HTTP authorization supports only binding github, server github and the exact GitHub read-only endpoint"
-                .to_owned(),
-        );
+/// Validates an HTTP credential reference and its configured destination.
+///
+/// # Errors
+///
+/// Refuses cross-server/literal references, query-bearing credential destinations and invalid endpoints.
+/// `oauth:SERVER` selects only that server's account; `github` keeps its fixed read-only destination.
+pub fn validate_http_binding(server: &str, endpoint: &str, binding: &str) -> Result<(), String> {
+    if binding == "github" {
+        return if server == "github" && endpoint == GITHUB_ENDPOINT {
+            Ok(())
+        } else {
+            Err("the GitHub account binding requires server github and the exact GitHub read-only endpoint".to_owned())
+        };
+    }
+    if let Some(owner) = binding.strip_prefix("oauth:") {
+        let reference = jarvis_core::McpSecretRef::parse(&format!("mcp:{owner}:oauth-client"))
+            .map_err(|_| "HTTP OAuth must name oauth:SERVER for this server".to_owned())?;
+        if reference.server() != server {
+            return Err("an MCP server may only use its own OAuth account".to_owned());
+        }
+        let endpoint = McpHttpEndpoint::parse(endpoint)
+            .map_err(|_| "the OAuth destination is not a valid MCP endpoint".to_owned())?;
+        if endpoint.as_str().contains('?') {
+            return Err("OAuth requires a query-free MCP endpoint".to_owned());
+        }
+        return Ok(());
+    }
+    let reference = jarvis_core::McpSecretRef::parse(binding)
+        .map_err(|_| "HTTP authorization must name an account binding or mcp:SERVER:KEY reference, never a token value".to_owned())?;
+    if reference.server() != server {
+        return Err("an MCP server may only use its own HTTP credential references".to_owned());
+    }
+    let endpoint = McpHttpEndpoint::parse(endpoint)
+        .map_err(|_| "the HTTP credential destination is not a valid MCP endpoint".to_owned())?;
+    if endpoint.as_str().contains('?') {
+        return Err("an HTTP token credential requires a query-free MCP endpoint; never put a token in a URL".to_owned());
     }
     Ok(())
+}
+
+fn is_bearer_token(token: &str) -> bool {
+    let unpadded = token.trim_end_matches('=');
+    !unpadded.is_empty()
+        && token.len() <= 4096
+        && unpadded.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/')
+        })
 }
 
 #[derive(Clone)]
@@ -80,7 +119,8 @@ impl AuthorizedHttpClient {
         binding: &str,
         provider: Arc<dyn HttpCredentialProvider>,
     ) -> Result<Self, ConnectError> {
-        validate_binding(server, endpoint.as_str(), binding).map_err(ConnectError::Unreachable)?;
+        validate_http_binding(server, endpoint.as_str(), binding)
+            .map_err(ConnectError::Unreachable)?;
         Self::build(server, endpoint, binding, provider)
     }
 
@@ -120,7 +160,14 @@ impl AuthorizedHttpClient {
     ) -> Result<String, StreamableHttpError<reqwest::Error>> {
         let unavailable = || {
             StreamableHttpError::UnexpectedServerResponse(
-                "HTTP authorization is unavailable; connect the GitHub account in Settings".into(),
+                if self.binding == "github" {
+                    "HTTP authorization is unavailable; connect the GitHub account in Settings"
+                } else if self.binding.starts_with("oauth:") {
+                    "HTTP authorization is unavailable; connect this server's OAuth account in Settings"
+                } else {
+                    "HTTP authorization is unavailable; set the configured named MCP key with jarvis keys set"
+                }
+                .into(),
             )
         };
         if uri != self.endpoint.as_ref() {
@@ -131,10 +178,7 @@ impl AuthorizedHttpClient {
             .token(&self.binding, &self.server, &self.endpoint)
             .await
             .map_err(|_| unavailable())?;
-        if token.is_empty()
-            || token.len() > 4096
-            || !token.bytes().all(|byte| byte.is_ascii_graphic())
-        {
+        if !is_bearer_token(&token) {
             return Err(unavailable());
         }
         // Record before sending, including during the handshake and background SSE reconnects.

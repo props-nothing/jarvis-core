@@ -4,6 +4,8 @@
 
 **Date:** 2026-10-14
 
+**Amended by:** [ADR-0218](0218-contact-deletion-removes-the-record-and-its-suppression-under-normal-policy.md) replaces the model contact-deletion suppression veto with normal deletion approval/standing trust, removing the record and its restriction. The remaining decisions are unchanged.
+
 ## Context
 
 The owner requested file/contact/email deletion, reliable browser navigation and fixed-text search,

@@ -60,7 +60,7 @@ pub use crate::run_service::RunService;
 ///
 /// Applied as a router layer so it covers every current and future route, rather than relying on
 /// each extractor to apply it correctly.
-pub const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
+pub const MAX_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Shared state every route needs.
 #[derive(Clone)]
@@ -92,6 +92,7 @@ pub struct GatewayState {
     http_port: Option<u16>,
     /// What the MCP servers turned out to be when the daemon started (`P11-001`).
     mcp: Arc<crate::mcp_admin::McpSnapshot>,
+    mcp_oauth: Option<Arc<crate::mcp_oauth_account::Accounts>>,
     /// The key for other apps that connect to JARVIS, when the daemon has one to manage (`ADR-0170`).
     mcp_access: Option<Arc<crate::mcp_access::McpAccess>>,
     /// The Telegram chat, when the daemon serves one (ADR-0184).
@@ -121,6 +122,7 @@ impl GatewayState {
             github: None,
             http_port: None,
             mcp: Arc::new(crate::mcp_admin::McpSnapshot::default()),
+            mcp_oauth: None,
             mcp_access: None,
             telegram: None,
             phone: None,
@@ -217,8 +219,13 @@ impl GatewayState {
     /// Attaches the profile location, which turns the Settings routes on.
     #[must_use]
     pub fn with_settings(mut self, settings: crate::settings_service::SettingsContext) -> Self {
+        self.mcp_oauth = Some(crate::mcp_oauth_account::Accounts::shared(settings.paths()));
         self.settings = Some(settings);
         self
+    }
+
+    pub(crate) fn mcp_oauth(&self) -> Option<&Arc<crate::mcp_oauth_account::Accounts>> {
+        self.mcp_oauth.as_ref()
     }
 
     /// Attaches the Google account, which turns the Google routes on.
@@ -483,6 +490,10 @@ pub fn router(state: GatewayState) -> Router {
             crate::github_account::CALLBACK_PATH,
             get(crate::github_service::callback),
         )
+        .route(
+            "/oauth/mcp/{server}/callback",
+            get(crate::mcp_oauth_service::callback),
+        )
         .nest("/api/v1", api)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate))
@@ -493,6 +504,7 @@ pub fn router(state: GatewayState) -> Router {
 /// authentication or the body limit.
 fn service_routes() -> Router<GatewayState> {
     crate::mcp_admin::routes()
+        .merge(crate::mcp_oauth_service::routes())
         .merge(crate::key_test::routes())
         .merge(crate::code_agents::routes())
         .merge(crate::mcp_access::routes())
@@ -525,6 +537,7 @@ async fn authenticate(State(state): State<GatewayState>, request: Request, next:
     // The browser's return from Google carries no credential; it is inert unless it answers a sign-in started with one.
     if crate::google_service::is_oauth_callback(request.method(), request.uri().path())
         || crate::github_service::is_oauth_callback(request.method(), request.uri().path())
+        || crate::mcp_oauth_service::is_oauth_callback(request.method(), request.uri().path())
     {
         return next.run(request).await;
     }
@@ -2688,6 +2701,205 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_owned()))
             .unwrap_or_else(|error| panic!("fixture request: {error}"))
+    }
+
+    #[tokio::test]
+    async fn named_http_mcp_credentials_round_trip_through_authenticated_admin_routes_as_metadata_only()
+     {
+        let (app, presented, _profile, paths) = test_router_with_settings().await;
+        let body = r#"{"name":"remote","endpoint":"https://tools.example/mcp","authorization":"mcp:remote:token"}"#;
+        let refused = app
+            .clone()
+            .oneshot(post_json("/api/v1/mcp/servers", "wrong-credential", body))
+            .await
+            .unwrap_or_else(|error| panic!("router: {error}"));
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            !paths
+                .config()
+                .join(crate::mcp_host::MCP_SERVERS_FILE_NAME)
+                .exists()
+        );
+        let added = app
+            .clone()
+            .oneshot(post_json("/api/v1/mcp/servers", &presented, body))
+            .await
+            .unwrap_or_else(|error| panic!("router: {error}"));
+        assert_eq!(added.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(added.into_body(), 65_536)
+            .await
+            .unwrap_or_else(|error| panic!("body: {error}"));
+        let overview: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("JSON: {error}"));
+        assert_eq!(overview["servers"][0]["authorization"], "mcp:remote:token");
+        assert_eq!(overview["servers"][0]["credentials"][0]["state"], "not set");
+        assert_eq!(overview["restart_needed"], true);
+        let reference = jarvis_core::McpSecretRef::parse("mcp:remote:token")
+            .unwrap_or_else(|error| panic!("reference: {error}"));
+        for expected in ["set", "not set"] {
+            if expected == "set" {
+                jarvis_storage::mcp_secrets::set(&paths, &reference, "synthetic-admin-token")
+                    .unwrap_or_else(|error| panic!("set: {error}"));
+            } else {
+                jarvis_storage::mcp_secrets::remove(&paths, &reference)
+                    .unwrap_or_else(|error| panic!("remove: {error}"));
+            }
+            let request = Request::builder()
+                .uri("/api/v1/mcp")
+                .header(header::AUTHORIZATION, format!("Bearer {presented}"))
+                .body(Body::empty())
+                .unwrap_or_else(|error| panic!("request: {error}"));
+            let response = app
+                .clone()
+                .oneshot(request)
+                .await
+                .unwrap_or_else(|error| panic!("router: {error}"));
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 65_536)
+                .await
+                .unwrap_or_else(|error| panic!("body: {error}"));
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(!text.contains("synthetic-admin-token"));
+            assert!(!text.contains(&paths.config().display().to_string()));
+            let overview: serde_json::Value =
+                serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("JSON: {error}"));
+            let server = &overview["servers"][0];
+            assert_eq!(server["posture"], "unclassified");
+            assert_eq!(
+                server["credentials"][0],
+                serde_json::json!({
+                    "name": "Authorization", "reference": "mcp:remote:token", "state": expected
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_oauth_setup_and_status_are_owner_authenticated_and_secret_free() {
+        let (app, presented, _profile, paths) = test_router_with_settings().await;
+        let configured = r#"{"name":"remote","endpoint":"https://tools.example/mcp","authorization":"oauth:remote"}"#;
+        let response = app
+            .clone()
+            .oneshot(post_json("/api/v1/mcp/servers", &presented, configured))
+            .await
+            .unwrap_or_else(|error| panic!("add: {error}"));
+        assert_eq!(response.status(), StatusCode::OK);
+        let base = "/api/v1/mcp/servers/remote/oauth";
+        let body = r#"{"issuer":"https://oauth.example","client_id":"registered-client","client_secret":"synthetic-private-secret","scopes":["read"]}"#;
+        for (method, suffix) in [
+            ("GET", ""),
+            ("PUT", "/setup"),
+            ("POST", "/connect"),
+            ("POST", "/disconnect"),
+            ("POST", "/test"),
+        ] {
+            let request = Request::builder()
+                .uri(format!("{base}{suffix}"))
+                .method(method)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap_or_else(|error| panic!("request: {error}"));
+            let refused = app
+                .clone()
+                .oneshot(request)
+                .await
+                .unwrap_or_else(|error| panic!("router: {error}"));
+            assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+        }
+        let saved = app
+            .clone()
+            .oneshot(put_json(&format!("{base}/setup"), &presented, body))
+            .await
+            .unwrap_or_else(|error| panic!("setup: {error}"));
+        assert_eq!(saved.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(saved.into_body(), 32_768)
+            .await
+            .unwrap_or_else(|error| panic!("body: {error}"));
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains("synthetic-private-secret")
+                && !text.contains("access_token")
+                && !text.contains("refresh_token")
+        );
+        let status: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("JSON: {error}"));
+        assert_eq!(status["configured"], true);
+        assert_eq!(status["connected"], false);
+        assert_eq!(status["client_secret_set"], true);
+        assert_eq!(status["client_id"], "registered-client");
+        assert_eq!(status["scopes"], serde_json::json!(["read"]));
+        assert_eq!(
+            status["callback_url"],
+            "http://127.0.0.1:8765/oauth/mcp/remote/callback"
+        );
+        assert_eq!(status["restart_needed"], true);
+        let changed = r#"{"issuer":"https://oauth.example","client_id":"registered-client","client_secret":"","scopes":["read"]}"#;
+        let saved = app
+            .clone()
+            .oneshot(put_json(&format!("{base}/setup"), &presented, changed))
+            .await
+            .unwrap_or_else(|error| panic!("save again: {error}"));
+        assert_eq!(saved.status(), StatusCode::OK);
+        let account = crate::mcp_oauth_account::Accounts::shared(&paths)
+            .account("remote")
+            .unwrap_or_else(|_| panic!("account"));
+        assert!(
+            account
+                .status("https://tools.example/mcp")
+                .client_secret_set
+        );
+        let probe = app
+            .clone()
+            .oneshot(post_json(&format!("{base}/test"), &presented, "{}"))
+            .await
+            .unwrap_or_else(|error| panic!("test: {error}"));
+        assert_eq!(probe.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let disconnected = app
+            .clone()
+            .oneshot(post_json(&format!("{base}/disconnect"), &presented, "{}"))
+            .await
+            .unwrap_or_else(|error| panic!("disconnect: {error}"));
+        assert_eq!(disconnected.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn mcp_oauth_callback_is_only_a_get_and_forged_answers_are_inert() {
+        let (app, presented, _profile, _paths) = test_router_with_settings().await;
+        let configured = r#"{"name":"remote","endpoint":"https://tools.example/mcp","authorization":"oauth:remote"}"#;
+        assert_eq!(
+            app.clone()
+                .oneshot(post_json("/api/v1/mcp/servers", &presented, configured))
+                .await
+                .unwrap_or_else(|error| panic!("add: {error}"))
+                .status(),
+            StatusCode::OK
+        );
+        let get = Request::builder().uri("/oauth/mcp/remote/callback?code=private-code&state=wrong&iss=https%3A%2F%2Foauth.example")
+            .body(Body::empty()).unwrap_or_else(|error| panic!("request: {error}"));
+        let response = app
+            .clone()
+            .oneshot(get)
+            .await
+            .unwrap_or_else(|error| panic!("callback: {error}"));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap_or_else(|error| panic!("body: {error}"));
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-code"));
+        let post = Request::builder()
+            .uri("/oauth/mcp/remote/callback")
+            .method("POST")
+            .body(Body::empty())
+            .unwrap_or_else(|error| panic!("request: {error}"));
+        assert_eq!(
+            app.oneshot(post)
+                .await
+                .unwrap_or_else(|error| panic!("POST: {error}"))
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     /// **The settings routes need the credential: nobody else can read the configuration, change it, or set a key.**

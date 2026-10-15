@@ -90,7 +90,7 @@ pub use memory_repository::{
 };
 pub use message_repository::{
     MAX_MESSAGE_PAGE, StoredMessage, append_message, count_messages, find_message, read_messages,
-    read_recent_messages,
+    read_messages_from, read_recent_messages,
 };
 pub use paths::{
     AppPaths, PathError, PathKind, PathMode, RuntimePathSource, portable_layout,

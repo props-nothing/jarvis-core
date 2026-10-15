@@ -618,6 +618,12 @@
     input.value = "";
     send(text);
   });
+  $("input").addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      $("composer").requestSubmit();
+    }
+  });
 
   // ---- voice: speaking -------------------------------------------------------------------------------------------
   // Two voices. When the daemon has a speech provider configured (ADR-0138) the answer is spoken in that neural voice:
@@ -952,7 +958,7 @@
 
   function speakNeural(text, after) {
     var session = neuralSession(after);
-    feed(session, text.slice(0, 4000));
+    feed(session, text);
     endFeed(session, null);
   }
   function speak(text, after) {

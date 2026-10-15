@@ -364,7 +364,7 @@ fn merged_notes_never_exceed_the_limit() {
 }
 
 #[tokio::test]
-async fn automated_delete_is_workspace_scoped_and_cannot_erase_suppression() {
+async fn automated_delete_is_workspace_scoped_and_removes_suppression_with_the_contact() {
     let (_directory, database) = database().await;
     let ordinary = saved(&database, &lead("Ordinary", "", "ordinary@example.test"), 0).await;
     assert!(!must(
@@ -381,17 +381,8 @@ async fn automated_delete_is_workspace_scoped_and_cannot_erase_suppression() {
         ..lead("Suppressed", "Person", "suppressed@example.test")
     };
     let barred = saved(&database, &suppressed, 1).await;
-    assert!(matches!(
-        delete_contact_for_model(&database, LOCAL_WORKSPACE_ID, &barred.id).await,
-        Err(DatabaseError::InvalidContact { field: "status" })
-    ));
-    let revive = ContactInput {
-        status: Some(ContactStatus::New),
-        ..suppressed
-    };
-    assert!(matches!(
-        import_contacts(&database, LOCAL_WORKSPACE_ID, None, &[revive], false, at(2)).await,
-        Err(DatabaseError::InvalidContact { field: "status" })
+    assert!(!must(
+        delete_contact_for_model(&database, "another-workspace", &barred.id).await
     ));
     assert_eq!(
         must(
@@ -399,6 +390,34 @@ async fn automated_delete_is_workspace_scoped_and_cannot_erase_suppression() {
                 .await
         ),
         Some(ContactStatus::DoNotContact)
+    );
+    assert!(must(
+        delete_contact_for_model(&database, LOCAL_WORKSPACE_ID, &barred.id).await
+    ));
+    assert!(!must(
+        delete_contact_for_model(&database, LOCAL_WORKSPACE_ID, &barred.id).await
+    ));
+    assert_eq!(
+        must(
+            contact_status_for_email(&database, LOCAL_WORKSPACE_ID, "suppressed@example.test")
+                .await
+        ),
+        None
+    );
+    assert!(must(list_contacts(&database, LOCAL_WORKSPACE_ID, None, 50, 0).await).is_empty());
+    let revive = ContactInput {
+        status: Some(ContactStatus::New),
+        ..suppressed
+    };
+    let imported =
+        must(import_contacts(&database, LOCAL_WORKSPACE_ID, None, &[revive], false, at(2)).await);
+    assert_eq!((imported.created, imported.updated), (1, 0));
+    assert_eq!(
+        must(
+            contact_status_for_email(&database, LOCAL_WORKSPACE_ID, "suppressed@example.test")
+                .await
+        ),
+        Some(ContactStatus::New)
     );
 }
 

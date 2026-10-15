@@ -92,6 +92,8 @@ Connect to third-party MCP servers over stdio or Streamable HTTP. Discover tools
 
 Manage MCP server lifecycle, configuration, authentication, health, capability refresh, name collisions, protocol versions, and tool-list changes. Local stdio servers run as constrained child processes. Remote servers require URL policy, TLS, auth, SSRF defenses, and egress controls.
 
+Current HTTP credentials support the fixed GitHub OAuth account, owner-provisioned same-server `mcp:SERVER:KEY` bearer references ([ADR-0219](../adr/0219-remote-mcp-tokens-are-named-server-bound-request-credentials.md)) and generic pre-registered `oauth:SERVER` accounts ([ADR-0220](../adr/0220-generic-mcp-oauth-binds-preregistered-clients-to-resource-and-issuer.md)). Bind the profile/server/resource/issuer/client explicitly; each outbound MCP operation resolves a current token and wrong destinations/missing credentials fail closed. Generic OAuth discovery/token requests additionally validate/pin public DNS, require advertised S256, compare the callback issuer and invalidate late refresh/callback work after disconnect. Setup metadata contains no secret. This is not automatic DCR/CIMD, OIDC account verification, encrypted keychain storage or hot tool registration. See [token setup](../user/mcp.md#a-remote-server-that-needs-a-token) and [browser sign-in limits](../user/mcp.md#a-remote-server-with-browser-sign-in).
+
 ### Server
 
 Expose a deliberately selected subset of JARVIS capabilities to external agents. Each client has an identity, scopes, rate limits, workspace, and explicit tool allowlist. Authentication to `/mcp` never implies all-tools access.

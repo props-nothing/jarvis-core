@@ -32,8 +32,8 @@
 //!
 //! A server entry may map credential environment names to same-server named references, never values
 //! or arbitrary file paths (`ADR-0216`). The profile's resolver supplies them only before a stdio child
-//! starts. HTTP authorization names a provider binding, never a token. The GitHub binding is restricted
-//! to the `github` server and its exact remote read-only endpoint.
+//! starts. HTTP authorization names a same-server credential reference or a provider binding, never a
+//! token. The GitHub account binding remains restricted to its exact remote read-only endpoint.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -170,7 +170,7 @@ struct StdioDocument {
 struct HttpDocument {
     /// The endpoint URL, validated by [`McpHttpEndpoint`].
     endpoint: String,
-    /// An optional account binding; never a literal credential.
+    /// An optional same-server key reference or account binding; never a literal credential.
     #[serde(default)]
     authorization: Option<String>,
 }
@@ -567,7 +567,7 @@ impl ServerTransport {
                 authorization,
             }) => {
                 if let Some(binding) = &authorization {
-                    crate::http_auth::validate_binding(server.as_str(), &endpoint, binding)
+                    crate::http_auth::validate_http_binding(server.as_str(), &endpoint, binding)
                         .map_err(|reason| HostConfigError::Transport {
                             server: server.to_string(),
                             reason,

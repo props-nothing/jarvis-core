@@ -1,5 +1,5 @@
 //! The tools a **model** keeps its contact list with: save, search, stats, duplicates, merge, delete and CSV import.
-//! Deleting or importing contacts asks for approval by default; deletion cannot erase do-not-contact suppression.
+//! Deleting or importing contacts asks for approval by default; deletion removes the whole record, including suppression.
 //!
 //! A prospecting project that keeps its leads in a spreadsheet loses them whenever the file is rewritten, and a run cannot ask "who have we
 //! already contacted?". These tools read and write the local contact list; nothing here sends anything to anyone.
@@ -30,7 +30,7 @@ use crate::project_context::site_of_call;
 #[path = "contact_import.rs"]
 mod contact_import;
 
-/// Removes one contact, without lifting do-not-contact.
+/// Removes one contact, including its do-not-contact status, under the normal deletion policy.
 pub const DELETE_TOOL: &str = "jarvis.contacts.delete";
 /// Imports contacts atomically from a CSV in a granted folder.
 pub const IMPORT_TOOL: &str = "jarvis.contacts.import";
@@ -109,7 +109,7 @@ const DELETE_INPUT: &str = r#"{
   "additionalProperties": false,
   "required": ["id"],
   "properties": {
-    "id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The contact id from jarvis.contacts.search. Contacts marked do_not_contact cannot be deleted by a model, even with approval." }
+    "id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The contact id from jarvis.contacts.search. Deletion removes the whole contact, including any do_not_contact restriction, under the normal deletion approval policy." }
   }
 }"#;
 
@@ -252,7 +252,7 @@ impl ContactsTool {
             Spec {
                 id: DELETE_TOOL,
                 title: "Delete a contact",
-                description: "Removes one contact from JARVIS only; it does not delete anything from email or external address books. Asks for approval by default, under the owner's normal standing-trust policy. A contact marked do_not_contact cannot be deleted by a model, because removing and importing it again must not undo the owner's suppression.",
+                description: "Removes one contact from JARVIS only; it does not delete anything from email or external address books. Asks for approval by default, under the owner's normal standing-trust policy. Contacts marked do_not_contact can also be deleted: deletion removes the whole record and its restriction, so a later save or import can create it again.",
                 input: DELETE_INPUT,
                 effect: ToolEffect::Destructive,
                 risk: 3,
@@ -276,7 +276,12 @@ impl ContactsTool {
     fn definition(spec: &Spec) -> Result<ToolDefinition, ContactsToolError> {
         Ok(ToolDefinition::new(ToolDefinitionParts {
             id: ToolId::new(spec.id)?,
-            version: "1.0.0".to_owned(),
+            version: if spec.id == DELETE_TOOL {
+                "1.1.0"
+            } else {
+                "1.0.0"
+            }
+            .to_owned(),
             title: spec.title.to_owned(),
             description: spec.description.to_owned(),
             input_schema: ToolSchema::parse(spec.input)?,
@@ -452,12 +457,7 @@ impl ContactsTool {
         let workspace = self.workspace().await?;
         let deleted = jarvis_storage::delete_contact_for_model(&self.database, &workspace, id)
             .await
-            .map_err(|error| match error {
-                DatabaseError::InvalidContact { field: "status" } => refused(
-                    "a do_not_contact contact cannot be deleted by a model, even with approval; only the owner can lift that suppression",
-                ),
-                _ => refused("the contact could not be deleted"),
-            })?;
+            .map_err(|_| refused("the contact could not be deleted"))?;
         Ok(json!({ "id": id, "deleted": deleted }))
     }
 

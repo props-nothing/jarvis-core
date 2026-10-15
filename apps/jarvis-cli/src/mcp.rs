@@ -15,6 +15,8 @@ use crate::schedule::{print_json, report};
 
 const USAGE: &str = "usage: jarvis mcp <list|on|off|add|test|remove|access> [...]
        jarvis mcp add NAME --env-ref VARIABLE=mcp:NAME:KEY -- PROGRAM [ARGS...]  # reference only; set with jarvis keys set mcp:NAME:KEY
+       jarvis mcp add NAME --url https://host/mcp [--bearer-ref mcp:NAME:KEY]  # reference only; jarvis keys set mcp:NAME:KEY prompts privately
+       jarvis mcp test NAME --url https://host/mcp [--bearer-ref mcp:NAME:KEY] # test these settings without saving
        jarvis mcp access [on|off|key]                              # let other AI apps (Claude Code, Cursor, VS Code) hand JARVIS tasks: shows the address and key\n       jarvis mcp access public on|off                             # reach it from the internet (a cloud phone agent): a free temporary address\n       jarvis mcp access public named HOSTNAME [--from-env NAME]   # a stable address on your own Cloudflare tunnel (token from the environment, a file, or typed in)\n       jarvis mcp access public named off                          # back to the free temporary address\n       jarvis mcp list [--json]                                    # the abilities you can switch on, and any program you added\n       jarvis mcp on browser                                       # switch an ability on (JARVIS does the setup)\n       jarvis mcp off browser\n       jarvis mcp add NAME [--read-only] -- PROGRAM [ARGS...]      # a program on this computer, e.g. -- npx -y @playwright/mcp@latest\n       jarvis mcp add NAME [--read-only] --url https://host/mcp    # a remote server (HTTPS)\n       jarvis mcp test NAME                                        # connect once and show its tools; nothing is saved\n       jarvis mcp test -- PROGRAM [ARGS...]                        # try a server before adding it\n       jarvis mcp remove NAME\n       A change applies on the next `jarvis restart`.";
 
 /// Runs one MCP verb.
@@ -60,7 +62,10 @@ fn name_of(before: &[String]) -> Option<&str> {
     for argument in before {
         if skip {
             skip = false;
-        } else if argument == "--url" || argument == "--root" || argument == "--env-ref" {
+        } else if matches!(
+            argument.as_str(),
+            "--url" | "--root" | "--env-ref" | "--bearer-ref"
+        ) {
             skip = true;
         } else if !argument.starts_with("--") {
             return Some(argument.as_str());
@@ -71,8 +76,35 @@ fn name_of(before: &[String]) -> Option<&str> {
 
 fn body_from(before: &[String], command: &[String]) -> Result<Value, String> {
     let mut environment = std::collections::BTreeMap::new();
+    let mut authorization = None;
     let mut words = before.iter();
     while let Some(word) = words.next() {
+        if word == "--bearer-ref" {
+            if authorization.is_some() {
+                return Err("use --bearer-ref only once".to_owned());
+            }
+            let reference = words.next().ok_or_else(|| {
+                "use --bearer-ref mcp:SERVER:KEY (a reference, never a token)".to_owned()
+            })?;
+            let reference = jarvis_core::McpSecretRef::parse(reference)
+                .map_err(|_| "use a named MCP key reference, never its value".to_owned())?;
+            if reference.as_str().split(':').nth(1) != name_of(before) {
+                return Err("the bearer reference must belong to this server's name".to_owned());
+            }
+            authorization = Some(reference.as_str().to_owned());
+            continue;
+        }
+        if word == "--url" {
+            words
+                .next()
+                .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                .ok_or_else(|| "--url needs an HTTP server address".to_owned())?;
+            continue;
+        }
+        if word == "--root" {
+            words.next();
+            continue;
+        }
         if word != "--env-ref" {
             continue;
         }
@@ -91,13 +123,29 @@ fn body_from(before: &[String], command: &[String]) -> Result<Value, String> {
             return Err("each credential environment variable may be mapped only once".to_owned());
         }
     }
-    Ok(json!({
+    if authorization.is_some() {
+        if !command.is_empty() {
+            return Err("--bearer-ref is for a remote --url, not a local command".to_owned());
+        }
+        let endpoint = flag(before, "--url")
+            .and_then(|endpoint| reqwest::Url::parse(endpoint).ok())
+            .filter(|endpoint| matches!(endpoint.scheme(), "http" | "https"))
+            .ok_or_else(|| "--bearer-ref requires --url with an HTTP server address".to_owned())?;
+        if endpoint.query().is_some() {
+            return Err("a server using --bearer-ref needs an address without a query".to_owned());
+        }
+    }
+    let mut body = json!({
         "name": name_of(before).unwrap_or_default(),
         "command": command,
         "endpoint": flag(before, "--url"),
         "read_only": before.iter().any(|argument| argument == "--read-only"),
         "env": environment,
-    }))
+    });
+    if let Some(reference) = authorization {
+        body["authorization"] = json!(reference);
+    }
+    Ok(body)
 }
 
 async fn list(client: &ApiClient, rest: &[String]) -> ExitStatus {
@@ -418,7 +466,11 @@ async fn add(client: &ApiClient, rest: &[String]) -> ExitStatus {
 
 async fn test(client: &ApiClient, rest: &[String]) -> ExitStatus {
     let (before, command) = split_command(rest);
-    let body = if command.is_empty() {
+    let body = if command.is_empty()
+        && !before
+            .iter()
+            .any(|argument| argument == "--url" || argument == "--bearer-ref")
+    {
         let Some(name) = name_of(before) else {
             eprintln!("{USAGE}");
             return ExitStatus::Usage;
@@ -554,6 +606,306 @@ mod tests {
 
     fn words(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| (*part).to_owned()).collect()
+    }
+
+    fn must<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
+        result.unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn client_at(port: u16) -> ApiClient {
+        must(ApiClient::new(
+            must(jarvis_core::LoopbackHost::new(port)),
+            "synthetic-daemon-credential".to_owned(),
+        ))
+    }
+
+    async fn daemon(
+        replies: Vec<(&'static str, Value)>,
+    ) -> (ApiClient, tokio::task::JoinHandle<Vec<Value>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = must(tokio::net::TcpListener::bind("127.0.0.1:0").await);
+        let client = client_at(must(listener.local_addr()).port());
+        let task = tokio::spawn(async move {
+            must(tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                let mut bodies = Vec::new();
+                for (route, reply) in replies {
+                    let (mut socket, _) = must(listener.accept().await);
+                    let mut request = Vec::new();
+                    let (end, length) = loop {
+                        let mut buffer = [0_u8; 2048];
+                        let count = must(socket.read(&mut buffer).await);
+                        assert_ne!(count, 0, "the CLI sends a complete request");
+                        request.extend_from_slice(&buffer[..count]);
+                        let text = String::from_utf8_lossy(&request);
+                        if let Some(end) = text.find("\r\n\r\n") {
+                            let length = text[..end]
+                                .lines()
+                                .find_map(|line| {
+                                    line.to_ascii_lowercase()
+                                        .strip_prefix("content-length: ")
+                                        .and_then(|value| value.parse::<usize>().ok())
+                                })
+                                .unwrap_or(0);
+                            if request.len() >= end + 4 + length {
+                                break (end + 4, length);
+                            }
+                        }
+                    };
+                    assert!(String::from_utf8_lossy(&request).starts_with(route));
+                    bodies.push(if length == 0 {
+                        Value::Null
+                    } else {
+                        must(serde_json::from_slice(&request[end..end + length]))
+                    });
+                    let body = reply.to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    must(socket.write_all(response.as_bytes()).await);
+                }
+                bodies
+            }).await)
+        });
+        (client, task)
+    }
+
+    #[test]
+    fn a_bearer_reference_is_not_a_name_or_a_read_only_claim() {
+        let args = words(&[
+            "--bearer-ref",
+            "mcp:remote:token",
+            "remote",
+            "--url",
+            "https://example.invalid/mcp",
+        ]);
+        assert_eq!(name_of(&args), Some("remote"));
+        let body = must(body_from(&args, &[]));
+        assert_eq!(body["authorization"], "mcp:remote:token");
+        assert_eq!(body["env"], json!({}));
+        assert_eq!(body["command"], json!([]));
+        assert_eq!(body["read_only"], false);
+        assert!(USAGE.contains("--bearer-ref mcp:NAME:KEY"));
+        assert!(USAGE.contains("jarvis keys set mcp:NAME:KEY"));
+    }
+
+    fn invalid_bearer_options() -> [Vec<&'static str>; 14] {
+        [
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp",
+                "--bearer-ref",
+            ],
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp",
+                "--bearer-ref",
+                "--read-only",
+            ],
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp",
+                "--bearer-ref",
+                "synthetic-literal-secret",
+            ],
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp",
+                "--bearer-ref",
+                "github",
+            ],
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp",
+                "--bearer-ref",
+                "mcp:other:token",
+            ],
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp",
+                "--bearer-ref",
+                "mcp:remote:token",
+                "--bearer-ref",
+                "mcp:remote:token",
+            ],
+            vec!["remote", "--bearer-ref", "mcp:remote:token"],
+            vec!["remote", "--bearer-ref", "mcp:remote:token", "--url"],
+            vec!["remote", "--url", "--bearer-ref", "mcp:remote:token"],
+            vec!["remote", "--url", "", "--bearer-ref", "mcp:remote:token"],
+            vec![
+                "remote",
+                "--url",
+                "file:///mcp",
+                "--bearer-ref",
+                "mcp:remote:token",
+            ],
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp?token=synthetic-query-secret",
+                "--bearer-ref",
+                "mcp:remote:token",
+            ],
+            vec![
+                "remote",
+                "--bearer-ref",
+                "mcp:remote:token",
+                "--",
+                "local-program",
+            ],
+            vec![
+                "remote",
+                "--url",
+                "https://example.invalid/mcp",
+                "--bearer-ref",
+                "mcp:remote:token",
+                "--",
+                "local-program",
+            ],
+        ]
+    }
+
+    #[tokio::test]
+    async fn invalid_bearer_options_are_refused_before_any_daemon_request() {
+        let listener = must(std::net::TcpListener::bind("127.0.0.1:0"));
+        must(listener.set_nonblocking(true));
+        let client = client_at(must(listener.local_addr()).port());
+        for parts in invalid_bearer_options() {
+            let args = words(&parts);
+            let (before, command) = split_command(&args);
+            let error = body_from(before, command)
+                .err()
+                .unwrap_or_else(|| panic!("must refuse"));
+            assert!(!error.contains("synthetic-literal-secret"));
+            assert!(!error.contains("synthetic-query-secret"));
+            for verb in ["add", "test"] {
+                let mut arguments = words(&["mcp", verb]);
+                arguments.extend(args.clone());
+                let status = must(
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        run_mcp(&client, &arguments),
+                    )
+                    .await,
+                );
+                assert_eq!(status, ExitStatus::Usage, "{verb}: {parts:?}");
+                assert_eq!(
+                    listener.accept().err().map(|error| error.kind()),
+                    Some(std::io::ErrorKind::WouldBlock),
+                    "invalid options must not reach the daemon"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_remote_bearer_reference_round_trips_through_add_and_saved_test() {
+        let server = json!({
+            "name": "remote", "command": [], "endpoint": "https://example.invalid/mcp",
+            "posture": "unclassified", "env": {}, "authorization": "mcp:remote:token",
+            "credentials": [{ "name": "Authorization", "reference": "mcp:remote:token", "state": "not set" }],
+        });
+        let overview = json!({ "servers": [server] });
+        let (client, requests) = daemon(vec![
+            ("POST /api/v1/mcp/servers ", overview.clone()),
+            ("GET /api/v1/mcp ", overview.clone()),
+            ("POST /api/v1/mcp/test ", json!({ "ok": true, "tools": [] })),
+        ])
+        .await;
+        assert_eq!(
+            run_mcp(
+                &client,
+                &words(&[
+                    "mcp",
+                    "add",
+                    "remote",
+                    "--url",
+                    "https://example.invalid/mcp",
+                    "--bearer-ref",
+                    "mcp:remote:token",
+                ])
+            )
+            .await,
+            ExitStatus::Ok
+        );
+        assert_eq!(
+            run_mcp(&client, &words(&["mcp", "test", "remote"])).await,
+            ExitStatus::Ok
+        );
+        let requests = must(requests.await);
+        let expected = json!({
+            "name": "remote", "command": [], "endpoint": "https://example.invalid/mcp",
+            "read_only": false, "env": {}, "authorization": "mcp:remote:token",
+        });
+        assert_eq!(requests, vec![expected.clone(), Value::Null, expected]);
+        assert!(render(&overview).contains("Authorization: not set (mcp:remote:token)"));
+        let mut set = overview;
+        set["servers"][0]["credentials"][0]["state"] = json!("set");
+        assert!(render(&set).contains("Authorization: set (mcp:remote:token)"));
+    }
+
+    #[tokio::test]
+    async fn explicit_remote_tests_do_not_look_up_the_saved_server() {
+        for reference in [None, Some("mcp:remote:token")] {
+            let (client, requests) = daemon(vec![(
+                "POST /api/v1/mcp/test ",
+                json!({ "ok": true, "tools": [] }),
+            )])
+            .await;
+            let mut args = words(&[
+                "mcp",
+                "test",
+                "remote",
+                "--url",
+                "https://explicit.invalid/mcp",
+            ]);
+            if let Some(reference) = reference {
+                args.extend(words(&["--bearer-ref", reference]));
+            }
+            assert_eq!(run_mcp(&client, &args).await, ExitStatus::Ok);
+            let requests = must(requests.await);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0]["endpoint"], "https://explicit.invalid/mcp");
+            assert_eq!(requests[0]["authorization"], json!(reference));
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_tests_keep_github_oauth_and_local_credential_mappings() {
+        for server in [
+            json!({ "name": "github", "endpoint": "https://api.githubcopilot.com/mcp/", "command": [], "authorization": "github", "posture": "read-only" }),
+            json!({ "name": "local", "endpoint": null, "command": ["local-program"], "env": { "API_KEY": "mcp:local:token" }, "posture": "unclassified" }),
+        ] {
+            let (client, requests) = daemon(vec![
+                ("GET /api/v1/mcp ", json!({ "servers": [server.clone()] })),
+                ("POST /api/v1/mcp/test ", json!({ "ok": true, "tools": [] })),
+            ])
+            .await;
+            assert_eq!(
+                run_mcp(
+                    &client,
+                    &words(&["mcp", "test", must(server["name"].as_str().ok_or("name"))])
+                )
+                .await,
+                ExitStatus::Ok
+            );
+            let requests = must(requests.await);
+            assert_eq!(requests[1]["authorization"], server["authorization"]);
+            assert_eq!(requests[1]["command"], server["command"]);
+            assert_eq!(requests[1]["endpoint"], server["endpoint"]);
+            assert_eq!(
+                requests[1]["env"],
+                json!(server["env"].as_object().cloned().unwrap_or_default())
+            );
+            assert_eq!(requests[1]["read_only"], server["posture"] == "read-only");
+        }
     }
 
     #[test]

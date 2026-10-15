@@ -9,7 +9,7 @@ selected_sdk: "rmcp 3.4.0 (Apache-2.0, Tier 1)"
 
 # Model Context Protocol
 
-**2026-10-15 focused refresh:** live official index, stdio/authorization contract and pinned rmcp source/release were rechecked for `P11-001b(a)`; no SDK change required. The [stdio credential record](mcp-stdio-credentials.md) controls this new slice, including GitHub v2.0.2, named keys and real-child verification. Older unrelated sections below retain their individual access dates; this refresh does not claim every protocol surface was revalidated.
+**2026-10-15 focused refresh:** live official index, stdio/authorization contract and pinned rmcp source/release were rechecked for `P11-001b(a)`; no SDK change required. The [stdio credential record](mcp-stdio-credentials.md) controls that slice, including GitHub v2.0.2, named keys and real-child verification. The subsequent owner-selected [HTTP token credential slice](mcp-http-token-credentials.md) rechecked HTTP authorization, RFC 6750 and the pinned per-operation backend: manually provisioned same-server bearer references are built/tested, not generic OAuth or real-provider acceptance. The next owner-selected [generic pre-registered OAuth slice](mcp-oauth.md) checked current discovery, client-registration and issuer/PKCE security contracts before implementation; it is built/tested offline, not automatic client registration or real-provider/browser acceptance. Older unrelated sections below retain their individual access dates; this refresh does not claim every protocol surface was revalidated.
 
 ## Scope
 

@@ -57,7 +57,7 @@ pub(crate) const MAX_IDLE_KEEP_ALIVES: u32 = 8;
 /// Matches the storage schema's bound, so a turn the daemon would refuse is refused here with an
 /// explanation instead of becoming a failed request. Counting characters rather than bytes follows
 /// the same rule the schema uses: it bounds a `TEXT` column with `length()`, which counts characters.
-const MAX_TURN_CHARS: usize = 4_096;
+const MAX_TURN_CHARS: usize = jarvis_storage::MAX_OBJECTIVE_CHARS;
 
 /// Commands a chat session understands, typed on their own line.
 const CHAT_EXIT: [&str; 2] = [":quit", ":exit"];

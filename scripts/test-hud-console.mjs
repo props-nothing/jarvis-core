@@ -82,11 +82,11 @@ test('voice preparation exposes an accessible silence control', () => {
 });
 
 function composerContext({ offline = false, busy = false, value = 'A draft' } = {}) {
-  const input = { value }, sent = [], handlers = {};
+  const input = { value, addEventListener(name, callback) { handlers[name] = callback; } }, sent = [], handlers = {};
   const context = { S: { offline }, busy, send(text) { sent.push(text); },
-    $(id) { return id === 'input' ? input : { addEventListener(name, callback) { handlers[name] = callback; } }; } };
+    $(id) { return id === 'input' ? input : { addEventListener(name, callback) { handlers[name] = callback; }, requestSubmit() { handlers.submit({ preventDefault() {} }); } }; } };
   vm.runInNewContext(section('  $("composer").addEventListener', '  // ---- voice: speaking'), context);
-  return { input, sent, submit: () => handlers.submit({ preventDefault() {} }) };
+  return { input, sent, submit: () => handlers.submit({ preventDefault() {} }), keydown: event => handlers.keydown(event) };
 }
 for (const options of [{ offline: true }, { busy: true }, { value: '   ' }]) {
   test(`submission keeps unsent drafts: ${JSON.stringify(options)}`, () => {
@@ -102,6 +102,19 @@ test('connected submission sends once and clears the submitted draft', () => {
   fixture.submit();
   assert.deepEqual(fixture.sent, ['A draft']);
   assert.equal(fixture.input.value, '');
+});
+
+test('large multiline drafts are submitted intact and Shift Enter does not send', () => {
+  const value = 'paragraph\n'.repeat(10000) + 'TAIL';
+  const fixture = composerContext({ value });
+  fixture.keydown({ key: 'Enter', shiftKey: true, preventDefault() { assert.fail('Shift Enter must insert a newline'); } });
+  assert.equal(fixture.sent.length, 0);
+  fixture.keydown({ key: 'Enter', isComposing: true, preventDefault() { assert.fail('IME composition must not submit'); } });
+  fixture.keydown({ key: 'Enter', preventDefault() {} });
+  assert.deepEqual(fixture.sent, [value]);
+  const html = fs.readFileSync(new URL('../apps/jarvisd/src/hud/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<textarea id="input"/);
+  assert.doesNotMatch(html, /id="input"[^>]*maxlength/);
 });
 
 test('suggestions only prepare an editable draft, never start a run', () => {

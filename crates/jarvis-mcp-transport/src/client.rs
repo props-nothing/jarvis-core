@@ -903,8 +903,9 @@ pub async fn connect_http(
 
 /// Connects using a current token for every HTTP operation, including reconnect and cleanup.
 ///
-/// Only binding `github`, server `github` and the exact GitHub read-only endpoint are supported.
-/// No token is retained in the connection recipe; a provider refusal prevents the HTTP request.
+/// Accepts a same-server `mcp:SERVER:KEY` reference or `oauth:SERVER` account bound to this query-free
+/// endpoint, or the fixed `github` OAuth binding. The recipe stores the binding, not a reusable credential; every outbound
+/// operation resolves again and a provider refusal prevents the HTTP request.
 ///
 /// # Errors
 ///

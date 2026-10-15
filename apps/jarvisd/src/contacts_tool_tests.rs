@@ -1,4 +1,4 @@
-//! The contact tools: they save, find and count, and a model cannot lift a do-not-contact.
+//! Contact tools preserve suppression on save/import; authorized deletion removes the whole contact.
 
 use super::*;
 use jarvis_core::{CorrelationId, RunId};
@@ -97,6 +97,13 @@ fn destructive_and_bulk_contact_tools_ask_and_import_needs_both_scopes() {
         .find(|definition| definition.id().to_string() == DELETE_TOOL)
         .unwrap_or_else(|| panic!("delete is defined"));
     assert!(delete.effects().contains(ToolEffect::Destructive));
+    assert_eq!(delete.version(), "1.1.0");
+    assert!(
+        delete
+            .description()
+            .contains("Contacts marked do_not_contact can also be deleted")
+    );
+    assert!(DELETE_INPUT.contains("including any do_not_contact restriction"));
     assert_eq!(delete.risk().level(), 3);
     assert_eq!(
         delete.required_scopes(),
@@ -190,7 +197,7 @@ async fn a_lead_is_saved_updated_found_and_counted() {
 }
 
 #[tokio::test]
-async fn a_model_cannot_lift_a_do_not_contact_and_bad_input_is_refused() {
+async fn saving_cannot_lift_do_not_contact_and_bad_input_is_refused() {
     let (_scratch, database) = database().await;
     let tool = ContactsTool::new(Arc::clone(&database));
     let call = "no-such-call";
@@ -303,7 +310,7 @@ async fn duplicates_are_previewed_and_merged() {
 }
 
 #[tokio::test]
-async fn deleting_removes_only_a_local_contact_and_cannot_erase_do_not_contact() {
+async fn deleting_removes_a_local_contact_including_do_not_contact() {
     let (_scratch, database) = database().await;
     let tool = ContactsTool::new(Arc::clone(&database));
     let made = must(
@@ -329,19 +336,46 @@ async fn deleting_removes_only_a_local_contact_and_cannot_erase_do_not_contact()
         )
         .await,
     );
-    assert!(
-        tool.delete(&json!({ "id": barred["contact"]["id"] }))
-            .await
-            .is_err()
+    assert_eq!(
+        must(tool.delete(&json!({ "id": barred["contact"]["id"] })).await)["deleted"],
+        true
     );
-    assert_eq!(must(tool.stats().await)["total"], 1);
+    assert_eq!(must(tool.stats().await)["total"], 0);
+    assert_eq!(must(tool.search(&json!({})).await)["count"], 0);
     for bad in [
         json!({}),
         json!({ "id": "" }),
         json!({ "id": "x".repeat(65) }),
+        json!({ "id": "bad\nidentifier" }),
     ] {
         assert!(tool.delete(&bad).await.is_err());
     }
+}
+
+#[tokio::test]
+async fn deleting_other_contacts_leaves_only_the_chosen_contact_regardless_of_status() {
+    let (_scratch, database) = database().await;
+    let tool = ContactsTool::new(Arc::clone(&database));
+    let kept = must(
+        tool.save("none", &json!({ "company": "Keep Me" }), now())
+            .await,
+    );
+    for status in ContactStatus::ALL {
+        let made = must(tool.save(
+            "none",
+            &json!({ "company": format!("Remove {}", status.as_str()), "status": status.as_str() }),
+            now(),
+        ).await);
+        assert_eq!(
+            must(tool.delete(&json!({ "id": made["contact"]["id"] })).await)["deleted"],
+            true
+        );
+    }
+    let remaining = must(tool.search(&json!({})).await);
+    assert_eq!(remaining["count"], 1);
+    assert_eq!(remaining["contacts"][0]["id"], kept["contact"]["id"]);
+    assert_eq!(remaining["contacts"][0]["company"], "Keep Me");
+    assert_eq!(must(tool.stats().await)["total"], 1);
 }
 
 fn importing_tool(database: &Arc<SqliteDatabase>, path: &std::path::Path) -> ContactsTool {

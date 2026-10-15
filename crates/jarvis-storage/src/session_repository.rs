@@ -567,16 +567,17 @@ pub async fn start_run(
     sqlx::query(
         "INSERT INTO agent_runs (\
             id, session_id, workspace_id, user_id, objective, state, \
-            started_at, updated_at, correlation_id, version\
-         ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1)",
+                started_at, updated_at, correlation_id, version, full_objective\
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1, ?8)",
     )
     .bind(&input.run_id)
     .bind(&input.session_id)
     .bind(&input.workspace_id)
     .bind(&input.user_id)
-    .bind(&input.objective)
+    .bind(crate::run_repository::objective_preview(&input.objective))
     .bind(input.started_at.to_string())
     .bind(input.correlation_id.to_string())
+    .bind(&input.objective)
     .execute(&mut *transaction)
     .await
     .map_err(|source| map_write_error("create a run", source))?;
@@ -712,7 +713,7 @@ async fn read_started_run(
     run_id: &str,
 ) -> Result<StartedRun, DatabaseError> {
     let row = sqlx::query(
-        "SELECT r.id, r.session_id, r.workspace_id, r.objective, r.state, r.version, \
+        "SELECT r.id, r.session_id, r.workspace_id, COALESCE(r.full_objective, r.objective) AS objective, r.state, r.version, \
                 r.correlation_id, r.started_at, \
                 (SELECT MIN(sequence) FROM run_events WHERE run_id = r.id) AS first_sequence \
          FROM agent_runs AS r WHERE r.id = ?1",

@@ -282,6 +282,174 @@ async fn post(
         .await
 }
 
+#[test]
+fn oauth_accounts_are_distinct_and_bound_to_the_configured_server() {
+    assert!(validate_http_binding("remote", "https://tools.example/mcp", "oauth:remote").is_ok());
+    for binding in [
+        "oauth:other",
+        "oauth:",
+        "oauth:remote:token",
+        "oauth:REMOTE",
+        "oauth:../remote",
+    ] {
+        assert!(validate_http_binding("remote", "https://tools.example/mcp", binding).is_err());
+    }
+    assert!(
+        validate_http_binding(
+            "remote",
+            "https://tools.example/mcp?token=private",
+            "oauth:remote"
+        )
+        .is_err()
+    );
+    assert!(validate_http_binding("remote", "http://tools.example/mcp", "oauth:remote").is_err());
+    let config = "[[servers]]\nname='remote'\n[servers.transport]\nkind='http'\nendpoint='https://tools.example/mcp'\nauthorization='oauth:remote'\n";
+    assert!(crate::McpHostConfig::parse(config).is_ok());
+    assert!(crate::McpHostConfig::parse(&config.replace("oauth:remote", "oauth:other")).is_err());
+}
+
+#[test]
+fn named_http_bindings_validate_server_destination_and_bearer_syntax() {
+    for endpoint in ["https://tools.example/mcp", "http://127.0.0.1:12345/mcp"] {
+        assert!(validate_http_binding("remote", endpoint, "mcp:remote:token").is_ok());
+        let document = format!(
+            "[[servers]]\nname='remote'\n[servers.transport]\nkind='http'\nendpoint='{endpoint}'\nauthorization='mcp:remote:token'\n"
+        );
+        assert!(crate::McpHostConfig::parse(&document).is_ok());
+    }
+    for token in ["abc", "A-z_0.1~+/==", "a=b", "", "=", "token:secret"] {
+        assert_eq!(
+            is_bearer_token(token),
+            matches!(token, "abc" | "A-z_0.1~+/==")
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_named_bindings_never_resolve_credentials_or_send_a_request() {
+    let server = HttpServer::start(Reply::Rpc).await;
+    let provider = Arc::new(ChangingProvider::default());
+    for (endpoint, binding) in [
+        (server.endpoint.as_str().to_owned(), "mcp:other:token"),
+        (
+            server.endpoint.as_str().to_owned(),
+            "synthetic-literal-secret",
+        ),
+        (server.endpoint.as_str().to_owned(), ""),
+        (
+            format!("{}?token=synthetic-private", server.endpoint),
+            "mcp:remote:token",
+        ),
+    ] {
+        let document = format!(
+            "[[servers]]\nname='remote'\n[servers.transport]\nkind='http'\nendpoint='{endpoint}'\nauthorization='{binding}'\n"
+        );
+        let error = crate::McpHostConfig::parse(&document)
+            .err()
+            .unwrap_or_else(|| panic!("invalid configuration accepted"));
+        assert!(!format!("{error:?}").contains("synthetic-"));
+        let endpoint =
+            McpHttpEndpoint::parse(&endpoint).unwrap_or_else(|error| panic!("endpoint: {error:?}"));
+        assert!(
+            crate::connect_http_with_auth(
+                &ServerName::new("remote").unwrap_or_else(|error| panic!("name: {error:?}")),
+                &endpoint,
+                binding,
+                provider.clone(),
+            )
+            .await
+            .is_err()
+        );
+    }
+    for endpoint in [
+        "http://remote.example/mcp",
+        "https://user:password@remote.example/mcp",
+        "https://remote.example/mcp#fragment",
+    ] {
+        assert!(validate_http_binding("remote", endpoint, "mcp:remote:token").is_err());
+    }
+    assert_eq!(provider.issued.load(Ordering::SeqCst), 0);
+    assert!(server.requests().is_empty());
+}
+
+#[tokio::test]
+async fn named_http_reference_is_resolved_for_every_operation_and_denial_sends_nothing() {
+    let server = HttpServer::start(Reply::Rpc).await;
+    let provider = Arc::new(ChangingProvider::default());
+    let client = AuthorizedHttpClient::new(
+        "remote",
+        &server.endpoint,
+        "mcp:remote:token",
+        provider.clone(),
+    )
+    .unwrap_or_else(|error| panic!("client: {error:?}"));
+    post(&client, server.uri())
+        .await
+        .unwrap_or_else(|error| panic!("POST: {error:?}"));
+    client
+        .post_message_with_max_sse_event_size(
+            server.uri(),
+            ping(),
+            None,
+            Some("stale-sdk-token".to_owned()),
+            HashMap::new(),
+            128,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("bounded POST: {error:?}"));
+    let _ = client
+        .get_stream(server.uri(), None, None, None, HashMap::new())
+        .await;
+    let _ = client
+        .get_stream_with_max_sse_event_size(
+            server.uri(),
+            None,
+            Some("cursor".to_owned()),
+            None,
+            HashMap::new(),
+            128,
+        )
+        .await;
+    client
+        .delete_session(server.uri(), Arc::from("session"), None, HashMap::new())
+        .await
+        .unwrap_or_else(|error| panic!("DELETE: {error:?}"));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 5);
+    for (index, request) in requests.iter().enumerate() {
+        assert_eq!(
+            request.headers["authorization"],
+            format!("Bearer synthetic-http-token-{index}")
+        );
+    }
+    {
+        let bindings = provider
+            .bindings
+            .lock()
+            .unwrap_or_else(|error| panic!("bindings: {error:?}"));
+        assert!(bindings.iter().all(|(binding, name, endpoint)| {
+            binding == "mcp:remote:token"
+                && name == "remote"
+                && endpoint == server.endpoint.as_str()
+        }));
+    }
+    provider.denied.store(true, Ordering::SeqCst);
+    assert!(post(&client, server.uri()).await.is_err());
+    assert!(
+        client
+            .get_stream(server.uri(), None, None, None, HashMap::new())
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .delete_session(server.uri(), Arc::from("session"), None, HashMap::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(server.requests().len(), 5);
+}
+
 #[tokio::test]
 async fn every_post_get_reconnect_and_delete_resolves_a_fresh_token() {
     let server = HttpServer::start(Reply::Rpc).await;
@@ -393,6 +561,9 @@ async fn denial_and_invalid_tokens_prevent_all_outbound_operations() {
         "contains space".to_owned(),
         "line\r\ninjection".to_owned(),
         "non-ascii-\u{e9}".to_owned(),
+        "=only-padding".to_owned(),
+        "padding=inside".to_owned(),
+        r#"{"access_token":"not-a-bearer"}"#.to_owned(),
     ] {
         let client = server.client(Arc::new(FixedProvider(token.clone())));
         let error = post(&client, server.uri())
@@ -413,7 +584,13 @@ async fn destination_change_and_redirect_never_leak_bearer() {
     let target = HttpServer::start(Reply::Rpc).await;
     let server = HttpServer::start(Reply::Redirect(target.endpoint.as_str().to_owned())).await;
     let provider = Arc::new(ChangingProvider::default());
-    let client = server.client(provider.clone());
+    let client = AuthorizedHttpClient::new(
+        "remote",
+        &server.endpoint,
+        "mcp:remote:token",
+        provider.clone(),
+    )
+    .unwrap_or_else(|error| panic!("named client: {error:?}"));
     assert!(post(&client, target.uri()).await.is_err());
     assert_eq!(provider.issued.load(Ordering::SeqCst), 0);
     assert!(post(&client, server.uri()).await.is_err());
