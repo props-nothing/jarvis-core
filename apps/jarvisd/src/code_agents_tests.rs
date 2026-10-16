@@ -364,6 +364,128 @@ async fn a_test_leaves_no_folder_behind() {
     }
 }
 
+#[tokio::test]
+async fn probe_folder_collisions_preserve_existing_directories_and_files() {
+    let root = scratch();
+    let directory_id = jarvis_core::SessionId::new();
+    let file_id = jarvis_core::SessionId::new();
+    let fresh_id = jarvis_core::SessionId::new();
+    let directory = root.0.join(format!("jarvis-agent-test-{directory_id}"));
+    let file = root.0.join(format!("jarvis-agent-test-{file_id}"));
+    std::fs::create_dir(&directory).unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(directory.join("sentinel"), b"existing directory")
+        .unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(&file, b"existing file").unwrap_or_else(|error| panic!("{error}"));
+    let mut candidates = [directory_id, file_id, fresh_id].into_iter();
+    let created = create_probe_folder(&root.0, || {
+        candidates
+            .next()
+            .unwrap_or_else(|| panic!("the third candidate must be fresh"))
+    })
+    .unwrap_or_else(|error| panic!("a collision must be retried: {error}"));
+    assert_eq!(
+        created,
+        root.0.join(format!("jarvis-agent-test-{fresh_id}"))
+    );
+    assert!(candidates.next().is_none());
+    remove_probe_folder(&created)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(!created.exists());
+    assert_eq!(
+        std::fs::read(directory.join("sentinel")).unwrap_or_else(|error| panic!("{error}")),
+        b"existing directory"
+    );
+    assert_eq!(
+        std::fs::read(&file).unwrap_or_else(|error| panic!("{error}")),
+        b"existing file"
+    );
+}
+
+#[test]
+fn probe_folder_collisions_are_bounded_and_never_adopt_the_occupied_path() {
+    let root = scratch();
+    let id = jarvis_core::SessionId::new();
+    let occupied = root.0.join(format!("jarvis-agent-test-{id}"));
+    std::fs::create_dir(&occupied).unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(occupied.join("sentinel"), b"keep").unwrap_or_else(|error| panic!("{error}"));
+    let mut attempts = 0;
+    let error = create_probe_folder(&root.0, || {
+        attempts += 1;
+        id
+    })
+    .err()
+    .unwrap_or_else(|| panic!("occupied candidates must be refused"));
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(attempts, PROBE_FOLDER_ATTEMPTS);
+    assert_eq!(
+        std::fs::read(occupied.join("sentinel")).unwrap_or_else(|error| panic!("{error}")),
+        b"keep"
+    );
+}
+
+#[test]
+fn a_missing_probe_root_is_reported_immediately_and_never_created() {
+    let root = scratch();
+    let missing = root.0.join("missing-root");
+    let mut attempts = 0;
+    let error = create_probe_folder(&missing, || {
+        attempts += 1;
+        jarvis_core::SessionId::new()
+    })
+    .err()
+    .unwrap_or_else(|| panic!("a missing parent must be refused"));
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(attempts, 1, "non-collision failures must not be retried");
+    assert!(!missing.exists());
+}
+
+#[tokio::test]
+async fn concurrent_probe_folder_allocation_never_shares_ownership() {
+    let root = scratch();
+    let first_id = jarvis_core::SessionId::new();
+    let barrier = std::sync::Barrier::new(8);
+    let folders = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    let mut first = true;
+                    create_probe_folder(&root.0, || {
+                        if std::mem::replace(&mut first, false) {
+                            first_id
+                        } else {
+                            jarvis_core::SessionId::new()
+                        }
+                    })
+                    .unwrap_or_else(|error| panic!("concurrent allocation: {error}"))
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|_| panic!("allocation panicked"))
+            })
+            .collect::<Vec<_>>()
+    });
+    let unique: std::collections::HashSet<_> = folders.iter().collect();
+    assert_eq!(unique.len(), 8, "a scratch directory has exactly one owner");
+    for folder in folders {
+        remove_probe_folder(&folder)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+    assert_eq!(
+        std::fs::read_dir(&root.0)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .count(),
+        0
+    );
+}
+
 #[test]
 fn codex_task_permissions_choose_reviewable_execution_without_full_access() {
     for command in [

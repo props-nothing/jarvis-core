@@ -40,6 +40,8 @@ use crate::settings_service::{context, refused};
 const TEST_HANDSHAKE: Duration = Duration::from_secs(120);
 /// How long signing in may take: a person completing a page in a browser.
 const SIGN_IN_HANDSHAKE: Duration = Duration::from_secs(300);
+/// Colliding scratch names are retried without ever adopting the existing path.
+const PROBE_FOLDER_ATTEMPTS: usize = 16;
 
 /// The agents looked for when nothing is chosen, in order. Only agents that start in ACP mode on their own: an adapter that has to be
 /// downloaded is never started without the owner choosing it.
@@ -455,13 +457,12 @@ async fn probe_under(
     let pathext = environment.get("PATHEXT").cloned();
     let (program, arguments) = resolve(&settings.command, &search_path, pathext.as_deref())
         .map_err(ProbeFailure::plain)?;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let folder = root.join(format!("jarvis-agent-test-{nanos:x}"));
-    // Own a newly created directory, never a pre-existing path on a collision.
-    std::fs::create_dir(&folder)
-        .map_err(|_| ProbeFailure::plain("a temporary folder could not be made".to_owned()))?;
+    let folder = create_probe_folder(root, jarvis_core::SessionId::new).map_err(|error| {
+        ProbeFailure::plain(format!(
+            "a temporary folder could not be made: {}",
+            error.kind()
+        ))
+    })?;
     let outcome = async {
         let child =
             spawn(&program, &arguments, &folder, &environment).map_err(ProbeFailure::plain)?;
@@ -501,6 +502,26 @@ async fn probe_under(
         });
     }
     outcome
+}
+
+/// Use the existing `UUIDv7` source rather than wall-clock resolution. Creation
+/// grants ownership; a collision never grants permission to reuse or remove it.
+fn create_probe_folder(
+    root: &Path,
+    mut next_id: impl FnMut() -> jarvis_core::SessionId,
+) -> std::io::Result<PathBuf> {
+    for _ in 0..PROBE_FOLDER_ATTEMPTS {
+        let folder = root.join(format!("jarvis-agent-test-{}", next_id()));
+        match std::fs::create_dir(&folder) {
+            Ok(()) => return Ok(folder),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no unused probe folder name was available",
+    ))
 }
 
 async fn inspect_probe_connection(
