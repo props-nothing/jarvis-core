@@ -993,6 +993,7 @@ window.JarvisSettings = function (context) {
           field("Finished", task.finished_at);
           field("Commands", task.allow_commands === undefined ? "Not recorded" : task.allow_commands ? "Allowed" : "Not allowed");
           field("Agent outcome", result.outcome);
+          field("Delivery", result.delivery_status || (task.result ? "Not independently verified" : ""));
           field("Base commit", result.base_commit);
           field("Commit", result.commit);
           field("Files changed", result.files_changed);
@@ -1015,8 +1016,9 @@ window.JarvisSettings = function (context) {
         function update(task) {
           if (name.textContent !== task.repository) name.textContent = task.repository;
           if (objective.textContent !== task.task) objective.textContent = task.task;
-          status.className = "badge " + (task.status === "completed" ? "on" : "off");
-          status.textContent = String(task.status || "unknown").replace(/_/g, " ");
+          status.className = "badge " + (task.status === "completed" && task.result && task.result.verification && task.result.verification.status === "passed" ? "on" : "off");
+          status.textContent = task.status === "completed" && (!task.result || !task.result.verification || task.result.verification.status !== "passed")
+            ? "Finished, unverified" : String(task.status || "unknown").replace(/_/g, " ");
           paintActivity(task);
           var signature = JSON.stringify([task.task_id, task.branch, task.worktree, task.created_at, task.finished_at, task.allow_commands, task.status, task.error, task.result]);
           if (signature !== resultSignature) { paintResult(task); resultSignature = signature; }

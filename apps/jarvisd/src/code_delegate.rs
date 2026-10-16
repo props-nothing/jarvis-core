@@ -359,7 +359,7 @@ fn project_checks(directory: &Path) -> Vec<Value> {
     } else {
         "npm"
     };
-    ["build", "typecheck"]
+    ["build", "lint", "typecheck"]
         .iter()
         .filter(|name| package["scripts"][**name].is_string())
         .map(|name| json!({"program":program,"arguments":["run",name],"timeout_seconds":540}))
@@ -476,7 +476,11 @@ impl CodeDelegateTool {
         let skill_context = crate::skill_bundles::context(&directory, &arguments.skills)
             .map_err(|reason| refused(&reason))?;
         let settings = self.agent.load().map_err(|reason| refused(&reason))?;
-        let environment = code_agents::environment(&settings.env_names);
+        let environment = code_agents::task_environment(
+            &settings,
+            arguments.allow_commands,
+            arguments.allow_network,
+        );
         let search_path = environment
             .get("PATH")
             .map(std::ffi::OsString::from)
@@ -554,17 +558,27 @@ impl CodeDelegateTool {
         answer["verification"] = json!({"status":"not_run", "checks":[]});
         if report.ended == Ended::Finished(StopReason::EndTurn) {
             answer["verification"] = self.verify(working, arguments, cancel).await?;
-            match answer["verification"]["status"].as_str() {
-                Some("failed") => answer["outcome"] = json!("verification_failed"),
-                Some("cancelled") => answer["outcome"] = json!("cancelled"),
-                _ => {}
-            }
         }
-        answer["next"] = json!(
-            "Work is in directory. No automatic commit, merge or push. Read verification: not_run is unverified, failed needs repair. Website delivery additionally requires starting a managed preview and checking real desktop/mobile behavior in the browser. Do not claim completion from the agent summary alone."
-        );
+        classify_delivery(&mut answer);
         Ok(answer)
     }
+}
+
+fn classify_delivery(answer: &mut Value) {
+    match answer["verification"]["status"].as_str() {
+        Some("failed") => answer["outcome"] = json!("verification_failed"),
+        Some("cancelled") => answer["outcome"] = json!("cancelled"),
+        _ => {}
+    }
+    answer["delivery_status"] = json!(match answer["verification"]["status"].as_str() {
+        Some("passed") => "checks_passed",
+        Some("failed") => "verification_failed",
+        _ => "unverified",
+    });
+    answer["browser_verified"] = json!(false);
+    answer["next"] = json!(
+        "Work is in directory. No automatic commit, merge or push. Read verification: not_run is unverified, failed needs repair. Website delivery additionally requires starting a managed preview and checking real desktop/mobile behavior in the browser. Do not claim completion from the agent summary alone."
+    );
 }
 
 async fn workspace_result(
@@ -628,7 +642,7 @@ fn framed_task(directory: &Path, arguments: &Arguments, skills: &str) -> String 
         "This folder was selected from the owner's permitted folders in Settings. Work here, not in a profile/cache worktree."
     };
     let network = if arguments.allow_network {
-        "Network access for documentation and task dependencies is authorized; account credentials and publication are not granted."
+        "Network access for documentation and task dependencies is authorized; account credentials and publication are not granted. If an npm install reports ENOTCACHED or only-if-cached, retry with --offline=false and --cache .jarvis-cache/npm. If the runtime sandbox blocks that authorized command, request command escalation through the runtime's permission mechanism so JARVIS can decide it. Do not disable the sandbox, change global configuration, or repeatedly retry a refused request. Report the exact blocker if permission or network access is unavailable."
     } else {
         "Network access is not authorized; do not fetch documentation, dependencies or other remote resources."
     };
@@ -647,7 +661,11 @@ fn framed_task(directory: &Path, arguments: &Arguments, skills: &str) -> String 
          behavior when browser access exists. Report any missing capability honestly. External accounts and JARVIS integrations \
          are not automatically available. Do not invent credentials or evidence. Do not leave hidden detached dev servers; \
          report preview argv and bind/port requirements so JARVIS can start a managed process. End with changed paths, commands/checks and their real results, preview requirements, \
-         and remaining blockers. A self-reported success is not independent verification.\n\nProject skills:\n{skills}\n\nTask:\n{}",
+         and remaining blockers. A self-reported success is not independent verification. \
+         Use the existing brand and design requirements from the brief; skills do not override them. \
+         Save verification artifacts using absolute paths inside this working directory, never a browser server's cwd. \
+         Every advertised verification script must exist and run. A zero build exit does not prove lint, type checks or browser checks ran; \
+         disclose skipped checks and inspect stderr. Repair missing tooling instead of suppressing checks.\n\nProject skills:\n{skills}\n\nTask:\n{}",
         directory.display(),
         arguments.task
     )
@@ -707,6 +725,10 @@ impl CodeDelegateTool {
             arguments.checks.clone()
         };
         let mut checks = Vec::new();
+        let missing = crate::code_verification::missing_check_scripts(directory);
+        if !missing.is_empty() {
+            return Ok(json!({"status":"failed","checks":[],"issues":missing}));
+        }
         for check in &selected {
             let parsed =
                 crate::command_run::CommandArgs::parse(check).map_err(|reason| refused(&reason))?;
@@ -722,13 +744,22 @@ impl CodeDelegateTool {
                     .unwrap_or_else(|| json!({"error":"verification output could not be decoded"})),
                 Err(error) => json!({"error":error.to_string()}),
             };
-            let success = body["exit_code"] == 0 && body["outcome"] == "completed";
+            let success = body["exit_code"] == 0
+                && body["outcome"] == "completed"
+                && body["reported_check_failures"]
+                    .as_array()
+                    .is_none_or(Vec::is_empty)
+                && body["capture_complete"] == true;
             checks.push(json!({"command":check,"passed":success,"result":body}));
             if !success {
                 return Ok(json!({"status":"failed","checks":checks}));
             }
         }
-        Ok(json!({"status":if checks.is_empty(){"not_run"}else{"passed"}, "checks":checks}))
+        Ok(
+            json!({"status":if checks.is_empty(){"not_run"}else{"passed"},
+            "scope":"Only the listed commands passed. Unlisted lint, type, browser and behavioral checks remain not_run.",
+            "checks":checks}),
+        )
     }
 }
 

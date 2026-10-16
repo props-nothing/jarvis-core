@@ -14,12 +14,7 @@ impl Drop for Scratch {
     }
 }
 fn fake() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    exe.parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .join("examples")
-        .join(format!("fake_acp_agent{}", std::env::consts::EXE_SUFFIX))
+    crate::code_agents::test_agent_executable()
 }
 fn git(dir: &Path, args: &[&str]) {
     let o = Command::new("git")
@@ -119,10 +114,15 @@ async fn live_activity_is_persisted_before_completion_and_fenced_for_models() {
             let task = jarvis_storage::find_delegated_task(&db, &manager.workspace, id)
                 .await
                 .unwrap();
-            // Stopping after the first snapshot races the agent's second update against cancellation.
-            if task.activity.len() == 2 {
+            // Status and activity are separate reads: the worker can leave the queue and publish
+            // progress between them. Wait for both facts before cancelling the agent.
+            if task.status == "running" && task.activity.len() == 2 {
                 break task;
             }
+            assert!(
+                matches!(task.status.as_str(), "queued" | "running"),
+                "the agent ended before both activity updates were observed: {task:?}"
+            );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     })
@@ -282,7 +282,7 @@ async fn stop_during_initialization_terminates_the_agent_and_its_child() {
 #[test]
 fn definitions_separate_start_read_and_stop() {
     let d = AsyncCodeDelegateTool::definitions().unwrap();
-    assert_eq!(d.len(), 6);
+    assert_eq!(d.len(), 7);
     let start = d.iter().find(|x| x.id().to_string() == START).unwrap();
     assert_eq!(start.approval(), ApprovalPolicy::Ask);
     let status = d.iter().find(|x| x.id().to_string() == STATUS).unwrap();
@@ -422,4 +422,93 @@ fn large_agent_reports_remain_valid_json_without_changing_verification_status() 
     assert!(output.is_truncated());
     let parsed: Value = serde_json::from_str(output.content()).unwrap();
     assert_eq!(parsed["task_id"], "retained");
+}
+
+#[tokio::test]
+async fn wait_timeout_leaves_quiet_agents_running_until_explicit_stop() {
+    let (_scratch, db, manager) = rig("wait").await;
+    let started = manager
+        .start(&json!({"repository":"repo","task":"long build"}))
+        .await
+        .unwrap();
+    let id = started["task_id"].as_str().unwrap();
+    for _ in 0..2 {
+        let view = manager
+            .wait_for_task(&json!({"task_id":id,"seconds":1}))
+            .await
+            .unwrap();
+        assert_eq!(view["wait_timed_out"], true);
+        assert!(matches!(
+            view["status"].as_str(),
+            Some("queued" | "running")
+        ));
+        assert_eq!(view["minutes"], 0);
+    }
+    manager.stop(&json!({"task_id":id})).unwrap();
+    let done = manager
+        .wait_for_task(&json!({"task_id":id,"seconds":30}))
+        .await
+        .unwrap();
+    assert_eq!(done["status"], "cancelled");
+    assert_eq!(done["wait_timed_out"], false);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn listing_fifty_long_briefs_retains_every_task_identity() {
+    let (_scratch, db, manager) = rig("chat").await;
+    let brief = "long brief ".repeat(1500);
+    for _ in 0..50 {
+        jarvis_storage::create_delegated_task(
+            &db,
+            &NewDelegatedTask {
+                workspace_id: &manager.workspace,
+                repository: "repo",
+                task: &brief,
+                allow_commands: true,
+                minutes: 0,
+                now: UtcTimestamp::now(&SystemClock),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let list = manager.list(&json!({"limit":50})).await.unwrap();
+    let output = crate::skill_bundles::tool_output(&list);
+    assert!(!output.is_truncated(), "{}", output.content());
+    let parsed: Value = serde_json::from_str(output.content()).unwrap();
+    assert_eq!(parsed["tasks"].as_array().unwrap().len(), 50);
+    assert!(
+        parsed["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|task| task["task_id"].as_str().is_some_and(|id| id.len() == 36))
+    );
+    db.close().await;
+}
+
+#[test]
+fn status_compaction_preserves_failed_verification_with_large_unicode_evidence() {
+    let near_byte_limit = json!({"activity":"界".repeat(10_800)});
+    assert!(
+        near_byte_limit.to_string().chars().count()
+            < jarvis_tools::MAX_MODEL_FACING_RESULT_CHARS - 500
+    );
+    assert!(
+        !fits_model(&near_byte_limit),
+        "wait metadata needs a UTF-8 byte reserve too"
+    );
+    let mut view = json!({"task_id":"0198f000-0000-7000-8000-0000000000b3","status":"failed","repository":"界".repeat(20_000),
+        "result":{"outcome":"verification_failed","agent_message":"界".repeat(100_000),"delivery_status":"verification_failed",
+        "verification":{"status":"failed","checks":[{"passed":false,"result":{"exit_code":0,"stderr":"界".repeat(100_000),"reported_check_failures":["eslint_unavailable"]}}]}}});
+    compact_status(&mut view);
+    assert!(fits_model(&view));
+    assert_eq!(view["task_id"], "0198f000-0000-7000-8000-0000000000b3");
+    assert_eq!(view["result"]["verification"]["status"], "failed");
+    assert_eq!(view["result"]["verification"]["checks"][0]["passed"], false);
+    assert_eq!(
+        view["result"]["verification"]["checks"][0]["reported_check_failure_count"],
+        1
+    );
 }

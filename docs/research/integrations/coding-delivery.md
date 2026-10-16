@@ -1,6 +1,59 @@
 # Coding delivery contracts
 
-Verified: 2026-10-15 UTC. Owner-requested coding workflow changes.
+Verified: 2026-10-16 UTC. Owner-requested coding workflow changes.
+
+## Live delegation repair, 2026-10-16
+
+Questions: why authorized dependency installs were offline, whether quiet ACP
+turns imply failure, and how to retain useful progress and verification evidence.
+Official sources fetched before implementation:
+
+- https://agentclientprotocol.com/llms.txt
+- https://agentclientprotocol.com/protocol/v1/prompt-turn
+- https://agentclientprotocol.com/protocol/v1/tool-calls
+- https://agentclientprotocol.com/protocol/v1/session-modes
+- https://raw.githubusercontent.com/agentclientprotocol/codex-acp/v2.2.2/README.md
+- https://raw.githubusercontent.com/agentclientprotocol/codex-acp/v2.2.2/src/AgentMode.ts
+- https://raw.githubusercontent.com/agentclientprotocol/codex-acp/v2.2.2/src/CodexAcpClient.ts
+- https://docs.npmjs.com/cli/v11/using-npm/config/
+- https://docs.npmjs.com/cli/v11/commands/npm-install/
+- https://raw.githubusercontent.com/microsoft/playwright-mcp/v0.0.83/README.md
+
+Retain ACP v1, codex-acp 2.2.2, npm 11 and Playwright MCP 0.0.83. ACP v2
+remains draft; no relevant v1 removal was observed. Partial tool updates retain
+omitted fields; content-only updates need not produce another public progress
+row. A quiet period is not an ended turn. Completion is the prompt response.
+
+The pinned Codex adapter defaults to `agent` (auto review). Both `agent` and
+`workspace-write` explicitly send `networkAccess: false` on every turn, so a
+CODEX_CONFIG network override alone is ineffective. `INITIAL_AGENT_MODE` is
+documented. `workspace-write` uses on-request approval with the user reviewer,
+allowing approved command escalation to reach JARVIS's ACP permission policy.
+Do not silently select `agent-full-access` or replace the owner's Codex config.
+Select workspace-write for authorized commands and read-only otherwise, only
+for the recognized Codex adapter. Explain dependency retries and project-local
+cache use in the brief. npm configuration flags/environment override npmrc;
+offline mode forbids fetching. Network permission is not network reachability.
+
+Authentication remains with the configured agent; no account material is read
+or copied. Other runtimes keep their configuration. Network-disabled work never
+receives the network-retry instruction. General host execution remains the
+existing approved capability, not a new sandbox guarantee. No new dependency,
+automatic job retry, global install or provider API is introduced.
+
+Verification: bounded waits must leave quiet jobs running and preserve Stop;
+duplicate progress floods must retain terminal changes; oversized lists must
+retain task IDs and statuses; zero-exit skipped lint and missing check scripts
+must not pass delivery. A real disposable Codex/npm run is separate acceptance
+from scripted-agent checks. Provider quotas, registry access and owner runtime
+configuration may still block installs and must be reported explicitly.
+
+Live Windows evidence (2026-10-16): the pinned signed-in Codex adapter completed
+the disposable `is-number@7.0.0` installation smoke in 100 seconds; JARVIS ran a
+separate Node import/behavior check successfully and verified the supplied
+package/check files remained unchanged. No global settings or credentials were
+changed. This verifies the tested npm installation path, not general website
+delivery or other runtime/platform configurations.
 
 ## Versioned authority
 

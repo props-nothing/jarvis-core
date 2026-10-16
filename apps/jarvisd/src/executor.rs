@@ -182,7 +182,17 @@ Do not claim to have performed actions you did not perform: if a tool is unavail
 For a task with several steps, first say in one short sentence what you are about to do, then keep the user informed with a \
 one-line status in plain words whenever you finish a stage (what is done, what is next). Think briefly and start acting rather \
 than planning at length. When you write or change code and a command tool is offered, run the project's build or tests with it \
-and fix what fails before you tell the user it is finished; do not claim code works that you have not run.";
+and fix what fails before you tell the user it is finished; do not claim code works that you have not run. \
+For substantial coding work use the selected coding agent with the full brief and acceptance checks. After starting it, use \
+jarvis.code.delegate_wait, repeatedly if needed; queued/running is not failure and quiet periods can be thinking or setup. \
+Do not stop or replace a coding agent because one command failed, no files appeared yet, or progress was quiet for a minute. \
+Allow it to diagnose and recover. Cancel only if the owner requests it or a concrete unsafe effect requires stopping. \
+Do not edit the same project while its coding job is active. Count attempts from actual task IDs. \
+After it ends, read the independent verification and distinguish checks passed, failed, skipped and not run. \
+A successful process exit alone does not mean lint or type checks ran: inspect stderr and reported_check_failures. \
+Do not call a result clean or complete when checks were skipped, missing or failed. A coding turn ending is not verified delivery. \
+For websites inspect real desktop/mobile behavior, retain the existing brand when requested, and save screenshots using absolute \
+paths inside the selected project. Verify artifact paths and every advertised check script before reporting them.";
 
 /// Maximum characters of an error message copied into an event payload.
 ///
@@ -646,6 +656,19 @@ impl RunLoopState {
             self.repeats = 1;
         }
         self.repeats
+    }
+
+    fn observe_wait_result(&mut self, tool: &str, text: &str) {
+        if tool == crate::code_delegate_async::WAIT
+            && let Ok(result) = serde_json::from_str::<serde_json::Value>(text)
+            && result["wait_timed_out"] == true
+            && matches!(result["status"].as_str(), Some("queued" | "running"))
+        {
+            // An actual bounded wait on active work is intentional repetition.
+            // Errors and terminal results retain the normal runaway guard.
+            self.last_call = None;
+            self.repeats = 0;
+        }
     }
 
     fn over_tool_budget(&mut self) -> bool {
@@ -2410,7 +2433,9 @@ async fn run_tool_round(
     ));
 
     let actor = match tool_actor_for(tools, run) {
-        Ok(actor) => actor,
+        Ok(actor) => {
+            actor.with_read_destination(destination_ceiling(deps.model, deps.model_id).await)
+        }
         Err(message) => {
             return fail(
                 database,
@@ -2457,6 +2482,7 @@ async fn run_tool_round(
                 Some(arguments) => {
                     match run_tool_call(tools, &actor, call.name(), &arguments).await {
                         StepOutcome::Text(text) => {
+                            state.observe_wait_result(call.name(), &text);
                             record_tool_result(database, run, call.name(), &text, correlation_id)
                                 .await;
                             text
@@ -3414,6 +3440,92 @@ mod tests {
                 .contains(&target)
         );
         assert_eq!(payload["memories_offered"], 24);
+        database.close().await;
+    }
+
+    /// Local model reads can see restricted claims; remote and unknown models cannot.
+    #[tokio::test]
+    async fn explicit_memory_reads_use_the_verified_model_destination() {
+        let (_profile, database) = database().await;
+        let private_claim = "Restricted fixture: the archive passphrase is cobalt";
+        let memory_id = remember_with_sensitivity(
+            &database,
+            MemoryType::Semantic,
+            jarvis_core::MemorySourceKind::UserStatement,
+            jarvis_core::MemoryConfidence::Confirmed,
+            private_claim,
+            Sensitivity::Restricted,
+        )
+        .await;
+        let definitions = crate::memory_search::MemorySearchTool::definitions()
+            .unwrap_or_else(|error| panic!("memory definitions: {error}"));
+        let tools = Arc::new(
+            ToolPipeline::with_adapters(
+                Arc::clone(&database),
+                None,
+                jarvis_tools::WorkspacePolicy::default(),
+                vec![(
+                    definitions,
+                    Arc::new(crate::memory_search::MemorySearchTool::new(Arc::clone(
+                        &database,
+                    ))),
+                )],
+            )
+            .unwrap_or_else(|error| panic!("memory pipeline: {error}")),
+        );
+        for placement in [Some(Placement::Local), Some(Placement::Remote), None] {
+            let run = start(&database, "Read the requested memory by its ID").await;
+            let model = model(vec![
+                Turn::tool_call(
+                    "read_memory",
+                    crate::memory_search::READ_TOOL,
+                    &serde_json::json!({"memory_id":memory_id}).to_string(),
+                ),
+                Turn::answer("Finished reading."),
+            ]);
+            let capabilities = model
+                .capabilities(&fixture_model_id())
+                .await
+                .unwrap_or_else(|error| panic!("capabilities: {error}"));
+            let model = model.with_capabilities(capabilities.with_placement(placement));
+            let settled = execute_run_with_tools(
+                &database,
+                &model,
+                &fixture_model_id(),
+                Some(&tools),
+                run.id(),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("run: {error}"));
+            assert_eq!(
+                settled.terminal_outcome(),
+                Some(jarvis_core::RunOutcome::Succeeded)
+            );
+            let requests = model.seen_messages();
+            let last = requests
+                .last()
+                .unwrap_or_else(|| panic!("the model was called"));
+            let results: Vec<_> = last
+                .iter()
+                .filter(|message| message.role() == jarvis_models::Role::Tool)
+                .map(ChatMessage::text)
+                .collect();
+            assert_eq!(results.len(), 1, "{placement:?}");
+            if placement == Some(Placement::Local) {
+                assert!(results[0].contains(private_claim), "{}", results[0]);
+                assert!(results[0].contains(jarvis_core::FENCE_OPEN));
+            } else {
+                let unavailable: serde_json::Value = serde_json::from_str(&results[0])
+                    .unwrap_or_else(|error| panic!("memory result: {error}"));
+                assert_eq!(unavailable, serde_json::json!({"outcome":"unavailable"}));
+                assert!(
+                    requests
+                        .iter()
+                        .flatten()
+                        .all(|message| !message.text().contains(private_claim))
+                );
+            }
+        }
         database.close().await;
     }
 
@@ -4542,6 +4654,25 @@ mod tests {
         confidence: jarvis_core::MemoryConfidence,
         content: &str,
     ) -> String {
+        remember_with_sensitivity(
+            database,
+            memory_type,
+            kind,
+            confidence,
+            content,
+            Sensitivity::Internal,
+        )
+        .await
+    }
+
+    async fn remember_with_sensitivity(
+        database: &Arc<SqliteDatabase>,
+        memory_type: jarvis_core::MemoryType,
+        kind: jarvis_core::MemorySourceKind,
+        confidence: jarvis_core::MemoryConfidence,
+        content: &str,
+        sensitivity: Sensitivity,
+    ) -> String {
         let identity = jarvis_storage::load_local_identity(database)
             .await
             .unwrap_or_else(|error| panic!("the fixture must have a seeded identity: {error}"));
@@ -4573,7 +4704,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("source: {error}")),
             confidence,
             importance: 2,
-            sensitivity: jarvis_core::Sensitivity::Internal,
+            sensitivity,
             entities: vec![jarvis_core::EntityRef::confirmed(entity_id)],
             valid_from: None,
             valid_until: None,
@@ -5264,8 +5395,8 @@ mod tests {
 
     /// **A long run does not outgrow the model's context: old bulk is left out, new work is kept, and the run completes.**
     ///
-    /// Thirty reads of two 11,500-character files is about 350 KB of results. Without trimming, every one is sent on every call and a real
-    /// provider answers `model_context_overflow` partway. Asserted on what the model was actually sent, not on what the loop held.
+    /// Enough paged file reads exceed the soft transcript budget even though each result is bounded.
+    /// Asserted on what the model was actually sent, with recent pages and durable results kept whole.
     #[tokio::test]
     async fn a_long_run_leaves_out_old_results_and_still_completes() {
         let (profile, database) = database().await;
@@ -5279,8 +5410,9 @@ mod tests {
 
         let tools = filesystem_pipeline(&profile, &database, &root);
         let run = start(&database, "read both files many times").await;
+        let read_count = crate::transcript_budget::SOFT_BUDGET_BYTES / 1500 + 30;
         let mut turns = Vec::new();
-        for step in 0..30 {
+        for step in 0..read_count {
             let name = if step % 2 == 0 { "a.txt" } else { "b.txt" };
             turns.push(Turn::tool_call(
                 &format!("call_{step}"),
@@ -5320,20 +5452,32 @@ mod tests {
             .filter(|message| message.role() == jarvis_models::Role::Tool)
             .map(jarvis_models::ChatMessage::text)
             .collect();
-        assert_eq!(results.len(), 30, "every call still has its result");
+        assert_eq!(results.len(), read_count, "every call still has its result");
         assert!(
             results[0].starts_with("[earlier tool result left out"),
             "the oldest is left out: {}",
             results[0]
         );
         let recent = &results[results.len() - crate::transcript_budget::KEEP_RECENT_RESULTS..];
-        assert!(
-            recent
-                .iter()
-                .all(|text| !text.starts_with("[earlier tool result left out")
-                    && text.len() > 11_000),
-            "the newest results are whole"
-        );
+        for text in recent {
+            let page: serde_json::Value = serde_json::from_str(text)
+                .unwrap_or_else(|error| panic!("recent page was not preserved: {error}"));
+            let content = page["content"].as_str().unwrap_or_default();
+            assert!(content == "a".repeat(1500) || content == "b".repeat(1500));
+            assert_eq!(page["offset"], 0);
+            assert_eq!(page["next_offset"], 1500);
+            assert_eq!(page["truncated"], true);
+        }
+        let stored = jarvis_storage::read_run_tool_calls(&database, run.id())
+            .await
+            .unwrap_or_else(|error| panic!("stored calls: {error}"));
+        assert_eq!(stored.len(), read_count);
+        for call in stored {
+            let page: serde_json::Value = serde_json::from_str(call.output().unwrap_or_default())
+                .unwrap_or_else(|error| panic!("durable page was not preserved: {error}"));
+            assert_eq!(page["content"].as_str().map(str::len), Some(1500));
+            assert_eq!(page["next_offset"], 1500);
+        }
 
         // A person watching is told, and the full results are still in the stored record.
         let events = jarvis_storage::read_run_events(
@@ -5350,6 +5494,35 @@ mod tests {
                 .any(|event| event.payload().contains("context_trimmed")),
             "the trim is visible in the run's events"
         );
+    }
+
+    #[test]
+    fn bounded_waits_can_repeat_but_errors_and_terminal_results_cannot() {
+        let mut state = RunLoopState::default();
+        for _ in 0..20 {
+            assert_eq!(state.note_call("wait-same-task".to_owned()), 1);
+            state.observe_wait_result(
+                crate::code_delegate_async::WAIT,
+                r#"{"status":"running","wait_timed_out":true}"#,
+            );
+        }
+        for (tool, output) in [
+            (
+                crate::code_delegate_async::WAIT,
+                r#"{"status":"completed","wait_timed_out":false}"#,
+            ),
+            (crate::code_delegate_async::WAIT, "error: missing task"),
+            (
+                "mcp.fake_wait",
+                r#"{"status":"running","wait_timed_out":true}"#,
+            ),
+        ] {
+            let mut state = RunLoopState::default();
+            for expected in 1..=REPEAT_FAIL {
+                assert_eq!(state.note_call("same-call".to_owned()), expected);
+                state.observe_wait_result(tool, output);
+            }
+        }
     }
 
     /// **A model stuck on one call is nudged, then stopped, with a reason that names the problem.**

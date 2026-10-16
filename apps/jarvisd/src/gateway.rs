@@ -441,6 +441,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/approvals/{id}/resume", post(resume_approval))
         .route("/memories", get(list_memories).post(remember))
         .route("/memories/search", post(search_memories))
+        .route("/memories/browse", post(browse_memories))
         .route("/memories/export", get(export_memories))
         .route("/memories/{id}", get(read_memory))
         .route("/memories/{id}/correct", post(correct_memory))
@@ -1631,6 +1632,17 @@ async fn list_memories(State(state): State<GatewayState>, RawQuery(raw): RawQuer
     };
     let limit = page.limit.unwrap_or(crate::memory_service::MAX_MEMORY_PAGE);
     match state.memories().list(limit).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(error) => memory_error(&error),
+    }
+}
+
+/// `POST /api/v1/memories/browse`
+async fn browse_memories(
+    State(state): State<GatewayState>,
+    Json(request): Json<jarvis_protocol::MemoryBrowseRequest>,
+) -> Response {
+    match state.memories().browse(&request).await {
         Ok(reply) => Json(reply).into_response(),
         Err(error) => memory_error(&error),
     }
@@ -4913,6 +4925,86 @@ mod tests {
         let presented = credential.expose().to_owned();
         let state = GatewayState::new(Arc::clone(&database), credential);
         (router(state), presented, profile, database)
+    }
+
+    #[tokio::test]
+    async fn memory_browse_is_authenticated_bounded_and_does_not_accept_authority() {
+        let (app, presented, _profile, database) = memory_router().await;
+        let service = crate::memory_service::MemoryService::new(Arc::clone(&database));
+        for number in 0..12 {
+            service
+                .remember(&jarvis_protocol::RememberRequest {
+                    content: format!("Browse fixture preference {number}"),
+                    memory_type: "preference".to_owned(),
+                    source_kind: "user_statement".to_owned(),
+                    importance: None,
+                    entity_ids: Vec::new(),
+                    claim: None,
+                    supersedes: None,
+                })
+                .await
+                .unwrap_or_else(|error| panic!("remember: {error}"));
+        }
+        let route = "/api/v1/memories/browse";
+        let unauthenticated = app
+            .clone()
+            .oneshot(post_json(route, "not-the-credential", "{}"))
+            .await
+            .unwrap_or_else(|error| panic!("router: {error}"));
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        for invalid in [
+            serde_json::json!({"workspace_id":"elsewhere"}),
+            serde_json::json!({"destination":"restricted"}),
+            serde_json::json!({"limit":21}),
+            serde_json::json!({"limit":0}),
+            serde_json::json!({"memory_type":"working"}),
+            serde_json::json!({"cursor":"bad"}),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(post_json(route, &presented, &invalid.to_string()))
+                .await
+                .unwrap_or_else(|error| panic!("router: {error}"));
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{invalid}"
+            );
+        }
+        let first = app
+            .clone()
+            .oneshot(post_json(route, &presented, "{}"))
+            .await
+            .unwrap_or_else(|error| panic!("router: {error}"));
+        assert_eq!(first.status(), StatusCode::OK);
+        let first: jarvis_protocol::MemoryBrowseReply =
+            serde_json::from_str(&body_text(first).await)
+                .unwrap_or_else(|error| panic!("decode: {error}"));
+        assert_eq!(first.memories.len(), 10);
+        assert!(first.memories[0].preview.contains("Browse fixture"));
+        assert!(first.next_cursor.is_some());
+        let second = app
+            .clone()
+            .oneshot(post_json(
+                route,
+                &presented,
+                &serde_json::json!({"cursor":first.next_cursor}).to_string(),
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("router: {error}"));
+        assert_eq!(second.status(), StatusCode::OK);
+        let second: jarvis_protocol::MemoryBrowseReply =
+            serde_json::from_str(&body_text(second).await)
+                .unwrap_or_else(|error| panic!("decode: {error}"));
+        assert_eq!(second.memories.len(), 2);
+        assert!(second.next_cursor.is_none());
+        assert!(!first.memories.iter().any(|earlier| {
+            second
+                .memories
+                .iter()
+                .any(|later| earlier.reference.memory_id == later.reference.memory_id)
+        }));
+        database.close().await;
     }
 
     /// **A claim can be remembered, listed, read, and searched over HTTP.** The first half of the surface,

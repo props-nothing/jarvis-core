@@ -223,6 +223,10 @@ fn progress_preserves_partial_metadata_and_excludes_private_payloads() {
         json!({"sessionUpdate":"tool_call", "toolCallId":"read-1", "title":"Read config", "kind":"read", "status":"pending", "locations":[{"path":"/work/config.toml"}], "rawInput":{"secret":"private input"}, "rawOutput":"private output", "content":[{"type":"text","text":"private content"}]}),
     );
     assert!(note_update(&first, &mut report, &limits).is_some());
+    for _ in 0..1000 {
+        assert!(note_update(&first, &mut report, &limits).is_none());
+        assert!(note_update(&update(json!({"sessionUpdate":"tool_call_update", "toolCallId":"read-1", "content":[{"type":"text","text":"another output chunk"}]})), &mut report, &limits).is_none());
+    }
     let changed = note_update(&update(json!({"sessionUpdate":"tool_call_update", "toolCallId":"read-1", "status":"completed"})), &mut report, &limits)
         .unwrap_or_else(|| panic!("a tool snapshot"));
     assert_eq!(changed.title, "Read config");

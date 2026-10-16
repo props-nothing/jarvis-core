@@ -1045,6 +1045,7 @@ fn note_update(message: &Value, report: &mut Report, limits: &Limits) -> Option<
                 return None;
             }
             let position = report.tools.iter().position(|note| note.id == id);
+            let previous = position.map(|position| report.tools[position].clone());
             let position = if let Some(position) = position {
                 position
             } else if report.tools.len() < limits.max_tool_notes {
@@ -1078,7 +1079,9 @@ fn note_update(message: &Value, report: &mut Report, limits: &Limits) -> Option<
                     .map(|path| path.chars().take(260).collect())
                     .collect();
             }
-            return (note.kind != "think").then(|| note.clone());
+            // Content-only stream updates must not crowd meaningful changes out
+            // of the bounded progress queue.
+            return (note.kind != "think" && previous.as_ref() != Some(note)).then(|| note.clone());
         }
         _ => {}
     }

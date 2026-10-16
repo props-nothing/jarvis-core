@@ -20,12 +20,14 @@ use tokio::sync::{Notify, mpsc};
 
 pub const START: &str = "jarvis.code.delegate_start";
 pub const STATUS: &str = "jarvis.code.delegate_status";
+pub const WAIT: &str = "jarvis.code.delegate_wait";
 pub const LIST: &str = "jarvis.code.delegate_list";
 pub const STOP: &str = "jarvis.code.delegate_stop";
 pub const RESUME: &str = "jarvis.code.delegate_resume";
 const START_INPUT: &str = crate::code_delegate::INPUT_SCHEMA;
 const ID_INPUT: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["task_id"],"properties":{"task_id":{"type":"string","minLength":36,"maxLength":36}}}"#;
 const LIST_INPUT: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"properties":{"limit":{"type":"integer","minimum":1,"maximum":50}}}"#;
+const WAIT_INPUT: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["task_id"],"properties":{"task_id":{"type":"string","minLength":36,"maxLength":36},"seconds":{"type":"integer","minimum":1,"maximum":30,"default":30}}}"#;
 const OUTPUT: &str =
     r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}"#;
 
@@ -105,6 +107,16 @@ impl AsyncCodeDelegateTool {
                 30,
             )?,
             make(
+                WAIT,
+                "Wait for a coding task",
+                "Waits up to 30 seconds for a coding job to end, then returns status and verification. A wait timeout leaves the job running. Prefer this over repeated status polling. Quiet activity and individual setup failures are not evidence of a stuck job; let the agent recover. Stop only at the owner's request or for a concrete unsafe effect.",
+                WAIT_INPUT,
+                ToolEffect::ReadOnly,
+                0,
+                ApprovalPolicy::Auto,
+                40,
+            )?,
+            make(
                 LIST,
                 "List coding tasks",
                 "Lists recent background coding tasks, newest first.",
@@ -117,7 +129,7 @@ impl AsyncCodeDelegateTool {
             make(
                 STOP,
                 "Stop a coding task",
-                "Cancels a queued or running coding job. No files are rolled back; queued cancellation starts no agent.",
+                "Cancels a queued or running coding job at the owner's request or to prevent a concrete unsafe effect. Do not cancel for quiet progress, an individual failed command, or to take over the implementation; use delegate_wait. No files are rolled back; queued cancellation starts no agent.",
                 ID_INPUT,
                 ToolEffect::Write,
                 1,
@@ -232,7 +244,7 @@ impl AsyncCodeDelegateTool {
             }
         });
         Ok(
-            json!({"outcome":"started","task_id":stored.id,"status":"queued","next":"Use jarvis.code.delegate_status with this task_id. The owner will also get a desktop notification when it ends."}),
+            json!({"outcome":"started","task_id":stored.id,"status":"queued","next":"Use jarvis.code.delegate_wait with this task_id (30 seconds per wait). Quiet progress or a failed individual command is not job failure. Let the agent recover; do not stop it to take over. The owner will also get a desktop notification when it ends."}),
         )
     }
     async fn status(&self, v: &Value) -> Result<Value, AdapterError> {
@@ -251,9 +263,47 @@ impl AsyncCodeDelegateTool {
         let tasks = jarvis_storage::list_delegated_tasks(&self.db, &self.workspace, limit)
             .await
             .map_err(|_| refused("coding tasks could not be read"))?;
-        Ok(
-            json!({"outcome":"listed","count":tasks.len(),"tasks":tasks.iter().map(render).collect::<Vec<_>>() }),
-        )
+        let rows: Vec<_> = tasks
+            .iter()
+            .map(|task| {
+                let result = task
+                    .result_json
+                    .as_deref()
+                    .and_then(|text| serde_json::from_str::<Value>(text).ok());
+                json!({"task_id":task.id,"status":task.status,
+                "verification":result.as_ref().map(|v|&v["verification"]["status"]),
+                "created_at":task.created_at.to_string()})
+            })
+            .collect();
+        Ok(json!({"outcome":"listed","count":rows.len(),"tasks":rows,
+            "next":"Use delegate_status with a task_id for its brief, activity and verification."}))
+    }
+
+    async fn wait_for_task(&self, v: &Value) -> Result<Value, AdapterError> {
+        let seconds = v
+            .get("seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(30)
+            .clamp(1, 30);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        loop {
+            let mut view = self.status(v).await?;
+            if !matches!(view["status"].as_str(), Some("queued" | "running")) {
+                view["wait_timed_out"] = json!(false);
+                return Ok(view);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                view["wait_timed_out"] = json!(true);
+                view["next"] = json!(
+                    "The job is still active. Continue delegate_wait; this wait timeout is not a task failure or a reason to stop it."
+                );
+                return Ok(view);
+            }
+            tokio::time::sleep_until(
+                (tokio::time::Instant::now() + std::time::Duration::from_millis(250)).min(deadline),
+            )
+            .await;
+        }
     }
     fn stop(&self, v: &Value) -> Result<Value, AdapterError> {
         let id = id(v)?;
@@ -356,7 +406,7 @@ fn bounded_result(value: Value) -> Value {
     }
     let checks = value["verification"]["checks"].as_array().into_iter().flatten().take(16)
         .map(|check| json!({"command":check["command"],"passed":check["passed"],"result_omitted":true})).collect::<Vec<_>>();
-    json!({"outcome":value["outcome"],"directory":value["directory"],"mode":value["mode"],
+    json!({"outcome":value["outcome"],"delivery_status":value["delivery_status"],"browser_verified":false,"directory":value["directory"],"mode":value["mode"],
         "branch":value["branch"],"worktree":value["worktree"],"details_omitted":true,
         "verification":{"status":value["verification"]["status"],"checks":checks},
         "next":"Detailed agent output exceeded storage limits. Inspect the files and rerun checks; no browser verification is implied."})
@@ -476,6 +526,12 @@ pub(crate) fn render_console(task: &StoredDelegatedTask) -> Value {
 
 fn render(task: &StoredDelegatedTask) -> Value {
     let mut view = render_console(task);
+    view["task"] = json!(task.task.chars().take(800).collect::<String>());
+    view["task_truncated"] = json!(task.task.chars().count() > 800);
+    // The summary duplicates agent_message and can dominate the entire response.
+    if let Some(object) = view.as_object_mut() {
+        object.remove("summary");
+    }
     let mut limited = view["activity_limited"].as_bool().unwrap_or(false);
     if let Some(entries) = view["activity"].as_array_mut() {
         if entries.len() > 4 {
@@ -493,7 +549,44 @@ fn render(task: &StoredDelegatedTask) -> Value {
         }
     }
     view["activity_limited"] = json!(limited);
+    compact_status(&mut view);
     view
+}
+
+fn compact_status(view: &mut Value) {
+    if fits_model(view) {
+        return;
+    }
+    let result = &view["result"];
+    let checks: Vec<_> = result["verification"]["checks"].as_array().into_iter().flatten()
+        .take(16).enumerate().map(|(index, check)| json!({"index":index,"passed":check["passed"].as_bool(),
+            "reported_check_failure_count":check["result"]["reported_check_failures"].as_array().map_or(0, Vec::len),
+            "exit_code":check["result"]["exit_code"].as_i64()})).collect();
+    let bounded = |value: &Value| {
+        value
+            .as_str()
+            .map(|text| text.chars().take(80).collect::<String>())
+    };
+    view["result"] = json!({"outcome":bounded(&result["outcome"]),"delivery_status":bounded(&result["delivery_status"]),
+        "verification":{"status":bounded(&result["verification"]["status"]),"checks":checks,
+            "issue_count":result["verification"]["issues"].as_array().map_or(0,Vec::len)},
+        "browser_verified":false,"details_omitted":true});
+    view["details_omitted"] = json!(true);
+    view["next"] = json!(
+        "Inspect retained details in the Coding tasks console; details_omitted there also discloses storage limits. Check statuses are preserved; omitted evidence is not success."
+    );
+    if !fits_model(view) {
+        // Preserve the durable identity and truth even for maximal Unicode paths.
+        *view = json!({"task_id":view["task_id"],"status":view["status"],"result":view["result"],
+            "details_omitted":true,"next":"Read the Coding tasks console for full paths, brief and output."});
+    }
+}
+
+fn fits_model(value: &Value) -> bool {
+    let text = value.to_string();
+    // Leave space for wait metadata in both UTF-8 bytes and model characters.
+    text.len() <= jarvis_tools::MAX_TOOL_OUTPUT_BYTES - 500
+        && text.chars().count() <= jarvis_tools::MAX_MODEL_FACING_RESULT_CHARS - 500
 }
 fn refused(reason: &str) -> AdapterError {
     AdapterError::RefusedBeforeReaching {
@@ -519,6 +612,7 @@ impl ToolExecutor for AsyncCodeDelegateTool {
         let body = match r.tool().to_string().as_str() {
             DELEGATE_TOOL | START => self.start(r.arguments()).await?,
             STATUS => self.status(r.arguments()).await?,
+            WAIT => self.wait_for_task(r.arguments()).await?,
             LIST => self.list(r.arguments()).await?,
             STOP => self.stop(r.arguments())?,
             RESUME => self.resume(r.arguments()).await?,

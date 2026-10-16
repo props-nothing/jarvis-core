@@ -15,29 +15,7 @@ impl Drop for Scratch {
 }
 
 fn fake_agent() -> PathBuf {
-    static BUILD: std::sync::Once = std::sync::Once::new();
-    BUILD.call_once(|| {
-        let status = Command::new(option_env!("CARGO").unwrap_or("cargo"))
-            .args([
-                "build",
-                "-q",
-                "-p",
-                "jarvis-runtimes",
-                "--example",
-                "fake_acp_agent",
-            ])
-            .status()
-            .unwrap_or_else(|error| panic!("cargo could not be run: {error}"));
-        assert!(status.success(), "the fake agent must build");
-    });
-    let executable = std::env::current_exe().unwrap_or_else(|error| panic!("{error}"));
-    let debug = executable
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| panic!("the test binary sits in target/<profile>/deps"));
-    debug
-        .join("examples")
-        .join(format!("fake_acp_agent{}", std::env::consts::EXE_SUFFIX))
+    crate::code_agents::test_agent_executable()
 }
 
 fn git(folder: &Path, arguments: &[&str]) {
@@ -184,13 +162,119 @@ fn javascript_projects_get_independent_checks_using_their_package_manager() {
     let world = World::new();
     std::fs::write(
         world.repo().join("package.json"),
-        r#"{"packageManager":"pnpm@10.0.0","scripts":{"build":"build","typecheck":"types"}}"#,
+        r#"{"packageManager":"pnpm@10.0.0","scripts":{"build":"build","lint":"lint","typecheck":"types"}}"#,
     )
     .unwrap_or_else(|error| panic!("{error}"));
     let checks = project_checks(&world.repo());
-    assert_eq!(checks.len(), 2);
+    assert_eq!(checks.len(), 3);
     assert_eq!(checks[0]["program"], "pnpm");
     assert_eq!(checks[0]["arguments"], json!(["run", "build"]));
+    assert_eq!(checks[1]["arguments"], json!(["run", "lint"]));
+}
+
+#[tokio::test]
+async fn a_zero_exit_build_with_missing_lint_is_not_a_clean_delivery() {
+    let world = World::new();
+    let tool = world.tool("say:Everything passed");
+    let check = if cfg!(windows) {
+        json!({"program":"cmd","arguments":["/C","echo ESLint must be installed in order to run during builds 1>&2"]})
+    } else {
+        json!({"program":"sh","arguments":["-c","echo 'ESLint must be installed in order to run during builds' >&2"]})
+    };
+    let args =
+        Arguments::parse(&json!({"repository":"repo","task":"check delivery","checks":[check]}))
+            .unwrap_or_else(|error| panic!("{error}"));
+    let answer = tool
+        .run(&args)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        answer["verification"]["checks"][0]["result"]["exit_code"],
+        0
+    );
+    assert_eq!(
+        answer["verification"]["checks"][0]["result"]["reported_check_failures"],
+        json!(["eslint_unavailable"])
+    );
+    assert_eq!(answer["delivery_status"], "verification_failed");
+    assert_eq!(answer["outcome"], "verification_failed");
+    assert_eq!(answer["browser_verified"], false);
+}
+
+#[tokio::test]
+async fn an_advertised_missing_browser_check_fails_even_when_the_agent_claims_success() {
+    let world = World::new();
+    std::fs::write(
+        world.repo().join("package.json"),
+        r#"{"scripts":{"verify:browser":"node scripts/verify-browser.mjs"}}"#,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let args = Arguments::parse(&json!({"repository":"repo","task":"verify website"}))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let answer = world
+        .tool("say:Browser verified")
+        .run(&args)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(answer["verification"]["status"], "failed");
+    assert_eq!(
+        answer["verification"]["issues"][0]["reason"],
+        "check_script_missing"
+    );
+    assert_eq!(answer["outcome"], "verification_failed");
+}
+
+/// Explicit, account-backed smoke using the adapter's existing login. No tokens
+/// are copied and no owner project is used. May incur model/registry usage.
+#[tokio::test]
+#[ignore = "requires the owner's signed-in pinned Codex ACP adapter and npm registry access"]
+async fn live_codex_installs_a_dependency_and_passes_an_independent_check() {
+    let world = World::new();
+    let package = r#"{"name":"jarvis-dependency-smoke","private":true,"version":"1.0.0","dependencies":{"is-number":"7.0.0"}}"#;
+    let check = "import isNumber from 'is-number'; if (!isNumber(42) || isNumber('no')) process.exit(1); console.log('dependency-check-passed');\n";
+    std::fs::write(world.repo().join("package.json"), package)
+        .unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(world.repo().join("verify.mjs"), check)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let tool = CodeDelegateTool::new(
+        &[world.granted()],
+        world.trees(),
+        AgentSource::Fixed(AgentSettings {
+            command: vec![
+                "npx".to_owned(),
+                "-y".to_owned(),
+                "@agentclientprotocol/codex-acp@2.2.2".to_owned(),
+            ],
+            ..AgentSettings::default()
+        }),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let args = Arguments::parse(&json!({"repository":"repo","minutes":5,
+        "task":"Install the exact dependencies in package.json using npm install --offline=false --cache .jarvis-cache/npm. If the runtime sandbox blocks network access, request its command escalation; JARVIS will evaluate it. Do not modify package.json or verify.mjs. Run node verify.mjs, then finish. Do not start a preview, create Git commits, or do other work.",
+        "checks":[{"program":"node","arguments":["verify.mjs"]}]})).unwrap_or_else(|error| panic!("{error}"));
+    let answer = tool
+        .run(&args)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        std::fs::read_to_string(world.repo().join("package.json"))
+            .unwrap_or_else(|error| panic!("{error}")),
+        package
+    );
+    assert_eq!(
+        std::fs::read_to_string(world.repo().join("verify.mjs"))
+            .unwrap_or_else(|error| panic!("{error}")),
+        check
+    );
+    assert_eq!(answer["delivery_status"], "checks_passed", "{answer}");
+    assert_eq!(answer["verification"]["status"], "passed", "{answer}");
+    assert!(
+        world
+            .repo()
+            .join("node_modules/is-number/package.json")
+            .is_file()
+    );
+    assert!(world.repo().join("package-lock.json").is_file());
 }
 
 fn request(kind: &str, paths: &[&str]) -> PermissionRequest {

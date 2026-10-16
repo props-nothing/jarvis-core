@@ -58,6 +58,10 @@ fn listings_with_strategy(strategy: jarvis_mcp::NamingStrategy) -> Vec<ToolDefin
                 "boxes":{"type":"boolean"}, "filename":{"type":"string"}
             }, "additionalProperties":false}),
         ),
+        (
+            "browser_take_screenshot",
+            json!({"type":"object","properties":{"filename":{"type":"string"},"fullPage":{"type":"boolean"}},"additionalProperties":false}),
+        ),
     ]
     .into_iter()
     .map(|(name, input)| {
@@ -159,7 +163,7 @@ fn browser_contract_preserves_authority_and_unrelated_tools() {
         assert_eq!(old.retry(), new.retry());
         assert_eq!(old.timeout_seconds(), new.timeout_seconds());
         assert_eq!(old.source(), new.source());
-        if contract(&old.id().to_string()).is_none() {
+        if contract(&old.id().to_string()).is_none() && old.id().to_string() != SCREENSHOT {
             assert_eq!(old, new);
         }
     }
@@ -167,6 +171,52 @@ fn browser_contract_preserves_authority_and_unrelated_tools() {
     assert_eq!(after[1].risk().level(), 0);
     assert_ne!(after[2].approval(), jarvis_tools::ApprovalPolicy::Auto);
     assert_ne!(after[3].approval(), jarvis_tools::ApprovalPolicy::Auto);
+}
+
+#[tokio::test]
+async fn screenshot_destinations_never_depend_on_the_browser_server_working_directory() {
+    let recorder = Arc::new(Recorder::default());
+    let (definitions, executor) = adapt(listings(), recorder.clone());
+    let screenshot = definitions
+        .iter()
+        .find(|definition| definition.id().to_string() == SCREENSHOT)
+        .unwrap_or_else(|| panic!("screenshot definition"));
+    for filename in [
+        "verify/home.png".to_owned(),
+        std::env::temp_dir()
+            .join("../outside.png")
+            .to_string_lossy()
+            .into_owned(),
+    ] {
+        assert!(matches!(
+            executor
+                .execute(&request(screenshot, json!({"filename":filename})))
+                .await,
+            Err(AdapterError::RefusedBeforeReaching { .. })
+        ));
+    }
+    assert!(
+        recorder
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    );
+    let arguments = json!({"filename":std::env::temp_dir().join("project/verify/home.png").to_string_lossy(),"fullPage":true});
+    must(
+        executor
+            .execute(&request(screenshot, arguments.clone()))
+            .await,
+    );
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .last(),
+        Some(&arguments)
+    );
+    must(executor.execute(&request(screenshot, json!({}))).await);
 }
 
 #[tokio::test]

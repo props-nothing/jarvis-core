@@ -193,7 +193,7 @@ const INPUT_SCHEMA: &str = r#"{
     "directory": {
       "type": "string",
       "maxLength": 240,
-      "description": "A folder inside a granted folder, relative to it, such as my-app. Defaults to the first granted folder."
+      "description": "A permitted working folder: relative to a Settings folder, or its absolute path. Defaults to the first folder permitted in Settings."
     },
     "timeout_seconds": {
       "type": "integer",
@@ -362,7 +362,7 @@ impl CommandRunTool {
     ///
     /// # Errors
     ///
-    /// Returns a reason when the path is absolute, climbs out with `..`, does not exist in any granted folder, or resolves
+    /// Returns a reason when the path is ambiguous, climbs out with `..`, does not exist in any granted folder, or resolves
     /// (through a link) to somewhere outside it.
     pub fn resolve_directory(&self, relative: &str) -> Result<PathBuf, String> {
         let trimmed = relative.trim();
@@ -374,8 +374,17 @@ impl CommandRunTool {
                 .ok_or_else(|| "no granted folder".to_owned());
         }
         let path = Path::new(trimmed);
-        if path.is_absolute()
-            || path.has_root()
+        if path.is_absolute() {
+            let real = std::fs::canonicalize(path)
+                .map(|path| plain(&path))
+                .map_err(|_| "the working directory does not exist".to_owned())?;
+            return if real.is_dir() && self.roots.iter().any(|root| real.starts_with(root)) {
+                Ok(real)
+            } else {
+                Err("the working directory is outside the folders permitted in Settings".to_owned())
+            };
+        }
+        if path.has_root()
             || path.components().any(|part| {
                 matches!(
                     part,
@@ -384,10 +393,11 @@ impl CommandRunTool {
             })
         {
             return Err(
-                "the directory must be relative to a granted folder, without .. and not an absolute path".to_owned(),
+                "use an existing permitted absolute path or a relative path without ..".to_owned(),
             );
         }
         let mut escaped = false;
+        let mut selected = None;
         for root in &self.roots {
             let candidate = root.join(path);
             if !candidate.is_dir() {
@@ -398,9 +408,16 @@ impl CommandRunTool {
             };
             let real = plain(&real);
             if real.starts_with(root) {
-                return Ok(real);
+                if selected.as_ref().is_some_and(|previous| previous != &real) {
+                    return Err("that relative folder exists in multiple permitted roots; use its absolute path".to_owned());
+                }
+                selected = Some(real);
+            } else {
+                escaped = true;
             }
-            escaped = true;
+        }
+        if let Some(real) = selected {
+            return Ok(real);
         }
         Err(if escaped {
             "that folder resolves outside the granted folder".to_owned()
@@ -539,6 +556,10 @@ impl CommandRunTool {
         body["stdout_path"] = json!(paths[0]);
         body["stderr_path"] = json!(paths[1]);
         body["capture_complete"] = json!(complete);
+        body["reported_check_failures"] = json!(crate::code_verification::reported_check_failures(
+            &stdout.capture,
+            &stderr.capture,
+        ));
         let mut preview_chars = MAX_STREAM_CHARS;
         while body.to_string().chars().count() > jarvis_tools::MAX_MODEL_FACING_RESULT_CHARS {
             preview_chars /= 2;

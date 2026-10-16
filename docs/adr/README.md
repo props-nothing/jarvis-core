@@ -242,3 +242,4 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 
 | [0222](0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md) | Coding delivery uses owner workspaces and durable evidence | Accepted |
 | [0223](0223-memory-discovery-browses-before-guessing-and-reads-by-id.md) | Memory discovery browses before guessing and reads by ID | Accepted |
+| [0224](0224-coding-waits-and-verification-preserve-real-task-outcomes.md) | Coding waits and verification preserve real task outcomes | Accepted |

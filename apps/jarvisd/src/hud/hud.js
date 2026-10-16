@@ -1260,6 +1260,7 @@
   function setOps(open) {
     $("ops").hidden = !open;
     if (open) { abilitiesAt = 0; if (typeof refreshAbilities === "function") refreshAbilities(); loadProjects(); }
+    if (!memoryLoaded && !$("ops").hidden) loadMemory(true);
   }
   $("open-ops").addEventListener("click", function () { setOps($("ops").hidden); });
   $("ops-close").addEventListener("click", function () { setOps(false); });
@@ -1971,6 +1972,160 @@
     item.appendChild(buttons);
     return item;
   }
+  // Owner inspection uses the authenticated memory routes, never model-rendered markup.
+  var memoryLoaded = false, memoryBusy = false;
+  var memoryPageRequest = 0, memoryListRequest = 0, memoryDetailRequest = 0;
+  var memoryCursors = [null], memoryPage = 0, memoryNext = null, memoryFilters = {};
+  function memoryPaging() {
+    $("memory-previous").disabled = memoryBusy || memoryPage === 0;
+    $("memory-next").disabled = memoryBusy || !memoryNext;
+  }
+  function loadMemory(reset, page) {
+    memoryLoaded = true;
+    if (reset) {
+      memoryPage = 0; memoryCursors = [null]; memoryNext = null; memoryListRequest = 0;
+      memoryFilters = {};
+      if ($("memory-type").value) memoryFilters.memory_type = $("memory-type").value;
+      if ($("memory-entity").value.trim()) memoryFilters.entity_id = $("memory-entity").value.trim();
+      $("memory-list").replaceChildren();
+    }
+    page = reset ? 0 : page === undefined ? memoryPage : page;
+    var cursor = page > memoryPage ? memoryNext : memoryCursors[page];
+    var body = Object.assign({ limit: 10 }, memoryFilters);
+    if (cursor) body.cursor = cursor;
+    var request = ++memoryPageRequest;
+    ++memoryDetailRequest;
+    $("memory-detail").replaceChildren();
+    memoryBusy = true;
+    memoryPaging();
+    $("memory-status").textContent = "Loading memories…";
+    return putJson("/memories/browse", "POST", body).then(function (reply) {
+      if (request !== memoryPageRequest) return;
+      memoryPage = page;
+      memoryListRequest = request;
+      memoryCursors = memoryCursors.slice(0, page + 1);
+      memoryCursors[page] = cursor || null;
+      memoryNext = reply.next_cursor;
+      var rows = (reply.memories || []).map(function (memory) {
+        var item = el("div", "item");
+        item.appendChild(el("div", "dim", memory.memory_type + " · " + memory.confidence + " · " + memory.sensitivity));
+        item.appendChild(el("div", "memory-text", memory.preview));
+        var open = el("button", "", "Read details");
+        open.type = "button";
+        open.addEventListener("click", function () {
+          if (!memoryBusy && request === memoryListRequest) readMemory(memory.memory_id);
+        });
+        item.appendChild(open);
+        return item;
+      });
+      $("memory-list").replaceChildren.apply($("memory-list"), rows);
+      $("memory-status").textContent = rows.length
+        ? "Page " + (page + 1) + ": " + rows.length + " current memories. Previews only; read details for the full claim."
+        : "No current memories match these filters.";
+      memoryBusy = false;
+      memoryPaging();
+    }, function (error) {
+      if (request !== memoryPageRequest) return;
+      memoryBusy = false;
+      memoryPaging();
+      $("memory-status").textContent = explain(error, "Could not load memories.") + " Use Browse / refresh to try again.";
+    });
+  }
+  function readMemory(id) {
+    var request = ++memoryDetailRequest;
+    var host = $("memory-detail");
+    host.replaceChildren(el("p", "dim", "Loading memory details…"));
+    return api("/memories/" + encodeURIComponent(id)).then(function (memory) {
+      if (request !== memoryDetailRequest) return;
+      host.replaceChildren(el("h3", "", "Memory details"), el("div", "memory-text", memory.content));
+      var metadata = el("details", "memory-metadata");
+      metadata.appendChild(el("summary", "", "Source and record details"));
+      ["memory_id", "memory_type", "source_kind", "source_locator", "confidence", "sensitivity", "status", "effective_status",
+        "created_at", "updated_at", "last_accessed_at", "importance", "retrieval_count", "admitted_by_actor_id", "admitted_at",
+        "version", "superseded_by", "is_stated_as_fact", "carries_untrusted_trust"].forEach(function (key) {
+        if (memory[key] !== undefined && memory[key] !== null) metadata.appendChild(el("div", "dim", key + ": " + memory[key]));
+      });
+      metadata.appendChild(el("div", "dim", "Entity IDs: " + (memory.entity_ids || []).join(", ")));
+      if (memory.claim) metadata.appendChild(el("div", "memory-text", "Structured claim: " + JSON.stringify(memory.claim)));
+      host.appendChild(metadata);
+      var label = el("label", "", "Correction");
+      label.setAttribute("for", "memory-correction");
+      var correction = el("textarea");
+      correction.id = "memory-correction";
+      correction.rows = 5;
+      correction.value = memory.content;
+      host.appendChild(label);
+      host.appendChild(correction);
+      var actions = el("div", "row cmd");
+      var save = el("button", "yes", "Save correction");
+      var forget = el("button", "danger", "Forget this memory");
+      var reload = el("button", "", "Reload details");
+      [save, forget, reload].forEach(function (button) { button.type = "button"; actions.appendChild(button); });
+      host.appendChild(actions);
+      var confirmation = el("div", "memory-confirm");
+      confirmation.hidden = true;
+      confirmation.appendChild(el("p", "", "Forget this memory and prevent it from being learned again?"));
+      var yes = el("button", "danger", "Yes, forget"), cancel = el("button", "", "Cancel");
+      yes.type = cancel.type = "button";
+      confirmation.appendChild(yes); confirmation.appendChild(cancel);
+      host.appendChild(confirmation);
+      var status = el("p", "dim");
+      status.setAttribute("role", "status");
+      host.appendChild(status);
+      var writing = false, confirmed = false;
+      var writable = memory.memory_id === id && Number.isSafeInteger(memory.version) && memory.version > 0;
+      function controls() {
+        save.disabled = forget.disabled = writing || !writable;
+        correction.disabled = reload.disabled = yes.disabled = cancel.disabled = writing;
+      }
+      function write(action, body, message) {
+        if (writing || !writable || request !== memoryDetailRequest) return;
+        writing = true;
+        controls();
+        status.textContent = action === "correct" ? "Saving correction…" : "Forgetting memory…";
+        putJson("/memories/" + encodeURIComponent(id) + "/" + action, "POST", body).then(function () {
+          proposalsAt = 0;
+          notice(message + (request === memoryDetailRequest ? "" : " Browse / refresh to update the memory list."));
+          // A late write may succeed, but it must not erase a newer selection or its draft.
+          if (request === memoryDetailRequest) loadMemory(true);
+        }, function (error) {
+          if (request !== memoryDetailRequest) return;
+          writing = false; confirmed = false; confirmation.hidden = true;
+          controls();
+          status.textContent = error.status === 409
+            ? "Changed since you opened it. Reload details before trying again."
+            : explain(error, "Could not save this change. Reload details before trying again.");
+        });
+      }
+      save.addEventListener("click", function () {
+        var content = correction.value.trim();
+        if (!content) { status.textContent = "Enter a correction before saving."; return; }
+        write("correct", { content: content, expected_version: memory.version }, "Memory corrected.");
+      });
+      forget.addEventListener("click", function () {
+        if (writing || !writable || request !== memoryDetailRequest) return;
+        confirmed = true; confirmation.hidden = false;
+        cancel.focus();
+      });
+      cancel.addEventListener("click", function () {
+        confirmed = false; confirmation.hidden = true; forget.focus();
+      });
+      yes.addEventListener("click", function () {
+        if (confirmed) write("forget", { expected_version: memory.version, allow_relearn: false }, "Memory forgotten.");
+      });
+      reload.addEventListener("click", function () { if (!writing && request === memoryDetailRequest) readMemory(id); });
+      controls();
+      if (!writable) status.textContent = "The memory identity or version is unavailable. Reload details before changing it.";
+      host.focus();
+    }, function (error) {
+      if (request !== memoryDetailRequest) return;
+      host.replaceChildren(el("p", "dim", explain(error, "Could not read this memory. Browse / refresh and reopen its details.")));
+    });
+  }
+  $("memory-filters").addEventListener("submit", function (event) { event.preventDefault(); loadMemory(true); });
+  $("memory-next").addEventListener("click", function () { if (!memoryBusy && memoryNext) loadMemory(false, memoryPage + 1); });
+  $("memory-previous").addEventListener("click", function () { if (!memoryBusy && memoryPage > 0) loadMemory(false, memoryPage - 1); });
+
   function offerCard(card) { return card.skill ? skillCard(card.skill) : proposalCard(card); }
   function refreshProposals() {
     if (Date.now() - proposalsAt < 8000) return;

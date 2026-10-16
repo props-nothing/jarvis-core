@@ -1,7 +1,5 @@
 //! The coding agent presets, how a saved command is resolved and started, and the console's Test and Sign in, against a scripted agent.
 
-use std::process::Command;
-
 use super::*;
 
 struct Scratch(PathBuf);
@@ -38,29 +36,7 @@ fn pathext() -> &'static OsStr {
 }
 
 fn fake_agent() -> PathBuf {
-    static BUILD: std::sync::Once = std::sync::Once::new();
-    BUILD.call_once(|| {
-        let status = Command::new(option_env!("CARGO").unwrap_or("cargo"))
-            .args([
-                "build",
-                "-q",
-                "-p",
-                "jarvis-runtimes",
-                "--example",
-                "fake_acp_agent",
-            ])
-            .status()
-            .unwrap_or_else(|error| panic!("cargo could not be run: {error}"));
-        assert!(status.success(), "the fake agent must build");
-    });
-    let executable = std::env::current_exe().unwrap_or_else(|error| panic!("{error}"));
-    let debug = executable
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| panic!("the test binary sits in target/<profile>/deps"));
-    debug
-        .join("examples")
-        .join(format!("fake_acp_agent{}", std::env::consts::EXE_SUFFIX))
+    crate::code_agents::test_agent_executable()
 }
 
 fn settings(script: &str) -> AgentSettings {
@@ -358,4 +334,48 @@ async fn a_test_leaves_no_folder_behind() {
         left, 0,
         "the folders of an answer and two failures are all removed"
     );
+}
+
+#[test]
+fn codex_task_permissions_choose_reviewable_execution_without_full_access() {
+    for command in [
+        vec!["codex-acp".to_owned()],
+        vec![
+            "npx".to_owned(),
+            "-y".to_owned(),
+            "@agentclientprotocol/codex-acp@2.2.2".to_owned(),
+        ],
+    ] {
+        let settings = AgentSettings {
+            command,
+            ..AgentSettings::default()
+        };
+        let allowed = task_environment(&settings, true, true);
+        assert_eq!(
+            allowed.get("INITIAL_AGENT_MODE").and_then(|v| v.to_str()),
+            Some("workspace-write")
+        );
+        assert_eq!(
+            allowed.get("npm_config_offline").and_then(|v| v.to_str()),
+            Some("false")
+        );
+        let denied = task_environment(&settings, false, false);
+        assert_eq!(
+            denied.get("INITIAL_AGENT_MODE").and_then(|v| v.to_str()),
+            Some("read-only")
+        );
+        assert_eq!(
+            denied.get("npm_config_offline").and_then(|v| v.to_str()),
+            Some("true")
+        );
+    }
+    let custom = task_environment(
+        &AgentSettings {
+            command: vec!["custom-acp".to_owned()],
+            ..AgentSettings::default()
+        },
+        true,
+        true,
+    );
+    assert!(!custom.contains_key("INITIAL_AGENT_MODE"));
 }

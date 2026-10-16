@@ -8,6 +8,7 @@ mod code_agents;
 mod code_delegate;
 mod code_delegate_async;
 mod code_run;
+mod code_verification;
 mod command_run;
 mod contacts_service;
 mod contacts_tool;

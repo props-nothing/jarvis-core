@@ -205,10 +205,12 @@ async function loadFixture(h, reply = fixture) {
   await flush();
 }
 
-async function openService(h, id) {
-  h.select("connections");
-  h.$("settings-service-" + id).click();
+async function openPrograms(h) {
+  // Custom MCP servers live in Advanced; Connections is the GitHub account flow.
+  h.select("advanced");
   await flush();
+  assert.equal(selectedId(h), "settings-tab-advanced");
+  assert.ok(h.$("mcp-program-name"), "Advanced must expose the Programs form");
 }
 
 test("coding agent setup offers normal sign-in without environment-name controls", async () => {
@@ -273,6 +275,7 @@ test("coding tasks expose durable review evidence as text, not markup or verifie
     assert.ok(text.includes(value), `missing review evidence: ${value}`);
   }
   assert.match(text, /not independently verified/i);
+  assert.match(text, /Finished, unverified/);
   assert.match(text, /3 allowed.*1 refused/);
   assert.match(text, /diff.*truncated|truncated.*diff/i);
   assert.equal(descendants(reviews[0]).some(node => ["SCRIPT", "IMG"].includes(node.tagName)), false);
@@ -566,7 +569,7 @@ test("ARIA relationships, keyboard wrapping and filtered roving focus follow the
   assert.equal(h.document.activeElement, h.tab("brain"));
   h.tab("brain").dispatch("keydown", { key: "ArrowDown" });
   assert.equal(selectedId(h), "settings-tab-voice");
-  assert.equal(h.$("settings-section-label").textContent, "Voice");
+  assert.equal(h.$("settings-section-label").textContent, "Voice & search");
   h.tab("voice").dispatch("keydown", { key: "Home" });
   assert.equal(selectedId(h), "settings-tab-overview");
   h.tab("overview").dispatch("keydown", { key: "ArrowUp" });
@@ -596,7 +599,7 @@ test("server saves preserve the selected tab, search, navigation nodes and panel
   assert.equal(h.$("settings-search").value, "alerts");
   assert.equal(h.tab("alerts"), tab);
   assert.equal(selectedId(h), "settings-tab-alerts");
-  assert.equal(h.$("settings-section-label").textContent, "Notifications");
+  assert.equal(h.$("settings-section-label").textContent, "Alerts");
   assert.equal(h.$("settings-body").scrollTop, 64);
   assert.match(h.$("settings-hint").textContent, /Waiting for a restart: Push topic/);
 });
@@ -764,13 +767,14 @@ test("Overview starts with honest loading cards and an always-available real Con
   assert.equal(selectedId(h), "settings-tab-overview");
   assert.equal(h.$("settings-section-label").textContent, "Overview");
   assert.equal(classNodes(h, "overview-grid").length, 1);
-  assert.equal(classNodes(h, "overview-card").length, 7);
-  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Browser-local"]);
+  assert.equal(classNodes(h, "overview-card").length, 5);
+  assert.deepEqual(classNodes(h, "overview-card").map(card => card.children.find(node => node.tagName === "H4").textContent), ["Model", "Folders & code", "Accounts & channels", "Permissions", "Console"]);
+  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Unknown", "Unknown", "Unknown", "Unknown", "Browser-local"]);
   assert.match(h.$("settings-body").textContent, /Loading saved daemon configuration/);
   assert.match(h.$("settings-body").textContent, /Setup is unknown until it loads/);
   h.settings[0].reject({ status: 503 }); h.tools[0].reject({ status: 503 }); await flush();
   assert.match(h.$("settings-body").textContent, /Could not load daemon settings \(503\).*Configuration is unknown/);
-  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Browser-local"]);
+  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Unknown", "Unknown", "Unknown", "Unknown", "Browser-local"]);
   const console = h.$("settings-overview-console");
   assert.equal(console.tagName, "BUTTON");
   assert.equal(console.type, "button");
@@ -785,7 +789,7 @@ test("Overview starts with honest loading cards and an always-available real Con
 
 test("Overview derives only saved settings and key presence, hides values and never infers runtime health", async () => {
   const h = harness(); h.initialize(); h.open(); await loadFixture(h, configuredFixture);
-  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Model name saved", "2 folders saved", "Review saved connections", "2 saved channel entries", "1 saved override", "Optional setup", "Browser-local"]);
+  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Model name saved", "2 folders saved", "3 saved setup entries", "1 saved override", "Browser-local"]);
   const text = h.$("settings-body").textContent;
   const notice = classNodes(h, "overview-safety")[0];
   assert.equal(notice.textContent, "Saved setup only. Runtime availability has not been checked.");
@@ -812,17 +816,19 @@ test("Overview derives only saved settings and key presence, hides values and ne
 
 test("Overview distinguishes missing configuration from unreported settings", async () => {
   const h = harness(); h.initialize(); h.open(); await loadFixture(h, { settings: [], keys: {} });
-  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Not reported", "Not reported", "Review saved connections", "0 saved channel entries", "Not reported", "Optional setup", "Browser-local"]);
+  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Not reported", "Not reported", "0 saved setup entries", "Not reported", "Browser-local"]);
   assert.match(h.$("settings-body").textContent, /main model setting was not reported/);
   assert.match(h.$("settings-body").textContent, /Folder grants were not reported/);
   assert.doesNotMatch(h.$("settings-body").textContent, /No folder grants are saved/);
   h.open(); await loadFixture(h, { settings: [savedSetting("daemon.executor_model_name", null), savedSetting("daemon.tool_workspace_roots", null, "folders")], keys: {}, postures: {} });
-  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Choose a model", "No folders saved", "Review saved connections", "0 saved channel entries", "Default choices", "Optional setup", "Browser-local"]);
+  assert.deepEqual(classNodes(h, "overview-state").map(node => node.textContent), ["Choose a model", "No folders saved", "0 saved setup entries", "Default choices", "Browser-local"]);
 });
 
 test("Overview buttons route through tab navigation, preserve search and focus sensibly when the target is filtered", () => {
   const h = harness(); h.initialize(); h.open();
-  for (const id of ["brain", "files", "connections", "connect", "telegram", "phone", "alerts", "permissions", "voice", "search", "console"]) {
+  const destinations = ["brain", "files", "google", "telegram", "phone", "permissions", "console"];
+  assert.deepEqual(classNodes(h, "overview-actions").flatMap(actions => actions.children.map(button => button.id)), destinations.map(id => "settings-overview-" + id));
+  for (const id of destinations) {
     h.select("overview");
     h.$("settings-overview-" + id).click();
     assert.equal(selectedId(h), "settings-tab-" + id);
@@ -1108,7 +1114,7 @@ test("MCP credential status shows references only and Test preserves the configu
   const env = { GITHUB_PERSONAL_ACCESS_TOKEN: "mcp:github:token" };
   const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [{ name: "github", kind: "stdio", command: ["github-mcp-server", "stdio"], posture: "unclassified", state: "connected", tools: [], env, credentials: [{ name: "GITHUB_PERSONAL_ACCESS_TOKEN", reference: env.GITHUB_PERSONAL_ACCESS_TOKEN, state: "set" }] }] } }, putHandler: () => Promise.resolve({ ok: true, tools: [] }) });
   h.initialize(); h.open(); await loadFixture(h);
-  await openService(h, "mcp");
+  await openPrograms(h);
   assert.match(h.$("settings-body").textContent, /GITHUB_PERSONAL_ACCESS_TOKEN: set \(mcp:github:token\)/);
   buttonNamed(h, "Test").click(); await flush();
   const request = h.putCalls.find(call => call[0] === "/mcp/test");
@@ -1123,7 +1129,7 @@ test("MCP credential status shows references only and Test preserves the configu
 
 test("MCP remote form sends only a named bearer reference for Test and Add, then clears it", async () => {
   const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [] } }, putHandler: () => Promise.resolve({ ok: true, tools: [] }) });
-  h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+  h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
   const reference = h.$("mcp-bearer-ref");
   assert.equal(h.$("mcp-bearer-row").hidden, true);
   assert.equal(reference.disabled, true);
@@ -1158,7 +1164,7 @@ test("MCP remote form sends only a named bearer reference for Test and Add, then
 
 test("MCP remote form refuses literal and cross-server bearer references and query addresses before sending", async () => {
   const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [] } } });
-  h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+  h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
   h.$("mcp-program-name").value = "remote";
   for (const [reference, endpoint, message] of [
     ["synthetic-literal-secret", "https://example.invalid/mcp", /never a token value/],
@@ -1185,7 +1191,7 @@ test("MCP remote form refuses literal and cross-server bearer references and que
 
 test("MCP switching to a local command or Example clears remote references and anonymous HTTP stays optional", async () => {
   const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [] } }, putHandler: () => Promise.resolve({ ok: true, tools: [] }) });
-  h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+  h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
   h.$("mcp-program-name").value = "remote";
   const command = h.$("mcp-program-command"), reference = h.$("mcp-bearer-ref");
   command.value = "https://example.invalid/mcp"; command.dispatch("input");
@@ -1212,7 +1218,7 @@ for (const state of ["set", "not set"]) {
   test(`MCP saved HTTP Test preserves authorization with ${state} reference status`, async () => {
     const reference = "mcp:remote:token";
     const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [{ name: "remote", kind: "http", endpoint: "https://example.invalid/mcp", command: [], authorization: reference, env: {}, posture: "unclassified", state: "connected", tools: [], credentials: [{ name: "Authorization", reference, state }] }] } }, putHandler: () => Promise.resolve({ ok: true, tools: [] }) });
-    h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+    h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
     assert.ok(h.$("settings-body").textContent.includes(`Authorization: ${state} (${reference})`));
     assert.match(h.$("settings-body").textContent, /jarvis keys set mcp:remote:token/);
     buttonNamed(h, "Test").click(); await flush();
@@ -1223,7 +1229,7 @@ for (const state of ["set", "not set"]) {
 
 test("MCP saved GitHub HTTP Test retains its fixed OAuth authorization", async () => {
   const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [{ name: "github", kind: "http", command: [], endpoint: "https://api.githubcopilot.com/mcp/", authorization: "github", posture: "read-only", tools: [] }] } }, putHandler: () => Promise.resolve({ ok: true, tools: [] }) });
-  h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+  h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
   buttonNamed(h, "Test").click(); await flush();
   assert.equal(h.putCalls[0][2].authorization, "github");
   assert.equal(h.putCalls[0][2].read_only, true);
@@ -1247,13 +1253,13 @@ function oauthPopup() {
 async function openMcpOAuth({ status = {}, server = {}, apiResponses = {}, ...options } = {}) {
   const saved = { name: "remote", kind: "http", command: [], endpoint: "https://resource.example.test/mcp", authorization: "oauth:remote", env: {}, posture: "unclassified", state: "unreachable", reason: "No live connection.", tools: [], oauth: { ...mcpOAuthStatus, ...status }, ...server };
   const h = harness({ ...options, apiResponses: { "/mcp": { abilities: [], servers: [saved] }, ...apiResponses } });
-  h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+  h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
   return h;
 }
 
 test("MCP browser OAuth is an explicit remote-only Add mode, mutually exclusive with bearer keys", async () => {
   const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [] } } });
-  h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+  h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
   const auth = h.$("mcp-authorization"), bearer = h.$("mcp-bearer-ref");
   assert.equal(auth.disabled, true);
   assert.equal(h.$("mcp-authorization-row").hidden, true);
@@ -1280,7 +1286,7 @@ test("MCP browser OAuth is an explicit remote-only Add mode, mutually exclusive 
 test("MCP OAuth mode needs a server name and changing to local or Example clears both auth modes", async () => {
   for (const localChoice of ["command", "Example"]) {
     const h = harness({ apiResponses: { "/mcp": { abilities: [], servers: [] } }, putHandler: () => Promise.resolve({ ok: true, tools: [] }) });
-    h.initialize(); h.open(); await loadFixture(h); await openService(h, "mcp");
+    h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
     const command = h.$("mcp-program-command"), auth = h.$("mcp-authorization");
     command.value = "https://resource.example.test/mcp"; command.dispatch("input");
     auth.value = "oauth"; auth.dispatch("change");
@@ -1538,8 +1544,8 @@ test("MCP OAuth controls are selected by the exact saved authorization and isola
 });
 
 for (const [tab, path, response, pendingName] of [
-  ["connect", "/mcp/access", { enabled: false, running: false, restart_needed: true }, "App access"],
-  ["connections", "/mcp", { abilities: [], servers: [], restart_needed: true }, "Programs"]
+  ["connect", "/mcp/access", { enabled: false, running: false, restart_needed: true }, "Connect apps"],
+  ["advanced", "/mcp", { abilities: [], servers: [], restart_needed: true }, "Programs"]
 ]) {
   test(`existing ${tab} restart banners register saved pending changes and still restart explicitly`, async () => {
     const restartRequest = deferred();

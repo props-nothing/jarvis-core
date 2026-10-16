@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 const NAVIGATE: &str = "mcp.browser.browser_navigate";
 const FIND: &str = "mcp.browser.browser_find";
 const SNAPSHOT: &str = "mcp.browser.browser_snapshot";
+const SCREENSHOT: &str = "mcp.browser.browser_take_screenshot";
 
 fn contract(id: &str) -> Option<(&'static str, &'static str, Value)> {
     let (title, description, properties, required): (_, _, _, &[&str]) = match id {
@@ -59,7 +60,22 @@ fn contract(id: &str) -> Option<(&'static str, &'static str, Value)> {
 }
 
 fn narrow(definition: &ToolDefinition) -> Result<ToolDefinition, String> {
-    let Some((title, description, schema)) = contract(&definition.id().to_string()) else {
+    let (title, description, input_schema) = if matches!(
+        definition.id().to_string().as_str(),
+        SCREENSHOT | "mcp.browser_take_screenshot"
+    ) {
+        (
+            "Capture a screenshot",
+            "Capture the current page. For a project deliverable, filename must be an absolute path in the selected project, without .. components. Relative paths are refused because the browser server has a different working directory. Omit filename only for a temporary browser artifact.",
+            definition.input_schema().clone(),
+        )
+    } else if let Some((title, description, schema)) = contract(&definition.id().to_string()) {
+        (
+            title,
+            description,
+            ToolSchema::from_value(schema).map_err(|error| error.to_string())?,
+        )
+    } else {
         return Ok(definition.clone());
     };
     ToolDefinition::new(ToolDefinitionParts {
@@ -67,7 +83,7 @@ fn narrow(definition: &ToolDefinition) -> Result<ToolDefinition, String> {
         version: format!("{}-bounded-v1", definition.version()),
         title: title.to_owned(),
         description: description.to_owned(),
-        input_schema: ToolSchema::from_value(schema).map_err(|error| error.to_string())?,
+        input_schema,
         output_schema: definition.output_schema().clone(),
         effects: definition.effects().clone(),
         risk: definition.risk().level(),
@@ -152,6 +168,19 @@ impl ToolExecutor for BrowserReader {
         request: &ToolExecutionRequest,
     ) -> Result<ToolCallResult, AdapterError> {
         let id = request.tool().to_string();
+        if matches!(id.as_str(), SCREENSHOT | "mcp.browser_take_screenshot")
+            && let Some(filename) = request.arguments().get("filename")
+            && !filename.as_str().is_some_and(|path| {
+                std::path::Path::new(path).is_absolute()
+                    && !std::path::Path::new(path)
+                        .components()
+                        .any(|part| matches!(part, std::path::Component::ParentDir))
+            })
+        {
+            return Err(AdapterError::RefusedBeforeReaching {
+                reason: "Screenshot filename must be an absolute path inside the selected project, without .. . Relative paths use the browser server's directory, not the coding workspace. Omit filename only for a temporary browser artifact.".to_owned(),
+            });
+        }
         if contract(&id).is_some() {
             let schema =
                 self.schemas

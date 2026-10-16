@@ -600,6 +600,12 @@ field_violations  optional safe validation details
 
 Provider body, SQL text, stack trace, secret-bearing URL/header, and internal file path are excluded. The internal diagnostic error retains a redacted cause chain linked by correlation ID.
 
+## Coding Delegation Evidence
+
+`jarvis.code.delegate_wait` accepts `task_id` and optional integer `seconds` (1–30, default 30). It is read-only and returns the status shape plus `wait_timed_out`; true means the durable job is still queued/running, not failed or cancelled. Repeated active waits do not trigger the identical-call guard. List results retain up to fifty compact task identities; detailed status may explicitly omit evidence to stay within model limits while preserving check outcomes. Full retained details remain available in the coding console.
+
+Delegated results distinguish lifecycle `outcome` from `delivery_status` (`checks_passed`, `verification_failed`, `unverified`). `verification.status` covers only listed independent commands; `browser_verified` remains false. Command results may include `reported_check_failures` independently of their real `exit_code`. Missing direct Node check scripts and explicit skipped/unavailable-check diagnostics fail delivery. See [ADR-0224](../adr/0224-coding-waits-and-verification-preserve-real-task-outcomes.md).
+
 ## Contract Test Rule
 
 Every adapter has a shared contract suite for the port it implements. Unit tests may mock the port; adapter contract tests prove normalization; live tests prove external ownership. A passing fake is never evidence that a provider contract works.

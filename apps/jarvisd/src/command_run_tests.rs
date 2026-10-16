@@ -162,6 +162,65 @@ fn a_link_out_of_the_granted_folder_is_refused() {
     let tool = tool_in(&scratch);
     let reason = tool.resolve_directory("escape").err().unwrap_or_default();
     assert!(reason.contains("outside"), "{reason}");
+    assert!(
+        tool.resolve_directory(&scratch.0.join("escape").to_string_lossy())
+            .is_err()
+    );
+}
+
+#[test]
+fn absolute_directories_are_accepted_only_inside_granted_folders() {
+    let scratch = Scratch::new();
+    let outside = Scratch::new();
+    std::fs::create_dir_all(scratch.0.join("app")).unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(scratch.0.join("file.txt"), "x").unwrap_or_else(|error| panic!("{error}"));
+    let tool = tool_in(&scratch);
+    assert_eq!(
+        tool.resolve_directory(&scratch.0.to_string_lossy()),
+        tool.resolve_directory("")
+    );
+    assert_eq!(
+        tool.resolve_directory(&scratch.0.join("app").to_string_lossy()),
+        tool.resolve_directory("app")
+    );
+    for path in [
+        outside.0.clone(),
+        scratch.0.join("file.txt"),
+        scratch.0.join("missing"),
+    ] {
+        assert!(
+            tool.resolve_directory(&path.to_string_lossy()).is_err(),
+            "{path:?}"
+        );
+    }
+}
+
+#[test]
+fn ambiguous_relative_directories_require_an_absolute_selection() {
+    let first = Scratch::new();
+    let second = Scratch::new();
+    for root in [&first.0, &second.0] {
+        std::fs::create_dir_all(root.join("app")).unwrap_or_else(|error| panic!("{error}"));
+    }
+    let tool = CommandRunTool::new(&[first.0.clone(), second.0.clone()])
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(tool.resolve_directory("app").is_err());
+    assert_eq!(
+        tool.resolve_directory(""),
+        tool_in(&first).resolve_directory("")
+    );
+    for scratch in [&first, &second] {
+        assert_eq!(
+            tool.resolve_directory(&scratch.0.join("app").to_string_lossy()),
+            tool_in(scratch).resolve_directory("app")
+        );
+    }
+    let duplicate = CommandRunTool::new(&[first.0.clone(), first.0.clone()])
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        duplicate.resolve_directory("app"),
+        tool_in(&first).resolve_directory("app")
+    );
 }
 
 /// **A Node crash while exiting, after complete output, is explained instead of left to read as a failure.**

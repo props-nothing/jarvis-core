@@ -94,6 +94,28 @@
       <div class="opscol">
         <section class="frame"><h2>Recent</h2><div id="recent"></div></section>
         <section class="frame"><h2>Contacts</h2><div id="contacts"></div></section>
+        <section class="frame" id="memory-inspector" aria-labelledby="memory-heading">
+          <h2 id="memory-heading">Memory</h2>
+          <p class="note">Browse current memories, then read their source or correct a claim.</p>
+          <form id="memory-filters">
+            <label for="memory-type">Type</label>
+            <select id="memory-type">
+              <option value="">All current types</option>
+              <option value="episodic">Episodic</option><option value="semantic">Semantic</option>
+              <option value="preference">Preference</option><option value="relationship">Relationship</option><option value="procedural">Procedural</option>
+            </select>
+            <label for="memory-entity">Entity ID (optional)</label>
+            <input id="memory-entity" type="text" autocomplete="off" placeholder="Exact entity ID">
+            <button type="submit">Browse / refresh</button>
+          </form>
+          <p id="memory-status" class="dim" role="status">Open Operations to browse memories.</p>
+          <div id="memory-list"></div>
+          <div class="row cmd" aria-label="Memory pages">
+            <button id="memory-previous" type="button" disabled>Newer</button>
+            <button id="memory-next" type="button" disabled>Older</button>
+          </div>
+          <div id="memory-detail" tabindex="-1" aria-label="Memory details"></div>
+        </section>
       </div>
       <div class="opscol">
         <section class="frame"><h2>Last 24 hours</h2><div id="digest"></div></section>

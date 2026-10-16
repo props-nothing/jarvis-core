@@ -349,6 +349,18 @@ button.link:hover { color: #fff; background: transparent; }
 .opshead h1 { margin: 0; font: 500 26px var(--display); letter-spacing: -0.03em; color: var(--text); }
 .opsgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 .opscol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+#memory-filters { display: grid; gap: 6px; }
+#memory-filters label, #memory-detail label { font-size: 12px; color: var(--dim); }
+#memory-filters input, #memory-filters select, #memory-detail textarea { width: 100%; min-width: 0; padding: 8px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+#memory-detail textarea { display: block; resize: vertical; }
+#memory-detail:not(:empty) { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+#memory-detail h3 { margin: 0 0 8px; font-size: 15px; }
+.memory-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 8px; }
+.memory-metadata { margin: 10px 0; overflow-wrap: anywhere; }
+.memory-metadata summary { cursor: pointer; }
+.memory-confirm { border: 1px solid var(--line-hot); border-radius: 6px; padding: 10px; margin-top: 10px; }
+.memory-confirm p { margin: 0 0 8px; }
+.memory-confirm button + button { margin-left: 6px; }
 kbd { font: 11px var(--mono); border: 1px solid var(--line); padding: 0 5px; color: var(--cyan); }
 
 @media (max-width: 960px) {

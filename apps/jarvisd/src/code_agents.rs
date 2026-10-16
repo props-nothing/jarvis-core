@@ -287,6 +287,63 @@ pub fn environment(env_names: &[String]) -> BTreeMap<String, OsString> {
     environment
 }
 
+/// Task-specific settings for the pinned Codex adapter. Keep approvals routed
+/// to JARVIS instead of the adapter's independent auto-review agent. Never opt
+/// into unrestricted host access merely to make a dependency download work.
+pub(crate) fn task_environment(
+    settings: &AgentSettings,
+    allow_commands: bool,
+    allow_network: bool,
+) -> BTreeMap<String, OsString> {
+    let mut environment = environment(&settings.env_names);
+    if preset_of(&settings.command) == Some("codex") {
+        environment.insert(
+            "INITIAL_AGENT_MODE".to_owned(),
+            if allow_commands {
+                "workspace-write"
+            } else {
+                "read-only"
+            }
+            .into(),
+        );
+    }
+    // Explicit task permission wins over inherited npmrc offline preferences;
+    // this does not change any file or claim to bypass a runtime sandbox.
+    environment.retain(|name, _| !name.eq_ignore_ascii_case("npm_config_offline"));
+    environment.insert(
+        "npm_config_offline".to_owned(),
+        (!allow_network).to_string().into(),
+    );
+    environment
+}
+
+/// All daemon test families must finish building before any starts this image:
+/// Windows cannot relink an executable already running in another test.
+#[cfg(test)]
+pub(crate) fn test_agent_executable() -> PathBuf {
+    static BUILD: std::sync::Once = std::sync::Once::new();
+    BUILD.call_once(|| {
+        let status = std::process::Command::new(option_env!("CARGO").unwrap_or("cargo"))
+            .args([
+                "build",
+                "-q",
+                "-p",
+                "jarvis-runtimes",
+                "--example",
+                "fake_acp_agent",
+            ])
+            .status()
+            .unwrap_or_else(|error| panic!("cargo could not be run: {error}"));
+        assert!(status.success(), "the fake agent must build");
+    });
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(Path::parent).map(Path::to_path_buf))
+        .unwrap_or_else(|| panic!("the test binary sits in target/<profile>/deps"))
+        .join("examples")
+        .join(format!("fake_acp_agent{}", std::env::consts::EXE_SUFFIX))
+}
+
 /// Starts the agent in `folder` with a clean environment, with piped standard streams.
 ///
 /// # Errors
