@@ -8,6 +8,8 @@
 
 ## Context
 
+> **Extended 2026-10-16:** [ADR-0233](0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) prevents authentication retry or late agent errors from overriding Stop, preserves the turn deadline across retry, and keeps descendant cleanup active after root exit.
+
 Recent coding agents were explicitly cancelled during setup despite the absence of an overall deadline. Content-only ACP updates filled the activity queue, task listings exceeded model output limits, and an exit-zero build was described as clean despite missing lint tooling. The pinned Codex runtime's default reviewer and offline sandbox complicated authorized dependency installation.
 
 ## Decision

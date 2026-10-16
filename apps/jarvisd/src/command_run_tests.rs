@@ -480,6 +480,97 @@ async fn a_command_past_its_limit_is_stopped_and_reported_as_timed_out() {
     );
 }
 
+#[tokio::test]
+async fn ordinary_root_exit_terminates_descendants_and_preserves_unrelated_processes() {
+    let scratch = Scratch::new();
+    let arguments = process_fixture::command(&scratch.0);
+    let tool = tool_in(&scratch);
+    let task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
+    let tree = process_fixture::ready(&scratch.0).await;
+
+    let mut unrelated_command = if cfg!(windows) {
+        let mut command = tokio::process::Command::new("ping");
+        command.args(["-t", "127.0.0.1"]);
+        command
+    } else {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("60");
+        command
+    };
+    unrelated_command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut unrelated =
+        OwnedProcess::spawn(unrelated_command).unwrap_or_else(|error| panic!("{error}"));
+    let unrelated_pid = unrelated
+        .id()
+        .unwrap_or_else(|| panic!("unrelated root must be alive"));
+
+    std::fs::write(scratch.0.join("release"), "exit root only")
+        .unwrap_or_else(|error| panic!("{error}"));
+    let output = tokio::time::timeout(Duration::from_secs(12), task)
+        .await
+        .unwrap_or_else(|_| panic!("command must settle after root exit"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(output["outcome"], "completed", "{output}");
+    assert_eq!(output["exit_code"], 0, "{output}");
+    assert_eq!(output["capture_complete"], true, "{output}");
+    tree.assert_gone().await;
+    assert!(
+        process_fixture::running(unrelated_pid),
+        "cleanup signalled an unrelated process"
+    );
+    unrelated
+        .start_kill()
+        .unwrap_or_else(|error| panic!("{error}"));
+    tokio::time::timeout(Duration::from_secs(5), unrelated.wait())
+        .await
+        .unwrap_or_else(|_| panic!("unrelated control cleanup timed out"))
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[tokio::test]
+async fn dropping_a_running_command_terminates_the_root_and_descendant() {
+    let scratch = Scratch::new();
+    let arguments = process_fixture::command(&scratch.0);
+    let tool = tool_in(&scratch);
+    let task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
+    let tree = process_fixture::ready(&scratch.0).await;
+    drop(task);
+    tree.assert_gone().await;
+}
+
+#[tokio::test]
+async fn command_timeout_terminates_an_observed_live_descendant() {
+    let scratch = Scratch::new();
+    let mut arguments = process_fixture::command(&scratch.0);
+    arguments["timeout_seconds"] = json!(20);
+    let tool = tool_in(&scratch);
+    let task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
+    let tree = process_fixture::ready(&scratch.0).await;
+    let output = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .unwrap_or_else(|_| panic!("command timeout must settle"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(output["outcome"], "timed_out", "{output}");
+    tree.assert_gone().await;
+}
+
+#[tokio::test]
+async fn a_pipe_reader_is_aborted_when_collection_times_out() {
+    use tokio::io::AsyncWriteExt;
+
+    let (reader, mut writer) = tokio::io::duplex(32);
+    let task = AbortOnDrop::new(tokio::spawn(read_ends(reader)));
+    let (_, cut) = collect(Some(task)).await;
+    assert!(cut);
+    tokio::task::yield_now().await;
+    assert!(
+        writer.write_all(&[0; 64]).await.is_err(),
+        "timed-out reader was detached and kept consuming its pipe"
+    );
+}
+
 /// **A program that is not installed is a refusal that says so, and nothing runs.**
 #[tokio::test]
 async fn a_missing_program_is_refused_by_name() {

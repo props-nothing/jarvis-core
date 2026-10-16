@@ -2,6 +2,9 @@
 
 use std::collections::VecDeque;
 use std::fs;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::Poll;
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -19,6 +22,37 @@ const REFRESH: &str = "canary-refresh";
 
 fn must<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
     result.unwrap_or_else(|error| panic!("fixture operation failed: {error:?}"))
+}
+
+/// Excludes synchronous credential ACL work from a deliberately held HTTP reply's
+/// clock. Resume on unwind too; never await pending network work in this scope.
+struct MutationClock;
+
+impl MutationClock {
+    fn pause() -> Self {
+        tokio::time::pause();
+        Self
+    }
+}
+
+impl Drop for MutationClock {
+    fn drop(&mut self) {
+        tokio::time::resume();
+    }
+}
+
+async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
+    std::future::poll_fn(|context| Poll::Ready(future.as_mut().poll(context))).await
+}
+
+async fn disconnect_without_network(account: &GithubAccount) {
+    // A callback held before persistence has no grant to revoke. Assert that
+    // disconnect finishes synchronously rather than auto-advancing paused time.
+    let mut disconnect = Box::pin(account.disconnect());
+    let Poll::Ready(result) = poll_once(disconnect.as_mut()).await else {
+        panic!("held-callback disconnect unexpectedly awaited network work");
+    };
+    must(result);
 }
 
 struct Profile {
@@ -782,11 +816,13 @@ async fn complete_cannot_resurrect_access_after_app_change_or_disconnect() {
         let worker = Arc::clone(&account);
         let task = tokio::spawn(async move { worker.complete(&target).await });
         fixture.wait_for(1).await;
+        let clock = MutationClock::pause();
         if change_app {
             must(account.save_app("canary-new-client", Some(SECRET), false));
         } else {
-            must(account.disconnect().await);
+            disconnect_without_network(&account).await;
         }
+        drop(clock);
         release.notify_one();
         assert_eq!(must(task.await), Err(GithubError::Refused));
         assert!(!account.status().connected);
@@ -933,7 +969,9 @@ async fn final_identity_await_cannot_resurrect_a_disconnected_account() {
     let worker = Arc::clone(&account);
     let task = tokio::spawn(async move { worker.complete(&target).await });
     fixture.wait_for(2).await;
-    must(account.disconnect().await);
+    let clock = MutationClock::pause();
+    disconnect_without_network(&account).await;
+    drop(clock);
     release.notify_one();
     assert_eq!(must(task.await), Err(GithubError::Refused));
     assert!(!profile.account(&fixture).status().connected);
@@ -951,7 +989,11 @@ async fn disconnect_stops_local_access_before_a_slow_revocation_finishes() {
     answer.release = Some(Arc::clone(&release));
     fixture.answer("DELETE", &format!("/applications/{CLIENT}/token"), answer);
     let worker = Arc::clone(&account);
-    let task = tokio::spawn(async move { worker.disconnect().await });
+    let mut disconnect = Box::pin(async move { worker.disconnect().await });
+    // Finish synchronous local invalidation before starting the bounded HTTP
+    // observation phase; the held revocation response must leave it pending.
+    assert!(poll_once(disconnect.as_mut()).await.is_pending());
+    let task = tokio::spawn(disconnect);
     fixture.wait_for(3).await;
     assert_eq!(account.access_token().await, Err(GithubError::NotConnected));
     assert!(!account.status().connected);

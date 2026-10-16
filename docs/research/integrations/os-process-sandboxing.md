@@ -6,6 +6,8 @@
 on a Linux host in this development environment. Windows backend **deliberately not implemented**; see
 "Unresolved and rejected" below.
 
+> **Correction and extension (2026-10-16):** the historical unsafe-code argument does not rule out a reviewed safe dependency. [Process lifetime research](process-lifetime.md) and [ADR-0233](../../adr/0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) add Windows Job Object ownership for ordinary host execution without relaxing workspace lints. They do not implement the resource-confinement backend or expand its advertised sandbox guarantees. The original research below is retained as dated evidence.
+
 ## Sources
 
 | What | URL | Fetched | Notes |

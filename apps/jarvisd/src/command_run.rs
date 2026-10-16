@@ -44,6 +44,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use jarvis_core::{IsolatedText, Sensitivity, SystemClock, UtcTimestamp};
+use jarvis_runtimes::owned_process::{AbortOnDrop, OwnedProcess};
 use jarvis_tools::{
     AdapterError, ApprovalPolicy, Availability, BoundedOutput, EffectSet, Idempotency,
     ProviderEvidence, RetryDeclaration, SchemaError, Scope, ScopeError, ScopeSet, ToolCallResult,
@@ -462,49 +463,47 @@ impl CommandRunTool {
             .envs(&environment)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        #[cfg(unix)]
-        command.process_group(0);
-        #[cfg(windows)]
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: a build must not flash a console in front of the user.
+            .stderr(Stdio::piped());
         let started = Instant::now();
-        let mut child = command
-            .spawn()
-            .map_err(|error| AdapterError::RefusedBeforeReaching {
+        let mut child =
+            OwnedProcess::spawn(command).map_err(|error| AdapterError::RefusedBeforeReaching {
                 reason: format!(
                     "`{}` could not be started: {}",
                     arguments.program,
                     error.kind()
                 ),
             })?;
-        let pid = child.id().unwrap_or(0);
-        // From here the whole tree is killed if this future is dropped (a cancelled run) as well as at the time limit.
-        let mut guard = TreeGuard { pid, armed: true };
-
         let stdout = child
-            .stdout
-            .take()
-            .map(|stream| tokio::spawn(read_ends(stream)));
+            .take_stdout()
+            .map(|stream| AbortOnDrop::new(tokio::spawn(read_ends(stream))));
         let stderr = child
-            .stderr
-            .take()
-            .map(|stream| tokio::spawn(read_ends(stream)));
+            .take_stderr()
+            .map(|stream| AbortOnDrop::new(tokio::spawn(read_ends(stream))));
 
         let status = match tokio::time::timeout(arguments.limit, child.wait()).await {
-            Ok(Ok(status)) => {
-                guard.armed = false;
-                Some(status)
-            }
+            Ok(Ok(status)) => Some(status),
             Ok(Err(error)) => {
                 return Err(AdapterError::AmbiguousAfterReaching {
                     reason: format!("the command's outcome is unknown: {}", error.kind()),
                 });
             }
             Err(_) => {
-                kill_tree(pid);
-                let _ = tokio::time::timeout(KILL_GRACE, child.wait()).await;
-                guard.armed = false;
+                child
+                    .start_kill()
+                    .map_err(|error| AdapterError::AmbiguousAfterReaching {
+                        reason: format!(
+                            "the command timed out but process-tree cleanup failed: {error}"
+                        ),
+                    })?;
+                if !matches!(
+                    tokio::time::timeout(KILL_GRACE, child.wait()).await,
+                    Ok(Ok(_))
+                ) {
+                    return Err(AdapterError::AmbiguousAfterReaching {
+                        reason: "the command timed out and process exit could not be confirmed"
+                            .to_owned(),
+                    });
+                }
                 None
             }
         };
@@ -617,11 +616,13 @@ impl ToolExecutor for CommandRunTool {
 }
 
 /// Kills a process and everything it started when dropped, unless disarmed.
+#[cfg(test)]
 pub(crate) struct TreeGuard {
     pub(crate) pid: u32,
     pub(crate) armed: bool,
 }
 
+#[cfg(test)]
 impl Drop for TreeGuard {
     fn drop(&mut self) {
         if self.armed {
@@ -634,6 +635,7 @@ impl Drop for TreeGuard {
 ///
 /// A build tool starts others (`npm` starts `node`, which starts the compiler), and killing only the first leaves the rest
 /// running and holding the output pipes, which is what a time limit is supposed to prevent.
+#[cfg(test)]
 pub(crate) fn kill_tree(pid: u32) {
     if pid == 0 {
         return;
@@ -802,7 +804,7 @@ struct Ends {
 }
 
 /// Waits briefly for a reader task and returns what it kept, and whether anything is known to be missing.
-async fn collect(handle: Option<tokio::task::JoinHandle<Ends>>) -> (Ends, bool) {
+async fn collect(handle: Option<AbortOnDrop<Ends>>) -> (Ends, bool) {
     let Some(handle) = handle else {
         return (Ends::default(), false);
     };
@@ -981,3 +983,7 @@ fn report(
 #[cfg(test)]
 #[path = "command_run_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "process_lifetime_fixture.rs"]
+pub(crate) mod process_fixture;

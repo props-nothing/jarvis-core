@@ -200,6 +200,41 @@ async fn stop_cancels_the_agent_and_keeps_a_durable_record() {
 }
 
 #[tokio::test]
+async fn agent_exit_or_error_during_stop_keeps_durable_cancellation() {
+    for ending in ["cancel_exit", "cancel_error", "cancel_auth"] {
+        let (_scratch, db, manager) = rig(&format!("progress,{ending}")).await;
+        let started = manager
+            .start(&json!({"repository":"repo", "task":"wait for Stop"}))
+            .await
+            .unwrap();
+        let id = started["task_id"].as_str().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let task = jarvis_storage::find_delegated_task(&db, &manager.workspace, id)
+                    .await
+                    .unwrap();
+                if task.activity.len() == 2 {
+                    break;
+                }
+                assert!(
+                    matches!(task.status.as_str(), "queued" | "running"),
+                    "{ending}: {task:?}"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        manager.stop(&json!({"task_id":id})).unwrap();
+        let done = wait(&manager, id).await;
+        assert_eq!(done["status"], "cancelled", "{ending}: {done}");
+        assert_eq!(done["result"]["outcome"], "cancelled", "{ending}: {done}");
+        assert!(done["finished_at"].is_string());
+        db.close().await;
+    }
+}
+
+#[tokio::test]
 async fn stop_before_the_worker_starts_creates_no_worktree() {
     let (scratch, db, manager) = rig("write:{cwd}/done.txt,say:finished").await;
     let started = manager

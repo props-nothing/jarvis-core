@@ -1,13 +1,29 @@
 ---
 integration: github-oauth-settings
 status: researched
-last_verified: 2026-10-15
+last_verified: 2026-10-16
 owners: []
 selected_spec_version: "GitHub OAuth web application flow with S256 PKCE; GitHub REST 2026-03-10; MCP 2026-07-28"
 selected_sdk: "Existing reqwest =0.13.5, rmcp =3.4.0 and JARVIS AuthorizationTransaction; no new SDK"
 ---
 
 # Persistent GitHub sign-in from Settings
+
+## Authority-race fixture timing refresh (2026-10-16)
+
+The full Windows workspace run exposed three authority-race fixture failures: held token and identity responses exceeded the unchanged 20-second HTTP deadline while a synchronous settings mutation hardened credential files, and the five-second revocation-observation watchdog included that mutation's filesystem work. Each Windows hardening invokes native permission tools; loaded-runner duration is not a provider response or evidence that a disconnected grant was restored. Production epoch checks, credential hardening and request timeouts remain unchanged.
+
+Official test-runtime sources fetched on 2026-10-16:
+
+- Repository index `https://raw.githubusercontent.com/tokio-rs/tokio/tokio-1.53.1/llms.txt` returned 404. The docs.rs pause/resume pages were unavailable through the reader; the selected source `https://raw.githubusercontent.com/tokio-rs/tokio/tokio-1.53.1/tokio/src/time/clock.rs` was fetched successfully.
+- Tokio 1.53.1 `pause`/`resume` require its current-thread runtime and the `test-util` feature. Pausing freezes Tokio time, not `std::time::Instant`. Idle paused runtimes can automatically advance to timers, so the paused scope must not await pending network work. A guard resumes time when the local mutation returns or unwinds.
+- `https://doc.rust-lang.org/1.98.1/std/future/fn.poll_fn.html` documents driving a future through a closure. Returning `Poll::Ready` around one inner poll observes readiness without yielding to a pending operation.
+
+Fixture decision: freeze only the synchronous credential-mutation phase while a deliberately held callback response waits. Disconnect in that phase has no saved grant to revoke and must complete on its first poll; assert that invariant instead of allowing a paused network await. Resume before releasing the response. For the separate slow-revocation case, first-poll disconnect through its synchronous local invalidation, then start the bounded network-observation phase. Preserve exact refusal, disconnected status after reopening, request-count and local-before-revocation assertions. Only the daemon's test dependency enables clock control; no SDK version, production authentication, endpoint, response limit or timeout changes.
+
+Verification on Windows: temporary 21-second blocking delays in the held-response mutation phases and a six-second disconnect startup delay reproduced all three original failures (20 passed, three failed). The token and identity mutations measured 23.056 and 23.696 seconds; the errors were respectively `Unreachable` and `IdentityFailed`. The six-second startup delay expired the five-second fixture observer. With the same controls and repaired fixture, all 23 tests passed in 48.82 seconds, including the unchanged refusal, persisted-state and request-count assertions. No delay or diagnostic control remains in the tests.
+
+Falsification: temporarily accepting a changed epoch failed all three targeted tests: an extra identity request after code exchange, another during refresh, and a late successful grant exposed the removed guard. The production source was restored byte-for-byte (SHA-256 `B93409D350DB9F0480F640A4C20E816A98E1809A2A92306CD5FF1DDAFAB8A1FD`). The first restoration preserved the backup's older modification time, so Cargo reused the mutated binary; that failing log is retained as stale-build evidence. Advancing the source timestamp forced a fresh compile, after which all 23 unmodified-duration tests passed in 39.23 seconds; workspace formatting also passed. Evidence, controls and hashes are retained in `artifacts/reviews/coding-lifecycle-2026-10-16/github-race-controls/`. This is independent fixture evidence, not owner-account acceptance; full workspace verification remains in TODO.
 
 ## Scope
 

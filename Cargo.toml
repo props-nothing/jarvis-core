@@ -69,6 +69,11 @@ roxmltree = "0.21.1"
 zip = { version = "=9.0.4", default-features = false, features = ["deflate-flate2"] }
 futures-core = "0.3.34"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+# Owned host-process lifetimes; all three already occur in the locked MCP graph.
+# Safe wrappers preserve unsafe_code = forbid. See process-lifetime.md.
+process-wrap = { version = "=10.0.0", default-features = false, features = ["tokio1", "kill-on-drop", "process-group", "job-object", "creation-flags"] }
+nix = { version = "=0.31.3", default-features = false }
+windows = { version = "=0.62.2", default-features = false, features = ["Win32_System_Threading"] }
 getrandom = "0.4.3"
 # The MCP binding layer (`P3-009c-a`) is a `tower` service over `http` types, so the daemon can mount the SDK's
 # service without this crate naming it. Declared in the workspace table rather than with a version in one crate,

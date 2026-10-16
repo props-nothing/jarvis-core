@@ -19,14 +19,16 @@ on a server with no screen, and what is still missing. It is deliberately specif
 | Private key and credential files | owner-only ACL | mode `0600` | mode `0600` |
 | Run at login / as a service | registry Run entry (`jarvis service install`) | systemd user unit (`jarvis service install`) | launchd agent (`jarvis service install`) |
 | Code sandbox (optional) | Docker Desktop | Docker | Docker Desktop |
-| Prebuilt archive | CI builds an unsigned workflow artifact (`release.yml`) | CI builds an unsigned workflow artifact | CI builds unsigned workflow artifacts (Apple silicon and Intel) |
-| Signed installers, public downloads | not yet | not yet | not yet (an unsigned binary needs `xattr -d com.apple.quarantine` or a notarized build, `P9-005`) |
+| Public unsigned prerelease archives | x86_64 archive and checksum verified | x86_64 and aarch64 archives/checksums verified | Apple silicon and Intel archives/checksums verified; Intel runtime smoke skipped |
+| Signed installers | not yet | not yet | not yet (downloaded unsigned binaries remain subject to Gatekeeper, `P9-005`) |
 
 Ubuntu 24.04 x86_64 has a recorded source install, local-model run, SSH-console access and service setup (2026-10-11, `P9-022`).
 The same run found a service-ownership handoff issue: stop a manually started daemon before installing its service. This is not proof
 of a reboot/update cycle, every Linux distribution or aarch64. macOS still needs an end-to-end owner run; CI alone is not that evidence.
 
-The first release workflow run built all five archives on GitHub; its smoke test (unpack, run `jarvis version` and `jarvis daemon --version`) failed
+Current release evidence: [`c48da888`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-c48da8880e20304da4b13e4016d896ad22fc2e04) passed all ten native CI jobs, all five packages and automatic public publication. Ten anonymous asset downloads match the checked Actions artifacts, and the tag resolves to that exact commit. Four native archive smoke tests passed; Intel macOS remains cross-built without runtime smoke. [The active ledger](../../TODO.md#current-acceptance-slice-release-verification-and-coding-lifecycle-2026-10-16) retains exact runs and later lifecycle results.
+
+Historical release repair: the first release workflow run built all five archives on GitHub; its smoke test (unpack, run `jarvis version` and `jarvis daemon --version`) failed
 on every platform because of a shell glob in the script itself, since fixed and verified by packaging and running the Windows archive locally.
 An earlier macOS CI run also failed at the Phase 3 gate (a real daemon and an MCP child process). These are historical observations, not the status of the current revision; check the [latest native CI runs](https://github.com/props-nothing/jarvis-core/actions/workflows/ci.yml) and [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) before relying on an artifact.
 
@@ -100,12 +102,12 @@ uninstall` removes it. `jarvis start` launches the daemon so that scripts which 
 
 ## Known gaps
 
-- CI builds unsigned archives and uses a **draft** GitHub release for tags; drafts are visible only to repository writers. Original JARVIS
-  code is now [Apache-2.0](../../LICENSE), but a generated dependency-license inventory, signing/notarization, publication and clean-machine
+- CI automatically publishes complete, verified **unsigned prereleases** after successful native quality and five-platform package gates. Original JARVIS
+  code is now [Apache-2.0](../../LICENSE), but a generated dependency-license inventory, signing/notarization and clean-machine
   verification remain release gates (`P9-004` to `P9-007`, `P9-017b`). Website bootstrap installers build from source, not signed downloads.
   Each archive includes the single `jarvis` program, `LICENSE`, `NOTICE`, provenance and a SHA-256 file. Consult the latest workflow result
   for the revision you intend to use; license selection alone is not release or platform-verification evidence.
 - The Linux sandbox backend without a container runtime has no wait-for-exit support recorded in the sandbox research; use the
   Docker-backed code tool.
 - [Telegram](telegram.md) provides chat and approvals without exposing the daemon. Optional [phone calls](phone.md) use an ElevenLabs agent and your configured telephone provider; connecting the agent to JARVIS needs the authenticated app endpoint and its documented tunnel setup. Optional push and Google tools remain available. Native Microsoft/GitHub connectors are not shipped; prefer [MCP](mcp.md) where supported.
-- Browser-independent local speech is still pending. [Coding-agent delegation](code-agents.md) needs an ACP agent and its login. In-place work does not require Git; Git is needed only for an explicit worktree. Ordinary/background Codex tasks and a dependency-install smoke have recorded verification, while console sign-in, real-agent cancellation and native lifecycle acceptance remain open. These are host processes, not a sandbox.
+- Browser-independent local speech is still pending. [Coding-agent delegation](code-agents.md) needs an ACP agent and its login. In-place work does not require Git; Git is needed only for an explicit worktree. Ordinary/background Codex tasks, a dependency-install smoke and real Windows Codex cancellation have recorded verification. Fresh console sign-in and other-agent/platform cancellation remain open; TODO tracks the separate native daemon lifecycle gate. These are host processes, not a sandbox.

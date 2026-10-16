@@ -10,7 +10,7 @@ Reviewed 2026-10-16. The [active acceptance ledger](../../TODO.md) names the cur
 | --- | --- |
 | A01 installation | Source build, per-user program/service installation and process acceptance gates exist. Signed public installers and clean-machine install/update/rollback across intended artifacts remain unproven; A01 is not complete. |
 | A03 conversation/recovery | Durable sessions/runs and restart settlement exist. Later ADR-0155 adds bounded fresh continuations for eligible interrupted requests, not exact execution replay. CLI `chat` still starts a new session; no cross-process CLI resume is claimed. Browser history and retained run output are separate surfaces. |
-| A04–A07 tools/cancellation/MCP | Model, tool and approval execution paths now exist. The current phase gates and focused tests provide evidence for their stated paths; external-agent cancellation, external-client identity/audit and real-provider acceptance retain their own open gates. The Phase 2 limitations below are not a present feature inventory. |
+| A04–A07 tools/cancellation/MCP | Model, tool and approval execution paths now exist. The current phase gates and focused tests provide evidence for their stated paths. Real Windows Codex cancellation is recorded under A15a/TODO; other agents/platforms, external-client identity/audit and broader provider acceptance retain their own gates. The Phase 2 limitations below are not a present feature inventory. |
 | A08 memory | Memory lifecycle and atomic correction/version checks exist (ADR-0227). `expected_version` is used for mutable memory and other records; its absence from run-start/approval decisions is a narrower historical correction. Owner-corpus quality and complete export/deletion acceptance remain distinct. |
 | A12–A18 future profiles | Ordinary triggers, schedules and selected owner calls exist. Signed provider webhooks, a multi-step workflow engine, general telephony and vendor-shaped voice transports are not established by those first slices; some remain demand-gated. |
 | A19–A25 release/security | Browser controls and selected bounded resource/policy paths exist. Signed update/rollback, backup/export/delete completeness and native release acceptance still require the evidence named by each scenario. |
@@ -240,6 +240,14 @@ Given repeated equivalent events during quiet hours, JARVIS deduplicates them, r
 **Phase:** 7
 
 Given the same normalized request, route one run to native JARVIS and one to an external runtime. Both use JARVIS memory/tool/policy/audit. Crash or send malformed frames from the worker: `jarvisd` remains healthy, the run settles truthfully, unrelated runs continue, and orphan processes are cleaned up.
+
+## A15a: Coding cancellation and restart without replay
+
+**Phase:** 7; scoped to host-process lifecycle under ADR-0222/0233, not the full A15 target.
+
+Given an approved coding task in a disposable permitted folder, observe its agent and child processes before requesting Stop. They terminate, the task retains a durable cancelled outcome, and unrelated files remain unchanged. Agent exit, RPC errors, authentication retry and late permission requests cannot restart cancelled work. A command whose root exits also requests termination of ordinary descendants; a separately running control process remains alive.
+
+Given one running coding task and another queued behind it, ordinary daemon shutdown refuses. Explicit forced graceful shutdown ends the live process tree. Reopen the same profile: both unfinished records become interrupted, no agent launches automatically, earlier cancelled records stay cancelled, and files remain. Fresh approval for continuation starts a new job using the saved directory and capabilities while preserving the old record. The `coding_lifecycle` process gate checks this with a scripted ACP peer; separately enabled real-agent cancellation and whole-website acceptance require their own evidence. Abrupt Unix daemon death and descendants deliberately leaving their process group are outside this gate.
 
 ## A16: ElevenLabs Custom LLM Voice
 

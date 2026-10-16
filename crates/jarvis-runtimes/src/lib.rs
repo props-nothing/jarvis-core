@@ -9,4 +9,5 @@
 //! the owner said yes, and what is kept. Provider types do not cross this boundary.
 
 pub mod acp;
+pub mod owned_process;
 pub mod worktree;

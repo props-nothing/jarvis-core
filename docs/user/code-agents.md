@@ -31,6 +31,8 @@ Use jarvis.code.delegate_wait with the task ID to wait up to 30 seconds per call
 
 After daemon restart, unfinished jobs become interrupted, not silently replayed. jarvis.code.delegate_resume asks for approval and starts a **new** in-place agent using the saved directory, brief, capabilities and checks. It first inspects existing files and avoids replaying completed effects. It does not restore an ACP conversation, rerun a previous process automatically or resume legacy worktree tasks blindly. Provider limits and sign-in can still interrupt a job.
 
+Stop also interrupts a sign-in retry during a task. An agent's error or exit while stopping cannot restart the prompt or turn the cancellation into ordinary task failure. Sign-in and retry share any deadline you explicitly selected. If OS cleanup fails or root exit cannot be confirmed, the result reports `cleanup_failed` and the durable job is `failed`: verification is skipped and JARVIS does not claim the task stopped. Files and earlier effects are not rolled back.
+
 An ordinary stop or Settings restart refuses while native runs, queued/running coding jobs or managed preview processes would be interrupted, even after the parent conversation has finished. The reply lists the counts. An unreadable database or process registry also leaves the daemon running and reports that work state is unavailable. Wait for work to finish or explicitly use `jarvis stop|restart --force` to interrupt it; native runs parked for an owner approval remain durable and do not block a restart. This is a preflight check, not an atomic freeze on new work arriving during shutdown. See [ADR-0232](../adr/0232-stop-and-restart-check-background-work-and-fail-closed.md).
 
 ## Skills, dependencies and integrations are different
@@ -60,6 +62,8 @@ For a dev server use jarvis.process.start with argv, directory and optional port
 The status explicitly says browser_verified: false. JARVIS must use its browser tools to inspect the real page at desktop/mobile sizes, exercise important interactions and fix failures before claiming website delivery. Browser verification is not automatically performed by the delegation adapter, and it cannot be inferred from a TCP port or build exit code. Save screenshots to absolute paths inside the selected project; relative screenshot filenames are refused because the browser server has a different working directory. Omitting filename is allowed for temporary browser artifacts.
 
 Processes are not automatically restarted. Completed state/logs survive a daemon restart; a stale unfinished record is interrupted and never killed using a reused PID. Logs are capped at 16 MiB per stream and tails are bounded; capture loss is disclosed. Stop a preview when it is no longer needed.
+
+Commands, agents and managed processes retain ownership of their ordinary descendants after the root program exits, so finishing a command also requests cleanup of children it left running. Windows uses a Job Object established before execution; Unix uses a process group. This does not contain a Unix child that deliberately leaves its group or guarantee cleanup after abrupt Unix daemon death. Use a managed process for a preview intended to stay running. See [ADR-0233](../adr/0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) for the lifecycle boundary.
 
 ## Review and trust boundaries
 

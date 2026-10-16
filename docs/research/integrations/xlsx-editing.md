@@ -11,6 +11,8 @@ selected_sdk: "zip 9.0.4; roxmltree 0.21.1 (existing workspace dependencies)"
 
 Dependency follow-up, 2026-10-16: ZIP is pinned to `=9.0.4` because 9.0.1 was yanked. See [the CI dependency repair record](github-actions-rust-ci.md) for current official sources and passing workbook regressions. Historical 9.0.1 references below retain their original verification dates.
 
+Native follow-up, 2026-10-16: `c48da888` passed all ten [native CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38964612120), including the macOS workbook depth/stack regressions. This closes the earlier pending native rerun for those fixes. Opening the edited output in real Excel remains separate acceptance.
+
 ## Scope
 
 Extend `P11-010` with `jarvis.files.edit_spreadsheet`: bounded literal cell edits in an **existing** `.xlsx` inside granted folders. Preserve other worksheets, formatting, formulas and unknown ZIP parts. This is separate from the create-only `write_document` tool. No Excel process, network service, formula execution, row/column insertion, formatting changes, `.xls`, `.xlsm` or encrypted files.

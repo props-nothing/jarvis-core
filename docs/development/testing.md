@@ -70,6 +70,18 @@ Two properties are worth preserving if this gate is edited:
   stderr while it runs blocks on EOF that arrives only at exit, which hangs the gate
   instead of failing it.
 
+## Coding lifecycle process gate
+
+```text
+cargo build --workspace --all-features --locked
+cargo build -p jarvis-runtimes --example fake_acp_agent --locked
+cargo test -p jarvis-acceptance --test coding_lifecycle --locked -- --nocapture
+```
+
+Set `ACCEPTANCE_REQUIRE_BINARIES=1` to refuse missing daemon or agent-fixture binaries. Native CI runs this gate after the fresh build on Windows, macOS and Linux. It uses a disposable profile and real REST approvals, independently checks agent/child PIDs, and verifies explicit cancellation, ordinary shutdown refusal, forced graceful shutdown, preserved files, interrupted records after restart, no automatic replay and freshly approved continuation. It does not simulate abrupt OS death or prove a real provider's cancellation behavior.
+
+The separate opt-in `code_delegate_async::live_tests::live_codex_stop_terminates_started_work_and_retains_durable_cancellation` test uses the pinned Codex ACP adapter and existing agent sign-in. It may consume model usage. It runs a supplied waiting parent/child command in a disposable project, observes both before Stop, verifies termination and retained files, and reopens the cancelled task record. It is ignored in ordinary CI; only an explicitly executed passing result is live acceptance. This is not whole-website/browser acceptance.
+
 ## Documentation consistency
 
 ```text
@@ -99,7 +111,7 @@ bash scripts/test-package-release.sh
 
 These dependency-free fixtures exercise eligible CI events, exact commit selection, publication-job wiring, checksum and license refusal, and publication only after complete verified uploads. The real workflow script runs against a controlled CLI: main/manual builds select the tested SHA even when the default branch is newer; version tags retain verification; incomplete/substituted platforms, bad checksums, invalid source SHAs, existing automatic tag refs, mismatched draft targets and published releases fail closed. The uploaded metadata must contain exactly ten unique assets whose sizes and digests match real local bytes. Missing/extra/duplicate assets, wrong state/tag/target, missing or corrupt digests, incomplete uploads, API errors and tag races prevent publication. Publish failures or mismatched published state/tag fail the job without retrying the mutation. The production condition is exercised against failed, skipped and cancelled dependencies. Tests also execute the production CI lint/test commands with a failing Cargo stand-in under Bash `-eo pipefail`: diagnostics must reach both the live log and the annotation file, and the step must still fail. Real hosted triggers, all platform archives and public GitHub publication need native Actions evidence.
 
-The workflow regressions also compare the native test matrix against workspace membership: every package must run exactly once per OS, with exactly one acceptance lane per OS. They retain all three acceptance gates, both missing-binary guards and the single preceding workspace build. Release/archive shell regressions continue to run on each native OS.
+The workflow regressions also compare the native test matrix against workspace membership: every package must run exactly once per OS, with exactly one acceptance lane per OS. They retain all three phase gates plus the coding lifecycle gate, both missing-binary guards, the single preceding workspace build and the explicit ACP fixture build. Release/archive shell regressions continue to run on each native OS.
 
 The isolated daemon job explicitly builds `jarvis-mcp-transport`'s `fixture-peer` binary before testing. `cargo test -p jarvisd --all-features` enables the selected package's features; it does not build another package's executable. Keep `ACCEPTANCE_REQUIRE_FIXTURE_PEER=1` and the build step together, including their ordering regression. A developer's existing `target/debug/fixture-peer` must not hide a missing CI prerequisite.
 
@@ -251,7 +263,7 @@ cargo test --workspace
 cargo deny check advisories bans licenses sources
 ```
 
-CI runs formatting once on Linux, and Clippy plus all-feature locked tests on native Windows, macOS and Linux. Lint and tests are separate jobs. Windows tests are split into storage, daemon and the remaining workspace; the latter builds the acceptance binaries once and runs all three phase gates. Linux/macOS each run the full workspace and the same acceptance gates. Windows Rust jobs allow 60 minutes; other native Rust jobs allow 30. The test step stops after 50/25 minutes to leave room for diagnostics and cache saving.
+CI runs formatting once on Linux, and Clippy plus all-feature locked tests on native Windows, macOS and Linux. Lint and tests are separate jobs. Windows tests are split into storage, daemon and the remaining workspace; the latter builds the acceptance binaries and ACP fixture, then runs all three phase gates and the coding lifecycle gate. Linux/macOS each run the full workspace and the same acceptance gates. Windows Rust jobs allow 60 minutes; other native Rust jobs allow 30. The test step stops after 50/25 minutes to leave room for diagnostics and cache saving.
 
 Pinned Rust-cache actions retain dependency downloads/build products, keyed separately for Clippy, test partitions and release targets. PRs restore but do not save caches. Cache misses still run the same locked checks; no test or gate is conditional on a cache hit. Logs and Cargo build timings are uploaded even after failure. Main pushes and PRs trigger CI; tags call it through Release, avoiding a duplicate full tag run. Manual CI remains available. If repository rules require named job checks, update them to the new job names before merging.
 

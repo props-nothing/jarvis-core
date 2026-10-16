@@ -642,3 +642,7 @@ impl ToolExecutor for AsyncCodeDelegateTool {
 #[cfg(test)]
 #[path = "code_delegate_async_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "code_delegate_live_tests.rs"]
+mod live_tests;

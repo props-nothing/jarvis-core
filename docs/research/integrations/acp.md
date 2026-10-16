@@ -1,7 +1,7 @@
 ---
 integration: acp
 status: researched
-last_verified: 2026-10-14
+last_verified: 2026-10-16
 owners: []
 selected_spec_version: "ACP protocol v1 (stable); v2 is draft and is refused"
 selected_sdk: "none: a small JARVIS client over JSON-RPC on stdio (see Decisions)"
@@ -158,6 +158,24 @@ JARVIS decision: check an already-requested Stop before preparing or launching a
 
 Falsifying checks: immediately start and stop a background task before yielding to its worker, then assert durable cancellation and no worktree; stop a scripted process during initialization, prove both its recorded PID and its child's PID were alive, and assert neither remains and the prompt's file write never happened. Include a normal task and existing active-turn cancellation as controls. Real-agent startup/sign-in cancellation and macOS/Linux process cleanup need separate live/native evidence and are not claimed by these tests.
 
+## Cancellation outcome and retry refresh, 2026-10-16
+
+Scope: preserve an owner cancellation or selected deadline when the agent exits or returns an error during cancellation, and prevent authentication from restarting that cancelled prompt. This repairs the existing v1 client; it adds no provider, SDK, credential flow or advertised capability.
+
+Official sources fetched on 2026-10-16 UTC:
+
+- Repository-local index `https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/main/llms.txt` returned 404; discovery continued through `https://agentclientprotocol.com/llms.txt`.
+- `https://agentclientprotocol.com/protocol/v1/prompt-turn.md`, especially Cancellation, requires a cancelled prompt response and acknowledges that aborted provider calls can otherwise surface as errors. Pending permission requests receive cancelled outcomes; updates can continue until the prompt response.
+- `https://agentclientprotocol.com/protocol/v1/cancellation.md` distinguishes optional per-request cancellation from prompt cancellation. It does not guarantee cancellation propagation to every nested process or effect.
+- `https://agentclientprotocol.com/protocol/v1/authentication.md` and `https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/main/schema/v1/schema.json` confirm the selected advertised agent-method authentication flow, `session/cancel {sessionId}`, and error codes `-32000` (authentication required) and `-32800` (cancelled).
+- `https://agentclientprotocol.com/updates.md` showed no relevant cancellation/authentication deprecation since the previous check; v1 remains selected and v2 remains draft. The SDK-free implementation and dependency versions are unchanged.
+
+JARVIS decision: once its prompt wait begins cancellation or timeout, that local terminal reason wins over subsequent EOF, malformed output, RPC errors or an agent-reported success. An authentication-required response during that cancellation must not trigger sign-in or a second prompt. A sign-in already triggered by a prompt also observes Stop and the same absolute turn deadline; authentication must not reset or extend an owner-selected task limit. Cancellation before dispatch starts no prompt. This records owner intent and stops further work; it does not claim that prior filesystem or external effects were rolled back, or that the agent returned a conforming acknowledgement. Retained activity and files remain evidence for inspection. Existing bounded cancellation grace and process-tree termination remain in force; no default total task deadline, new retry, secret handling or network operation is introduced.
+
+Dispatch boundary: finish an already-started JSON-RPC write under the existing write timeout before handling a pending Stop, because the peer can receive the message before its flush future resolves. A delivered prompt then receives `session/cancel`; cancelling the write future could otherwise consume Stop without sending cancellation. If dispatch itself fails, retain pending Stop/deadline intent and terminate the owned process instead of retrying a possibly partial message. Ordinary write failure remains a failure when no Stop or selected deadline applies.
+
+Discriminating tests: agents that exit, return an internal error, or return authentication-required after receiving cancellation must preserve both explicit-cancel and selected-timeout outcomes. Record incoming fixture method names to prove that the authentication-required variant receives exactly one prompt and no authentication request after Stop. Stop during a stalled sign-in must return promptly without a second prompt; a delayed sign-in may consume only the original selected deadline. A permission request arriving during cancellation must receive a cancelled outcome even under an otherwise allowing policy. A peer that stops reading after session setup forces a bounded dispatch failure; distinguish pending Stop, selected deadline and ordinary failure without relaxing the observed dispatch requirement. Keep ordinary crash and normal authentication retry as controls, and assert the durable background-task status at the daemon boundary. Fixture success is not real-agent or cross-platform process-cleanup acceptance; those remain separate gates.
+
 ## Verification Log
 
 | Date | Versions checked | Relevant change or no-change evidence | Researcher |
@@ -166,3 +184,5 @@ Falsifying checks: immediately start and stop a background task before yielding 
 | 2026-10-13 | v1 authentication page, codex-acp and claude-agent-acp READMEs, registry entries for opencode, goose, cursor, qwen-code, kimi, cline; live handshake with `@agentclientprotocol/codex-acp@2.2.2` | authentication implemented; presets for ten agents; the real Codex adapter completes the handshake through the JARVIS client (version 1, two sign-in methods, session made without a sign-in). The launch commands of the other agents were read from the registry and **not run** | JARVIS agent |
 | 2026-10-14 | live official index, v1 prompt-turn and tool-call guides, v1 schema on main, updates page | partial tool updates and session scoping rechecked; v2 remains draft; public progress excludes internal reasoning and raw payloads; new progress delivery not yet verified live | JARVIS agent |
 | 2026-10-14 | official ACP index, v1 cancellation/prompt-turn guides, updates; Tokio 1.53.1 Notify/select; Windows tasklist/taskkill and POSIX Issue 8 kill | startup cancellation contract refreshed; 18 delegation tests passed on Windows; deleting the setup tree kill left a child alive and failed the regression, restored guard passed; real-agent and macOS/Linux startup cleanup not verified | JARVIS agent |
+| 2026-10-16 | live ACP index, v1 prompt-turn/cancellation/authentication guides, v1 schema on main and updates | no relevant contract change observed; 46 runtime tests and 31 daemon delegation tests passed on Windows. Removing the selected terminal-reason guard reproduced agent-exit failure and prompt replay after Stop; exact restoration passed. Full workspace/native gate results are tracked in TODO. | JARVIS agent |
+| 2026-10-16 | pinned codex-acp 2.2.2, native Windows | Explicitly enabled live cancellation test passed (1 test, 16.02 seconds): supplied Node parent/child observed alive before Stop and gone afterward, supplied files unchanged and cancelled state retained after SQLite reopen. Existing authentication was used; fresh browser sign-in, other providers/platforms and complete website delivery remain separate acceptance. Sanitized evidence: `artifacts/reviews/coding-lifecycle-2026-10-16/live-codex-cancellation.log`. | JARVIS agent |

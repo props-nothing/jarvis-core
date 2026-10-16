@@ -9,6 +9,8 @@ selected_sdk: cargo-deny-action 2.1.1 / cargo-deny 0.20.2
 
 # GitHub Actions Rust Supply Chain
 
+Current follow-up (2026-10-16): the draft-only policy and pending hosted-verification statements below describe this record's earlier revisions. [Rust CI and automatic publication evidence](github-actions-rust-ci.md#automatic-prerelease-publication-2026-10-16) now records `c48da888` passing all ten native CI jobs, five packages, automatic public unsigned publication, exact tag verification and ten matching public asset downloads. Signed distribution, complete notices/SBOM and clean-machine acceptance remain separate work.
+
 ## Scope
 
 This record covers CI on GitHub-hosted Windows, macOS, and Linux runners, Rust dependency policy, and the CI-gated archive/draft-release flow. Public release publishing, signing, deployment, self-hosted runners, and provider credentials are out of scope.

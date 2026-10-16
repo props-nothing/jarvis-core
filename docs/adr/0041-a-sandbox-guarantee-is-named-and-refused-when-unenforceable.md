@@ -4,6 +4,8 @@
 
 **Date:** 2026-09-24
 
+> **Correction and extension (2026-10-16):** the historical claim below that `unsafe_code = "forbid"` prevents every Windows Job Object implementation was too broad: a reviewed safe dependency can encapsulate the operating-system FFI without relaxing workspace lints. [ADR-0233](0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) uses that approach for coding/command process lifetime. It adds no sandbox resource, filesystem or network guarantee and does not change the sandbox backend's advertised capabilities.
+
 ## Context
 
 `P3-011` asks for sandbox contracts and **one** restricted process backend, "before exposing code execution".

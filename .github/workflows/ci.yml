@@ -203,6 +203,9 @@ jobs:
       - name: Build current acceptance binaries once
         if: matrix.suite == 'all' || matrix.suite == 'remaining'
         run: cargo build --workspace --all-features --locked --timings
+      - name: Build coding lifecycle agent fixture
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        run: cargo build -p jarvis-runtimes --example fake_acp_agent --locked
       - name: Phase 1 acceptance gate
         if: matrix.suite == 'all' || matrix.suite == 'remaining'
         env:
@@ -224,6 +227,13 @@ jobs:
           ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"
         shell: bash
         run: bash scripts/ci-run-gate.sh phase3_gate
+      - name: Coding lifecycle acceptance gate
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        env:
+          ACCEPTANCE_REQUIRE_BINARIES: "1"
+          ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"
+        shell: bash
+        run: bash scripts/ci-run-gate.sh coding_lifecycle
       - name: Retain diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jarvis_core::{DelegatedTaskId, IsolatedText, SystemClock, UtcTimestamp};
+use jarvis_runtimes::owned_process::{AbortOnDrop, OwnedProcess};
 use jarvis_tools::{
     AdapterError, ToolCallResult, ToolDefinition, ToolEffect, ToolExecutionRequest, ToolExecutor,
 };
@@ -17,7 +18,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
 
 use crate::command_run::{
-    CommandArgs, CommandRunTool, CommandRunToolError, TreeGuard, child_environment, resolve_program,
+    CommandArgs, CommandRunTool, CommandRunToolError, child_environment, resolve_program,
 };
 use crate::skill_bundles::{definition, refused, result};
 
@@ -167,13 +168,8 @@ impl ProcessTools {
             .envs(environment)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        #[cfg(unix)]
-        command.process_group(0);
-        #[cfg(windows)]
-        command.creation_flags(0x0800_0000);
-        let child = match command.spawn() {
+            .stderr(Stdio::piped());
+        let child = match OwnedProcess::spawn(command) {
             Ok(child) => child,
             Err(error) => {
                 let mut failed = record;
@@ -183,10 +179,6 @@ impl ProcessTools {
                 save_result(&folder, &failed).map_err(refused)?;
                 return Ok(json!({"process_id":id,"status":"failed","error":failed.error}));
             }
-        };
-        let guard = TreeGuard {
-            pid: child.id().unwrap_or(0),
-            armed: true,
         };
         let active = Arc::new(Active {
             record: Mutex::new(record),
@@ -199,7 +191,7 @@ impl ProcessTools {
         let processes = Arc::clone(&self.active);
         let process_id = id.clone();
         tokio::spawn(async move {
-            supervise(child, guard, active, folder, processes, process_id).await;
+            supervise(child, active, folder, processes, process_id).await;
         });
         Ok(
             json!({"process_id":id,"status":"running","note":"No overall deadline. Inspect status for logs/preview reachability; stop explicitly. Port reachability is not browser verification."}),
@@ -301,22 +293,19 @@ impl ProcessTools {
 }
 
 async fn supervise(
-    mut child: tokio::process::Child,
-    guard: TreeGuard,
+    mut child: OwnedProcess,
     active: Arc<Active>,
     folder: PathBuf,
     processes: Arc<Mutex<BTreeMap<String, Arc<Active>>>>,
     process_id: String,
 ) {
     let stdout = child
-        .stdout
-        .take()
-        .map(|stream| tokio::spawn(capture(stream, folder.join("stdout.log"))));
+        .take_stdout()
+        .map(|stream| AbortOnDrop::new(tokio::spawn(capture(stream, folder.join("stdout.log")))));
     let stderr = child
-        .stderr
-        .take()
-        .map(|stream| tokio::spawn(capture(stream, folder.join("stderr.log"))));
-    let (status, code, error) = tokio::select! {
+        .take_stderr()
+        .map(|stream| AbortOnDrop::new(tokio::spawn(capture(stream, folder.join("stderr.log")))));
+    let (mut status, code, mut error) = tokio::select! {
         biased;
         () = active.cancel.notified() => ("stopped", None, None),
         exit = child.wait() => match exit {
@@ -324,8 +313,16 @@ async fn supervise(
             Err(error) => ("failed", None, Some(error.to_string())),
         }
     };
-    drop(guard);
-    let _ = child.wait().await;
+    if let Err(cleanup) = child.start_kill() {
+        status = "failed";
+        error = Some(format!("process-tree cleanup failed: {cleanup}"));
+    } else if !matches!(
+        tokio::time::timeout(Duration::from_secs(3), child.wait()).await,
+        Ok(Ok(_))
+    ) {
+        status = "failed";
+        error = Some("process exit could not be confirmed after cleanup".to_owned());
+    }
     let complete = joined_capture(stdout).await & joined_capture(stderr).await;
     if let Ok(mut record) = active.record.lock() {
         status.clone_into(&mut record.status);
@@ -391,14 +388,13 @@ async fn capture(mut stream: impl AsyncRead + Unpin, path: PathBuf) -> bool {
     complete
 }
 
-async fn joined_capture(handle: Option<tokio::task::JoinHandle<bool>>) -> bool {
+async fn joined_capture(handle: Option<AbortOnDrop<bool>>) -> bool {
     let Some(mut handle) = handle else {
         return false;
     };
     if let Ok(Ok(complete)) = tokio::time::timeout(Duration::from_secs(3), &mut handle).await {
         complete
     } else {
-        handle.abort();
         false
     }
 }

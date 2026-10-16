@@ -325,15 +325,43 @@ async fn an_agent_that_wants_a_sign_in_offers_its_methods_and_the_chosen_one_wor
 #[tokio::test]
 async fn a_test_leaves_no_folder_behind() {
     let root = scratch();
-    let wrong_version = settings("version:2");
-    let _ = probe_under(&root.0, &settings("chat"), None, Duration::from_secs(30)).await;
-    let _ = probe_under(&root.0, &settings("auth"), None, Duration::from_secs(30)).await;
-    let _ = probe_under(&root.0, &wrong_version, None, Duration::from_secs(30)).await;
-    let left = std::fs::read_dir(&root.0).map_or(0, Iterator::count);
-    assert_eq!(
-        left, 0,
-        "the folders of an answer and two failures are all removed"
-    );
+    for (script, sign_in, succeeds) in [
+        ("chat", None, true),
+        ("auth", None, false),
+        ("version:2", None, false),
+        ("auth_never", Some("fake-login"), false),
+        ("auth_prompt", Some("unknown-method"), false),
+        ("auth,auth_wait", Some("fake-login"), false),
+        ("auth_prompt,auth_wait", Some("fake-login"), false),
+    ] {
+        let result = probe_under(
+            &root.0,
+            &settings(script),
+            sign_in,
+            Duration::from_secs(if script.contains("auth_wait") { 1 } else { 30 }),
+        )
+        .await;
+        assert_eq!(result.is_ok(), succeeds, "unexpected outcome for {script}");
+        if let Err(failure) = result {
+            if script.contains("auth_wait") {
+                assert!(
+                    failure.message.contains("did not complete the handshake"),
+                    "{script} must exercise the sign-in deadline: {}",
+                    failure.message
+                );
+            }
+            assert!(
+                !failure.message.contains("cleanup failed")
+                    && !failure.message.contains("could not be removed"),
+                "{script}: {}",
+                failure.message
+            );
+        }
+        let left = std::fs::read_dir(&root.0)
+            .unwrap_or_else(|error| panic!("cannot inspect scratch root: {error}"))
+            .count();
+        assert_eq!(left, 0, "{script} left a probe folder behind");
+    }
 }
 
 #[test]

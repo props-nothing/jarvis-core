@@ -453,20 +453,273 @@ async fn a_cancelled_turn_ends_as_cancelled_when_the_agent_answers() {
     connection.close().await;
 }
 
+async fn stopped_fixture(script: &str, timed_out: bool) -> (Report, Vec<String>) {
+    let path = std::env::temp_dir().join(format!(
+        "jarvis-acp-cancel-{}.log",
+        jarvis_core::scratch_tag()
+    ));
+    let script = format!("{script},event_log:{}", path.display());
+    let mut connection = open_signing_in(
+        &script,
+        Limits {
+            turn: if timed_out {
+                Duration::from_millis(100)
+            } else {
+                Duration::from_secs(5)
+            },
+            ..quick()
+        },
+        Some("fake-login"),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("the fixture must open: {error}"));
+    let cancel = Arc::new(Notify::new());
+    let trigger = if timed_out {
+        None
+    } else {
+        let cancel = Arc::clone(&cancel);
+        let path = path.clone();
+        let method = if script.contains("auth_wait") {
+            "authenticate"
+        } else {
+            "session/prompt"
+        };
+        Some(tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if std::fs::read_to_string(&path)
+                        .is_ok_and(|events| events.lines().any(|event| event == method))
+                    {
+                        cancel.notify_one();
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("fixture did not receive {method}"));
+        }))
+    };
+    let report = tokio::time::timeout(
+        Duration::from_secs(3),
+        connection.prompt("stop this task", &Fixed(true), &cancel),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("Stop must bound the prompt, including sign-in"));
+    if let Some(trigger) = trigger {
+        trigger
+            .await
+            .unwrap_or_else(|error| panic!("cancellation trigger: {error}"));
+    }
+    connection.close().await;
+    let methods = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read fixture events: {error}"))
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    std::fs::remove_file(path).unwrap_or_else(|error| panic!("remove fixture events: {error}"));
+    (report, methods)
+}
+
+#[tokio::test]
+async fn cancellation_survives_agent_exit_and_non_cancellation_errors() {
+    for script in ["cancel_exit", "cancel_error"] {
+        let (report, methods) = stopped_fixture(script, false).await;
+        assert!(methods.iter().any(|method| method == "session/cancel"));
+        assert_eq!(report.ended, Ended::Cancelled, "{script}");
+    }
+}
+
+#[tokio::test]
+async fn selected_deadline_survives_agent_exit_and_non_cancellation_errors() {
+    for script in ["cancel_exit", "cancel_error"] {
+        let (report, methods) = stopped_fixture(script, true).await;
+        assert!(methods.iter().any(|method| method == "session/cancel"));
+        assert_eq!(report.ended, Ended::TimedOut, "{script}");
+    }
+}
+
+#[tokio::test]
+async fn authentication_errors_cannot_restart_cancelled_or_timed_out_prompts() {
+    for timed_out in [false, true] {
+        let (report, methods) = stopped_fixture("cancel_auth", timed_out).await;
+        assert_eq!(
+            report.ended,
+            if timed_out {
+                Ended::TimedOut
+            } else {
+                Ended::Cancelled
+            }
+        );
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "session/prompt")
+                .count(),
+            1,
+            "owner Stop must not replay the task: {methods:?}"
+        );
+        assert!(
+            methods.iter().all(|method| method != "authenticate"),
+            "owner Stop must not start a sign-in flow: {methods:?}"
+        );
+        assert!(methods.iter().any(|method| method == "session/cancel"));
+    }
+}
+
+#[tokio::test]
+async fn stop_and_selected_deadline_interrupt_prompt_triggered_authentication() {
+    for timed_out in [false, true] {
+        let (report, methods) = stopped_fixture("auth_prompt,auth_wait", timed_out).await;
+        assert_eq!(
+            report.ended,
+            if timed_out {
+                Ended::TimedOut
+            } else {
+                Ended::Cancelled
+            }
+        );
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "authenticate")
+                .count(),
+            1
+        );
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "session/prompt")
+                .count(),
+            1,
+            "the task must not restart after interrupted sign-in: {methods:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prompt_authentication_does_not_reset_the_selected_deadline() {
+    let mut connection = open_signing_in(
+        "auth_prompt,auth_delay:300,reply_delay:300",
+        Limits {
+            turn: Duration::from_millis(450),
+            ..quick()
+        },
+        Some("fake-login"),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("the fixture must open: {error}"));
+    let report = connection
+        .prompt(
+            "finish within the original limit",
+            &Fixed(false),
+            &Notify::new(),
+        )
+        .await;
+    assert_eq!(report.ended, Ended::TimedOut);
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn permission_requests_during_cancellation_are_not_allowed() {
+    let (report, _) = stopped_fixture("cancel_permission", false).await;
+    assert_eq!(report.ended, Ended::Cancelled);
+    assert!(
+        report.message.contains("late permission: \"cancelled\""),
+        "{}",
+        report.message
+    );
+    assert!(
+        report
+            .permissions
+            .iter()
+            .all(|permission| !permission.allowed)
+    );
+}
+
+#[tokio::test]
+async fn cancellation_before_dispatch_sends_no_prompt_or_authentication() {
+    let mut connection = opened("auth_prompt").await;
+    let before = connection.next_id;
+    let cancel = Notify::new();
+    cancel.notify_one();
+    let report = connection
+        .prompt("must not start", &Fixed(false), &cancel)
+        .await;
+    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(
+        connection.next_id, before,
+        "no request may be dispatched after Stop"
+    );
+    assert!(!connection.signed_in());
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn a_failed_dispatch_preserves_stop_or_deadline_but_not_an_unrequested_cancellation() {
+    for expected in [Some(Ended::Cancelled), Some(Ended::TimedOut), None] {
+        let mut connection = opened("stall_input_after_session").await;
+        connection.limits.write = Duration::from_millis(100);
+        connection.limits.turn = if expected == Some(Ended::TimedOut) {
+            Duration::from_millis(20)
+        } else {
+            Duration::ZERO
+        };
+        let cancel = Arc::new(Notify::new());
+        let trigger = if expected == Some(Ended::Cancelled) {
+            let cancel = Arc::clone(&cancel);
+            Some(tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                cancel.notify_one();
+            }))
+        } else {
+            None
+        };
+        let before = connection.next_id;
+        let started = Instant::now();
+        // Larger than the ordinary pipe buffer: the peer completed the handshake
+        // but no longer reads, so this dispatch must reach its bounded write error.
+        let report = connection
+            .prompt(&"x".repeat(3 * 1024 * 1024), &Fixed(false), &cancel)
+            .await;
+        assert_eq!(
+            connection.next_id,
+            before + 1,
+            "one prompt dispatch was attempted"
+        );
+        assert!(started.elapsed() >= connection.limits.write);
+        if let Some(trigger) = trigger {
+            trigger
+                .await
+                .unwrap_or_else(|error| panic!("Stop trigger: {error}"));
+        }
+        // End the deliberately unreadable fixture before its normal close grace.
+        connection
+            .child
+            .start_kill()
+            .unwrap_or_else(|error| panic!("fixture cleanup: {error}"));
+        connection.close().await;
+        if let Some(expected) = expected {
+            assert_eq!(report.ended, expected);
+        } else {
+            assert!(
+                matches!(report.ended, Ended::Failed(reason) if reason.contains("stopped reading"))
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn an_agent_that_ignores_cancel_is_given_a_grace_period_and_then_the_end_is_reported_anyway()
 {
-    let mut connection = opened("hang").await;
-    let cancel = Notify::new();
-    cancel.notify_one();
     let started = Instant::now();
-    let report = connection.prompt("stuck", &Fixed(false), &cancel).await;
+    let (report, methods) = stopped_fixture("hang", false).await;
     assert_eq!(report.ended, Ended::Cancelled);
+    assert!(methods.iter().any(|method| method == "session/cancel"));
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "the grace period bounds the wait"
     );
-    connection.close().await;
 }
 
 #[tokio::test]

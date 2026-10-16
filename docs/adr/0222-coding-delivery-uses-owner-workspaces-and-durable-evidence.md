@@ -8,6 +8,8 @@
 
 ## Context
 
+> **Extended 2026-10-16:** [ADR-0233](0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) makes cancellation final across agent errors/sign-in and retains process ownership after root exit. Restart continues to interrupt rather than replay work.
+
 The owner reports coding work appearing in unfamiliar profile checkouts, unnecessary Git operations, missing skill resources and weak website results. The intended default is the first folder permitted in Settings, not JARVIS's source tree. Long tasks must remain stoppable without an arbitrary minute cap. Agent self-report is not delivery evidence.
 
 ## Decision

@@ -30,7 +30,7 @@ use thiserror::Error;
 use tokio::sync::{Notify, mpsc};
 
 use crate::code_agents::{self, AgentSettings};
-use crate::command_run::{CommandRunTool, TreeGuard, kill_tree, plain};
+use crate::command_run::{CommandRunTool, plain};
 
 /// The canonical identifier the model requests.
 pub const DELEGATE_TOOL: &str = "jarvis.code.delegate";
@@ -506,8 +506,6 @@ impl CodeDelegateTool {
                 return Err(refused(&reason));
             }
         };
-        let pid = child.id().unwrap_or(0);
-        let guard = TreeGuard { pid, armed: true };
         let limits = Limits {
             handshake: Duration::from_secs(HANDSHAKE_SECONDS),
             turn: Duration::from_secs(
@@ -519,18 +517,18 @@ impl CodeDelegateTool {
             ..self.limits.clone()
         };
         let opened = {
-            let opening = Connection::open(child, working, limits, settings.sign_in.as_deref());
+            let opening =
+                Connection::open_owned(child, working, limits, settings.sign_in.as_deref());
             tokio::pin!(opening);
             tokio::select! {
                 biased;
-                () = cancel.notified() => { kill_tree(pid); None },
+                () = cancel.notified() => None,
                 connection = &mut opening => Some(connection),
             }
         };
         let mut connection = match opened {
             Some(Ok(connection)) => connection,
             Some(Err(error)) => {
-                drop(guard);
                 if let Some((repository, _, tree)) = &isolated {
                     let _ = worktree::discard(repository, tree).await;
                 }
@@ -550,13 +548,15 @@ impl CodeDelegateTool {
                 cancel,
             )
             .await;
-        drop(guard);
-        connection.close().await;
+        let cleanup = connection.close_checked().await;
         let mut answer = workspace_result(&program, working, isolated.as_ref(), &report).await;
         answer["directory"] = json!(working.to_string_lossy());
         answer["mode"] = json!(arguments.mode);
         answer["verification"] = json!({"status":"not_run", "checks":[]});
-        if report.ended == Ended::Finished(StopReason::EndTurn) {
+        if let Err(error) = cleanup {
+            answer["outcome"] = json!("cleanup_failed");
+            answer["cleanup_error"] = json!(error.to_string());
+        } else if report.ended == Ended::Finished(StopReason::EndTurn) {
             answer["verification"] = self.verify(working, arguments, cancel).await?;
         }
         classify_delivery(&mut answer);

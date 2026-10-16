@@ -77,6 +77,40 @@ async fn long_lived_process_has_no_task_deadline_and_stop_settles() {
 }
 
 #[tokio::test]
+async fn managed_root_exit_terminates_a_descendant_before_losing_the_live_record() {
+    use crate::command_run::process_fixture;
+
+    let scratch = Scratch::new();
+    let tool = scratch.tool();
+    let command = process_fixture::command(&scratch.0);
+    let answer = tool.start(&command).await.unwrap();
+    let id = answer["process_id"].as_str().unwrap();
+    let tree = process_fixture::ready(&scratch.0).await;
+    std::fs::write(scratch.0.join("release"), "exit root only").unwrap();
+    let completed = terminal(&tool, id).await;
+    assert_eq!(completed.status, "exited");
+    assert_eq!(completed.exit_code, Some(0));
+    assert!(completed.capture_complete);
+    tree.assert_gone().await;
+    assert_eq!(scratch.tool().stop(id).unwrap()["stop_requested"], false);
+}
+
+#[tokio::test]
+async fn managed_stop_terminates_both_observed_members_of_the_process_tree() {
+    use crate::command_run::process_fixture;
+
+    let scratch = Scratch::new();
+    let tool = scratch.tool();
+    let command = process_fixture::command(&scratch.0);
+    let answer = tool.start(&command).await.unwrap();
+    let id = answer["process_id"].as_str().unwrap();
+    let tree = process_fixture::ready(&scratch.0).await;
+    assert_eq!(tool.stop(id).unwrap()["stop_requested"], true);
+    assert_eq!(terminal(&tool, id).await.status, "stopped");
+    tree.assert_gone().await;
+}
+
+#[tokio::test]
 async fn outside_workspaces_and_stale_ids_never_start_or_signal_processes() {
     let scratch = Scratch::new();
     let tool = scratch.tool();

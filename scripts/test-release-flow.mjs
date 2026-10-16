@@ -145,6 +145,16 @@ test('job separation retains native gates, cold-build validation and timeout hea
     assert.match(gate, /ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"/);
     assert.match(gate, new RegExp(`bash scripts/ci-run-gate.sh phase${phase}_gate`));
   }
+  const codingFixture = tests.split('      - name: Build coding lifecycle agent fixture\n')[1].split('      - name: ')[0];
+  assert.match(codingFixture, /if: matrix.suite == 'all' \|\| matrix.suite == 'remaining'/);
+  assert.match(codingFixture, /cargo build -p jarvis-runtimes --example fake_acp_agent --locked/);
+  const codingGate = tests.split('      - name: Coding lifecycle acceptance gate\n')[1].split('      - name: ')[0];
+  assert.match(codingGate, /if: matrix.suite == 'all' \|\| matrix.suite == 'remaining'/);
+  assert.match(codingGate, /ACCEPTANCE_REQUIRE_BINARIES: "1"/);
+  assert.match(codingGate, /ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"/);
+  assert.match(codingGate, /bash scripts\/ci-run-gate.sh coding_lifecycle/);
+  assert.ok(tests.indexOf('name: Build current acceptance binaries once') < tests.indexOf('name: Coding lifecycle acceptance gate'));
+  assert.ok(tests.indexOf('name: Build coding lifecycle agent fixture') < tests.indexOf('name: Coding lifecycle acceptance gate'));
   assert.match(job('package'), /key: release-\$\{\{ matrix.label \}\}/);
   assert.doesNotMatch(job('package'), /if:.*cache-hit/);
 });

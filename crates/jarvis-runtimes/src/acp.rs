@@ -340,13 +340,14 @@ impl Report {
 
 /// An open connection to an agent, with a session created.
 pub struct Connection {
-    child: Child,
+    child: crate::owned_process::OwnedProcess,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     line: Vec<u8>,
     next_id: u64,
     limits: Limits,
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
+    _stderr_task: crate::owned_process::AbortOnDrop<()>,
     stray: u32,
     session_id: String,
     agent: AgentInfo,
@@ -376,8 +377,8 @@ struct Wait<'a> {
 impl Connection {
     /// Completes the handshake with an agent already started, and creates a session in `cwd`.
     ///
-    /// The child must have been started with piped standard input, output and error. Dropping the connection does not kill the child;
-    /// the caller that started it decides how it is killed (the daemon starts it so that the whole process tree goes).
+    /// The child must have been started with piped standard input, output and error. Dropping the connection kills this child.
+    /// Production callers use [`Self::open_owned`] to retain ownership of its descendants as well.
     ///
     /// `sign_in` names a sign-in method (as the agent advertised it) to use **only if** the agent says it needs one, whether when the
     /// session is made or at the first prompt (some agents only check then): the agent gets `authenticate` with that method and the
@@ -389,18 +390,53 @@ impl Connection {
     /// Returns [`AcpError`] when the streams are not piped, the agent speaks another version, needs a sign-in, refuses, ends or stops
     /// answering within [`Limits::handshake`].
     pub async fn open(
-        mut child: Child,
+        child: Child,
+        cwd: &std::path::Path,
+        limits: Limits,
+        sign_in: Option<&str>,
+    ) -> Result<Self, AcpError> {
+        Self::open_owned(
+            crate::owned_process::OwnedProcess::from_child(child),
+            cwd,
+            limits,
+            sign_in,
+        )
+        .await
+    }
+
+    /// Opens an ACP connection while retaining the process tree's owned lifetime.
+    ///
+    /// Dropping setup or the connection terminates the tree and aborts its stderr reader.
+    /// Authentication and handshake behavior match [`Self::open`].
+    ///
+    /// # Errors
+    /// Returns the same handshake and stream errors as [`Self::open`].
+    pub async fn open_owned(
+        mut child: crate::owned_process::OwnedProcess,
         cwd: &std::path::Path,
         limits: Limits,
         sign_in: Option<&str>,
     ) -> Result<Self, AcpError> {
         let (Some(stdin), Some(stdout), Some(stderr)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+            (child.take_stdin(), child.take_stdout(), child.take_stderr())
         else {
-            return Err(AcpError::NotPiped);
+            let cleanup = async {
+                child.start_kill()?;
+                tokio::time::timeout(Duration::from_secs(3), child.wait())
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "agent process exit could not be confirmed",
+                        )
+                    })??;
+                Ok(())
+            }
+            .await;
+            return Err(Self::setup_failure(AcpError::NotPiped, cleanup));
         };
         let stderr_tail = Arc::new(Mutex::new(VecDeque::new()));
-        drain_stderr(stderr, Arc::clone(&stderr_tail));
+        let stderr_task = drain_stderr(stderr, Arc::clone(&stderr_tail));
         let mut connection = Self {
             child,
             stdin,
@@ -409,6 +445,7 @@ impl Connection {
             next_id: 0,
             limits,
             stderr_tail,
+            _stderr_task: stderr_task,
             stray: 0,
             session_id: String::new(),
             agent: AgentInfo::default(),
@@ -418,8 +455,24 @@ impl Connection {
             activity_sender: None,
         };
         let deadline = Instant::now() + connection.limits.handshake;
-        connection.handshake(cwd, deadline, sign_in).await?;
+        if let Err(error) = connection.handshake(cwd, deadline, sign_in).await {
+            // Drop can only request termination. Await the bounded shutdown on
+            // a returned setup error before the caller removes its scratch cwd.
+            // Dropping this future still drops the owner and terminates the tree.
+            let cleanup = connection.close_checked().await;
+            return Err(Self::setup_failure(error, cleanup));
+        }
         Ok(connection)
+    }
+
+    fn setup_failure(error: AcpError, cleanup: std::io::Result<()>) -> AcpError {
+        match cleanup {
+            Ok(()) => error,
+            Err(cleanup) => AcpError::Handshake {
+                reason: format!("{error}; the agent's process-tree cleanup failed: {cleanup}"),
+                stderr_tail: String::new(),
+            },
+        }
     }
 
     /// What the agent said about itself.
@@ -596,8 +649,9 @@ impl Connection {
     /// Sends one prompt and follows the turn to its end.
     ///
     /// `cancel` ends the turn early (a permit is kept, so cancelling just before the call counts). The turn also ends at
-    /// [`Limits::turn`]. Either way the agent is sent `session/cancel`, pending permission requests are answered `cancelled`, and
-    /// [`Limits::cancel_grace`] is allowed for the agent to end the turn itself.
+    /// [`Limits::turn`], including any prompt-triggered sign-in. An active prompt receives `session/cancel`, pending permission
+    /// requests are answered `cancelled`, and [`Limits::cancel_grace`] is allowed for the agent to end the turn itself.
+    /// Cancellation before dispatch starts no prompt; during sign-in it returns without replaying the prompt.
     pub async fn prompt(
         &mut self,
         text: &str,
@@ -609,16 +663,25 @@ impl Connection {
             "sessionId": self.session_id,
             "prompt": [{ "type": "text", "text": text }],
         });
+        let deadline = (!self.limits.turn.is_zero()).then(|| Instant::now() + self.limits.turn);
         let mut attempt = 0;
         let outcome = loop {
+            // Check before dispatch, but do not drop an in-progress framed write:
+            // the peer may have received it before flush finishes. A Stop during
+            // the bounded write remains pending for wait(), which sends cancel.
+            if let Some(ended) = Self::pending_prompt_stop(cancel, deadline).await {
+                report.ended = ended;
+                return report;
+            }
             let id = match self.send_request("session/prompt", params.clone()).await {
                 Ok(id) => id,
                 Err(stop) => {
-                    report.ended = ended_of(stop);
+                    report.ended = Self::pending_prompt_stop(cancel, deadline)
+                        .await
+                        .unwrap_or_else(|| ended_of(stop));
                     return report;
                 }
             };
-            let deadline = (!self.limits.turn.is_zero()).then(|| Instant::now() + self.limits.turn);
             let outcome = self
                 .wait(
                     Wait {
@@ -630,14 +693,35 @@ impl Connection {
                     &mut report,
                 )
                 .await;
+            // Cancellation is owner intent, even if a nonconforming agent exits or
+            // returns an error while stopping. In particular, an auth error must
+            // not sign in and replay a prompt after its cancellation was consumed.
+            if matches!(report.ended, Ended::Cancelled | Ended::TimedOut) {
+                report.stray_lines = self.stray;
+                return report;
+            }
             // Some agents only check the sign-in when the first prompt arrives. With a method chosen, sign in once and ask again.
             if attempt == 0
                 && matches!(&outcome, Err(Stop::Rpc { code: -32000, .. }))
                 && let Some(method) = self.sign_in.clone()
-                && self.authenticate(&method).await.is_ok()
             {
-                attempt = 1;
-                continue;
+                let authenticated = tokio::select! {
+                    biased;
+                    ended = Self::prompt_stop(cancel, deadline) => Err(ended),
+                    result = self.authenticate(&method) => Ok(result.is_ok()),
+                };
+                match authenticated {
+                    Ok(true) => {
+                        attempt = 1;
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(ended) => {
+                        report.ended = ended;
+                        report.stray_lines = self.stray;
+                        return report;
+                    }
+                }
             }
             break outcome;
         };
@@ -648,10 +732,6 @@ impl Connection {
                     .get("stopReason")
                     .and_then(Value::as_str)
                     .map_or(StopReason::Other("none".to_owned()), StopReason::from_wire);
-                // A turn the client cancelled or timed out is reported as that, whatever word the agent used.
-                if matches!(report.ended, Ended::Cancelled | Ended::TimedOut) {
-                    return report;
-                }
                 report.ended = Ended::Finished(reason);
             }
             Err(stop) => report.ended = ended_of(stop),
@@ -659,15 +739,53 @@ impl Connection {
         report
     }
 
+    async fn pending_prompt_stop(cancel: &Notify, deadline: Option<Instant>) -> Option<Ended> {
+        tokio::select! {
+            biased;
+            ended = Self::prompt_stop(cancel, deadline) => Some(ended),
+            () = std::future::ready(()) => None,
+        }
+    }
+
+    async fn prompt_stop(cancel: &Notify, deadline: Option<Instant>) -> Ended {
+        tokio::select! {
+            biased;
+            () = cancel.notified() => Ended::Cancelled,
+            () = async {
+                if let Some(deadline) = deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => Ended::TimedOut,
+        }
+    }
+
     /// Ends the connection: closes the agent's input, gives it a moment to leave, and kills it if it stays.
-    pub async fn close(mut self) {
+    pub async fn close(self) {
+        let _ = self.close_checked().await;
+    }
+
+    /// Closes the connection and reports whether process-tree cleanup succeeded.
+    ///
+    /// # Errors
+    /// Returns a termination error or a bounded root-exit timeout. A caller must
+    /// not report verified completion after this cleanup failed.
+    pub async fn close_checked(mut self) -> std::io::Result<()> {
         drop(self.stdin);
-        if tokio::time::timeout(Duration::from_secs(2), self.child.wait())
-            .await
-            .is_err()
-        {
-            let _ = self.child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await;
+        if let Ok(result) = tokio::time::timeout(Duration::from_secs(2), self.child.wait()).await {
+            result.map(|_| ())
+        } else {
+            self.child.start_kill()?;
+            tokio::time::timeout(Duration::from_secs(3), self.child.wait())
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "agent process exit could not be confirmed",
+                    )
+                })??;
+            Ok(())
         }
     }
 
@@ -1089,8 +1207,11 @@ fn note_update(message: &Value, report: &mut Report, limits: &Limits) -> Option<
 }
 
 /// Reads the agent's error stream so its pipe never fills, keeping only the last few kilobytes.
-fn drain_stderr(mut stderr: tokio::process::ChildStderr, tail: Arc<Mutex<VecDeque<u8>>>) {
-    tokio::spawn(async move {
+fn drain_stderr(
+    mut stderr: tokio::process::ChildStderr,
+    tail: Arc<Mutex<VecDeque<u8>>>,
+) -> crate::owned_process::AbortOnDrop<()> {
+    crate::owned_process::AbortOnDrop::new(tokio::spawn(async move {
         let mut buffer = [0_u8; 1024];
         loop {
             match stderr.read(&mut buffer).await {
@@ -1105,7 +1226,7 @@ fn drain_stderr(mut stderr: tokio::process::ChildStderr, tail: Arc<Mutex<VecDequ
                 }
             }
         }
-    });
+    }))
 }
 
 fn tail_text(tail: &Mutex<VecDeque<u8>>) -> String {

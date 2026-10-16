@@ -249,6 +249,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0230](0230-coding-tasks-go-to-an-acp-agent-in-its-own-git-worktree-and-its-permission-requests-are-answered-by-policy.md) | Coding tasks go to an ACP agent in its own git worktree, and its permission requests are answered by policy | Accepted |
 | [0231](0231-webhook-deliveries-reserve-budget-with-their-deduplication-key.md) | Webhook deliveries reserve budget with their deduplication key | Accepted |
 | [0232](0232-stop-and-restart-check-background-work-and-fail-closed.md) | Stop and restart check background work and fail closed | Accepted |
+| [0233](0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) | Coding cancellation is final and process ownership outlives the root | Accepted |
 
 ## Historical identifier aliases
 

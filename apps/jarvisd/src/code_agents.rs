@@ -27,11 +27,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use jarvis_runtimes::acp::{AcpError, AuthMethod, Connection, Limits};
+use jarvis_runtimes::owned_process::OwnedProcess;
 use jarvis_storage::{AppPaths, ConfigStore, settings};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::command_run::{TreeGuard, child_environment, kill_tree, resolve_program};
+use crate::command_run::{child_environment, resolve_program};
 use crate::gateway::GatewayState;
 use crate::settings_service::{context, refused};
 
@@ -354,7 +355,7 @@ pub fn spawn(
     arguments: &[String],
     folder: &Path,
     environment: &BTreeMap<String, OsString>,
-) -> Result<tokio::process::Child, String> {
+) -> Result<OwnedProcess, String> {
     let mut command = tokio::process::Command::new(program);
     command
         .args(arguments)
@@ -363,14 +364,8 @@ pub fn spawn(
         .envs(environment)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    command
-        .spawn()
+        .stderr(Stdio::piped());
+    OwnedProcess::spawn(command)
         .map_err(|error| format!("the coding agent could not be started: {}", error.kind()))
 }
 
@@ -464,48 +459,20 @@ async fn probe_under(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let folder = root.join(format!("jarvis-agent-test-{nanos:x}"));
-    std::fs::create_dir_all(&folder)
+    // Own a newly created directory, never a pre-existing path on a collision.
+    std::fs::create_dir(&folder)
         .map_err(|_| ProbeFailure::plain("a temporary folder could not be made".to_owned()))?;
     let outcome = async {
         let child =
             spawn(&program, &arguments, &folder, &environment).map_err(ProbeFailure::plain)?;
-        let pid = child.id().unwrap_or(0);
-        let _guard = TreeGuard { pid, armed: true };
         let limits = Limits {
             handshake,
             ..Limits::default()
         };
-        let result = Connection::open(child, &folder, limits, sign_in).await;
+        let result = Connection::open_owned(child, &folder, limits, sign_in).await;
         match result {
-            Ok(mut connection) => {
-                // Asked to sign in: do it now even if the agent has not asked (some only check at the first prompt).
-                let signed = match sign_in {
-                    Some(method) if !connection.signed_in() => {
-                        if let Err(error) = connection.authenticate(method).await {
-                            let methods = connection.auth_methods().to_vec();
-                            kill_tree(pid);
-                            return Err(ProbeFailure {
-                                message: describe_error(&error),
-                                methods,
-                                sign_in_needed: false,
-                            });
-                        }
-                        true
-                    }
-                    _ => connection.signed_in(),
-                };
-                let probe = Probe {
-                    name: connection.agent().name.clone(),
-                    version: connection.agent().version.clone(),
-                    methods: connection.auth_methods().to_vec(),
-                    signed_in: signed,
-                };
-                connection.close().await;
-                kill_tree(pid);
-                Ok(probe)
-            }
+            Ok(connection) => inspect_probe_connection(connection, sign_in).await,
             Err(error) => {
-                kill_tree(pid);
                 let methods = match &error {
                     AcpError::AuthRequired { methods, .. }
                     | AcpError::UnknownAuthMethod { methods, .. } => methods.clone(),
@@ -520,8 +487,71 @@ async fn probe_under(
         }
     }
     .await;
-    let _ = std::fs::remove_dir_all(&folder);
+    if let Err(error) = remove_probe_folder(&folder).await {
+        let message = format!(
+            "the agent's temporary folder could not be removed: {}",
+            error.kind()
+        );
+        return Err(match outcome {
+            Ok(_) => ProbeFailure::plain(message),
+            Err(mut failure) => {
+                failure.message = format!("{}; {message}", failure.message);
+                failure
+            }
+        });
+    }
     outcome
+}
+
+async fn inspect_probe_connection(
+    mut connection: Connection,
+    sign_in: Option<&str>,
+) -> Result<Probe, ProbeFailure> {
+    // Sign in on request even if the agent has not asked (some only check at the first prompt).
+    let signed = match sign_in {
+        Some(method) if !connection.signed_in() => {
+            if let Err(error) = connection.authenticate(method).await {
+                let mut failure = ProbeFailure {
+                    message: describe_error(&error),
+                    methods: connection.auth_methods().to_vec(),
+                    sign_in_needed: false,
+                };
+                if let Err(cleanup) = connection.close_checked().await {
+                    failure.message = format!(
+                        "{}; the agent's process-tree cleanup failed: {cleanup}",
+                        failure.message
+                    );
+                }
+                return Err(failure);
+            }
+            true
+        }
+        _ => connection.signed_in(),
+    };
+    let probe = Probe {
+        name: connection.agent().name.clone(),
+        version: connection.agent().version.clone(),
+        methods: connection.auth_methods().to_vec(),
+        signed_in: signed,
+    };
+    connection.close_checked().await.map_err(|error| {
+        ProbeFailure::plain(format!("the agent's process-tree cleanup failed: {error}"))
+    })?;
+    Ok(probe)
+}
+
+/// Only called for the scratch directory this probe successfully created. Job
+/// termination can briefly leave a descendant holding its cwd open on Windows.
+async fn remove_probe_folder(folder: &Path) -> std::io::Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match tokio::fs::remove_dir_all(folder).await {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if tokio::time::Instant::now() >= deadline => return Err(error),
+            Err(_) => tokio::time::sleep(Duration::from_millis(25)).await,
+        }
+    }
 }
 
 fn methods_json(methods: &[AuthMethod]) -> Vec<Value> {
