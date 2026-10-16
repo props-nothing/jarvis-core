@@ -118,11 +118,25 @@ async fn a_real_loopback_preview_is_reachable_but_never_claimed_browser_verified
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     let tool = scratch.tool();
-    let script = format!(
-        "require('http').createServer((q,s)=>s.end('preview-ready')).listen({port},'127.0.0.1')"
-    );
+    // Separate child startup/bind evidence from the production TCP readiness probe.
+    std::fs::write(
+        scratch.0.join("preview.cjs"),
+        r"const fs = require('node:fs');
+const state = (phase, extra = {}) => fs.writeFileSync('preview-state.json', JSON.stringify({
+  phase, pid: process.pid, version: process.version, executable: process.execPath, ...extra
+}));
+state('starting');
+const server = require('node:http').createServer((q, s) => s.end('preview-ready'));
+server.on('error', error => {
+  state('error', {code: error.code, message: error.message});
+  process.exit(1);
+});
+server.listen(Number(process.argv[2]), '127.0.0.1', () => state('listening'));
+",
+    )
+    .unwrap();
     let answer = tool
-        .start(&json!({"program":"node","arguments":["-e",script],"port":port}))
+        .start(&json!({"program":"node","arguments":["preview.cjs",port.to_string()],"port":port}))
         .await
         .unwrap();
     let id = answer["process_id"].as_str().unwrap();
@@ -130,21 +144,44 @@ async fn a_real_loopback_preview_is_reachable_but_never_claimed_browser_verified
     // Loaded Windows runners need more headroom; successful starts do not wait.
     let startup_limit = Duration::from_secs(if cfg!(windows) { 30 } else { 10 });
     let mut status = Value::Null;
-    tokio::time::timeout(startup_limit, async {
+    let mut child_state = Value::Null;
+    let readiness = tokio::time::timeout(startup_limit, async {
         loop {
-            status = tool.status(id).await.unwrap();
-            if status["port_reachable"] == true {
-                break;
+            if let Ok(bytes) = std::fs::read(scratch.0.join("preview-state.json"))
+                && let Ok(state) = serde_json::from_slice::<Value>(&bytes)
+            {
+                child_state = state;
             }
-            assert_eq!(status["process"]["status"], "running", "{status}");
+            assert_eq!(tool.load(id).unwrap().status, "running", "{child_state}");
+            assert_ne!(child_state["phase"], "error", "{child_state}");
+            if child_state["phase"] == "listening" {
+                status = tool.status(id).await.unwrap();
+                if status["port_reachable"] == true {
+                    break;
+                }
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await
-    .unwrap_or_else(|error| {
-        let _ = tool.stop(id);
-        panic!("preview startup exceeded {startup_limit:?}: {error}; last status: {status}");
-    });
+    .await;
+    if let Err(error) = readiness {
+        // Diagnostic only: a slower independent connect cannot turn failure into success.
+        let direct_probe = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)),
+            Duration::from_secs(2),
+        )
+        .map(|_| ());
+        let stop = tool.stop(id);
+        let settled = tokio::time::timeout(Duration::from_secs(10), async {
+            while tool.load(id).unwrap().status == "running" {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        panic!(
+            "preview startup exceeded {startup_limit:?}: {error}; child: {child_state}; last status: {status}; independent TCP probe: {direct_probe:?}; stop: {stop:?}; settled: {settled:?}"
+        );
+    }
     assert_eq!(status["browser_verified"], false);
     let body = reqwest::get(status["preview_url"].as_str().unwrap())
         .await
