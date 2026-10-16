@@ -9,6 +9,9 @@ selected_sdk: "none: a small JARVIS client over JSON-RPC on stdio (see Decisions
 
 # Agent Client Protocol (ACP)
 
+
+> **Current defaults supersede the original worktree slice:** ADR-0222/0224 use in-place queued jobs, optional worktrees, no default total deadline and independently reported verification. The original protocol research and first-slice findings below retain their dates. See [coding delivery](coding-delivery.md) and [the current user guide](../../user/code-agents.md); a worktree is not confinement.
+
 ## Scope
 
 JARVIS acting as an ACP **client**: it starts a coding agent (Claude, Codex, Gemini, Copilot and others) as a child process on stdio, creates a session in a git worktree, sends one prompt, follows the streamed updates, answers the agent's permission requests by policy, can cancel, and reads the result. Operations: `initialize`, `session/new`, `session/prompt`, `session/update` (notification, received), `session/request_permission` (request, received), `session/cancel` (notification, sent).

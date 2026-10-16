@@ -8,13 +8,47 @@ Observability explains JARVIS without creating a second store of private content
 
 Structured events for lifecycle, normalized state changes, failures, and operator actions. Fields use stable names and IDs. Human console rendering is derived from the same event, not separately formatted logic.
 
+The current daemon writes JSON Lines to `<logs>/jarvisd.jsonl` and plain text to
+stderr. Both renderings pass through the same redaction rules before output.
+Every emitted record, including its newline, fits within 8 KiB. An oversized
+event is replaced by a content-free omission notice (valid JSON in the file),
+with the omitted byte count; the daemon does not cut a JSON object or a secret in
+half. Redaction happens before truncation in the reusable text redactor.
+Known values are matched in raw and JSON-escaped form, and quoted credential
+fields are masked through escaped quotes. The sink validates the rewritten JSON;
+if structural masking changes its syntax (for example, a numeric password
+field), it emits a fixed omission object with no original field content.
+
+The active log and each of three retained segments are at most 4 MiB: 16 MiB total
+for the four managed files. Rotation happens before a record would exceed the
+limit; `.1` is newest and `.3` oldest. Rotation drops the oldest segment. A crash
+fragment is rotated before appending a new event. New Unix files use mode `0600`;
+Windows files inherit the managed log directory's private permissions. The daemon
+singleton is the only supported writer; do not externally truncate or rotate its
+files while it is running.
+
+An I/O or rotation failure disables further file appends until restart, emits
+one fixed content-free stderr message, and leaves the independently redacted
+console layer available. Existing oversized files are preserved and refused at
+startup. Stop the daemon and move those files outside the managed log directory
+for archival before restarting; `jarvis doctor` identifies `logs.over_limit`.
+Logging is diagnostic evidence, not the durable audit ledger.
+
+`jarvis logs --lines N` reads the active file only, with a 5,000-record and 4 MiB
+scan ceiling. It joins raw bytes across 64 KiB windows before UTF-8 decoding,
+omits incomplete final records, blank lines, and oversized legacy records, and
+never scans the whole file merely to count earlier lines. The internal
+`LogLine.number` is now a one-based ordinal within the returned tail; the CLI
+continues to print JSON records without line numbers. Retained files remain
+available for explicit offline inspection. See [ADR-0226](../adr/0226-logs-share-redaction-and-bounded-retention.md).
+
 ### Metrics
 
-Counts, latency histograms, queue depth, failures, retries, saturation, usage, and cost. Metrics never contain user text, email addresses, phone numbers, filenames, URLs with credentials, or unbounded IDs.
+Target signals: counts, latency histograms, queue depth, failures, retries, saturation, usage, and cost. This is not a claim that a metrics exporter is shipped. Metrics never contain user text, email addresses, phone numbers, filenames, URLs with credentials, or unbounded IDs.
 
 ### Traces
 
-Spans connect gateway, application, runtime, model, tool, connector, storage, workflow, and voice calls. Content-free by default; sensitive tracing is an explicit temporary mode with warning and retention controls.
+Tracing spans connect instrumented operations. A distributed trace exporter and temporary sensitive-tracing mode are future work; any such mode must have a warning and retention controls. Routine events remain content-free by default.
 
 ### Audit
 
@@ -68,7 +102,12 @@ Redaction is defense in depth:
 4. Apply structural redaction for authorization headers, cookies, JSON fields, URL userinfo/path/query patterns, and known live secret values.
 5. Test canaries across errors, traces, diagnostics, and panic/crash output.
 
-Truncation is UTF-8 safe and reports omitted byte counts. Tool/provider output is bounded before logging.
+The implemented sink masks known secret values, credential-shaped key/value text,
+Bearer tokens, and URL-userinfo passwords. This is defense in depth, not a promise
+to recognize every possible credential format. Reusable text truncation is UTF-8
+safe and reports omitted byte counts within its size ceiling; structured logging
+uses an omission record instead of truncating JSON. Tool/provider output should
+remain bounded before logging.
 
 ## Health
 
@@ -113,7 +152,7 @@ repair did not verify.
 | `daemon` | singleton lock ownership, probed without stealing the lock |
 | `protocol` | this build's supported protocol window |
 | `redaction` | a canary pushed through the real redactor |
-| `logs` | the structured log is readable and bounded |
+| `logs` | metadata for four managed filenames enforces the 4 MiB segment bound; a bounded sample verifies a readable JSON object. `logs.over_limit` and `logs.unreadable` provide explicit archival/permission remediation without modifying evidence. |
 
 A database is inspected read-only with creation disabled, because opening it for
 real would migrate, create, and enable WAL. A newer schema is reported as a finding

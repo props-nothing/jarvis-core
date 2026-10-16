@@ -548,6 +548,36 @@ pub async fn read_recent_runs(
     rows.iter().map(decode_run).collect()
 }
 
+/// Reads a bounded class of runs, putting every unfinished run before recent terminal runs.
+///
+/// Filtering happens before the result limit so unrelated recent work cannot hide a child.
+///
+/// # Errors
+/// Returns a validation error for an empty marker/invalid page or a storage/decode error.
+pub async fn read_runs_by_objective_prefix(
+    database: &SqliteDatabase,
+    workspace_id: &str,
+    prefix: &str,
+    limit: u32,
+) -> Result<Vec<StoredRun>, DatabaseError> {
+    if prefix.is_empty() || limit == 0 || limit > 100 {
+        return Err(DatabaseError::InvalidRunRequest {
+            field: "run class page",
+        });
+    }
+    let rows = sqlx::query(
+        "SELECT id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
+                cancellation_requested_at, terminal_outcome, completed_at, error_code, started_at \
+         FROM agent_runs WHERE workspace_id = ?1 \
+           AND substr(COALESCE(full_objective, objective), 1, length(?2)) = ?2 \
+         ORDER BY (terminal_outcome IS NOT NULL), id DESC LIMIT ?3",
+    )
+    .bind(workspace_id).bind(prefix).bind(i64::from(limit))
+    .fetch_all(database.pool()).await
+    .map_err(|source| DatabaseError::Sqlite { operation: "read a class of runs", source })?;
+    rows.iter().map(decode_run).collect()
+}
+
 /// Advances one run through the state machine.
 ///
 /// # Errors

@@ -2,6 +2,8 @@
 
 Reviewed 16 October 2026 against `fd5b736` and the initially clean working tree.
 
+> **Historical findings, subsequently repaired:** the [implementation follow-up](#implementation-follow-up) links the fixes and revised owner-directed visual hierarchy. Use the [current settings guide](../user/settings.md) for present behavior. Preserve the observations below as evidence; do not treat them as a current unresolved defect list.
+
 JARVIS has a coherent visual identity and useful security foundations. Its control interface has outgrown the original small, dependency-free HUD. The main problems are ambiguous integration navigation, unreliable form lifecycle, fragmented setup journeys, and a presentation that gives more space to the animated presence than to everyday work. A component library will help maintain the interface, but the information architecture and state contracts need to improve first.
 
 This is a review and proposed implementation sequence. It does not change product behavior, adopt a framework, supersede an ADR, or mark an acceptance slice complete.
@@ -221,6 +223,6 @@ For implementation slices, run the narrow behavioral/falsification tests first, 
 
 ## Implementation follow-up
 
-The owner subsequently requested implementation. See [ADR-0225](../adr/0225-hud-controls-use-explicit-state-and-task-navigation.md), the [current settings guide](../user/settings.md), and the acceptance evidence in [TODO.md](../../TODO.md#owner-requested-hud-implementation-2026-10-16). Findings above preserve the reviewed revision; they are not a description of the repaired interface.
+The owner subsequently requested implementation. See [ADR-0225](../adr/0225-hud-controls-use-explicit-state-and-task-navigation.md), the [current settings guide](../user/settings.md), and the acceptance evidence in [TODO.md](../history/todo-owner-evidence-through-2026-10-16.md#owner-requested-hud-implementation-2026-10-16). Findings above preserve the reviewed revision; they are not a description of the repaired interface.
 
 The owner then requested a stronger overall design and a larger face with a smaller chat panel. The [design refinement](hud-design-direction-2026-10-16.md) records the corrected hierarchy and researched design skills; its acceptance evidence is tracked separately in TODO.md.

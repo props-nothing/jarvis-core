@@ -1,5 +1,7 @@
 # Tools, MCP, And Connectors
 
+> **Current boundary:** JARVIS-owned tool calls pass the canonical policy/audit pipeline. Approved ACP agents and managed development processes are host execution; their native tools are not all intercepted and are not an OS sandbox. The sandbox recommendations below describe the guarantees required to call a path sandboxed, not a blanket property of every current tool.
+
 ## Canonical Tool Contract
 
 Every capability is normalized before a model sees or calls it. A tool definition contains:
@@ -169,7 +171,7 @@ Separate browser profile identity, downloads, navigation, authenticated sessions
 
 ### Shell And Code
 
-Run in a sandbox with an allowlisted workspace mount, resource limits, network policy, sanitized environment, bounded output, kill/cancel behavior, and no host credential inheritance. String allowlists alone are not a sandbox.
+The container code tool requests sandbox guarantees: allowlisted mounts, resource/network limits, sanitized environment, bounded output and kill/cancel behavior. Refuse unsupported guarantees. Approved command tools, ACP agents and managed development processes are separate host-execution paths; they retain their documented policy/environment/output limits without claiming OS confinement. String allowlists or a worktree alone are not a sandbox.
 
 ### Communication
 

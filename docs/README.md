@@ -64,6 +64,7 @@
 - [Testing strategy](development/testing.md)
 - [Definition of done](development/definition-of-done.md)
 - [Acceptance tests](quality/acceptance-tests.md)
+- [Historical evidence and original ledger slices](history/README.md) — dated findings, not the active task queue
 
 ## Operations
 
@@ -87,4 +88,4 @@ When documents conflict:
 4. `TODO.md` controls implementation order, not architecture.
 5. Research records control dated facts about external systems but must be refreshed before implementation.
 
-Update links and affected documents in the same change. Do not create a second "master spec" that drifts from this set.
+Update links and affected documents in the same change. Run `node scripts/check-docs.mjs` from the repository root and `node --test scripts/test-docs.mjs` for the structural guard; it checks local targets, heading anchors and canonical ADR identifiers, not external URLs or semantic freshness. Do not create a second "master spec" that drifts from this set.

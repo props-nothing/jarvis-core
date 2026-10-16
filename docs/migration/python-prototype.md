@@ -6,29 +6,29 @@ The former `example/` was a substantial MARK LIV Python assistant and behavior r
 
 Therefore:
 
-- keep `example/` quarantined
+- treat historical prototype copies as quarantined reference material
 - do not mechanically port or copy code into the Rust platform
 - specify behavior and invariants in neutral language
 - implement clean-room replacements from those requirements and official upstream docs
-- retain attribution and third-party asset notices inside the example
+- retain the prototype's attribution and third-party asset notices with any historical copy
 - obtain explicit legal review/permission before any source reuse
 
-## Current Shape
+## Historical inventory
 
 | Prototype area | Files | Current responsibility |
 | --- | --- | --- |
-| Main process | [main.py](../../example/main.py) | Gemini Live session, audio queues, prompt/context, tool dispatch, monitoring, reconnect |
-| UI | [ui.py](../../example/ui.py) | PyQt HUD, input, settings, avatar/status, confirmations |
-| Actions | [actions](../../example/actions) | bundled local tools and proactive tasks |
-| Tool discovery | [action_loader.py](../../example/core/action_loader.py) | scans/validates `TOOL` modules, collisions, dispatch |
-| Plugins | [plugin_loader.py](../../example/core/plugin_loader.py), [_template.py](../../example/plugins/_template.py) | drop-in Python plugin discovery and execution |
-| Safety | [confirm.py](../../example/core/confirm.py), [undo.py](../../example/core/undo.py) | UI-issued confirmation and in-memory undo |
-| Memory | [memory_manager.py](../../example/memory/memory_manager.py) | categorized JSON facts, prompt budget/index, lexical recall |
-| Config | [config_manager.py](../../example/memory/config_manager.py), `example/config/api_keys.json` | local settings and plaintext provider key |
-| Voice | [wake_word.py](../../example/core/wake_word.py), [echo.py](../../example/core/echo.py), [viseme.py](../../example/core/viseme.py), [audio_devices.py](../../example/core/audio_devices.py) | local wake word, echo guard, lip sync, audio selection |
-| Vision | [screens.py](../../example/core/screens.py), [screen_processor.py](../../example/actions/screen_processor.py) | screen capture, monitor mapping, image injection |
-| Dashboard | [server.py](../../example/dashboard/server.py) | phone/browser dashboard and WebSocket control |
-| Tests | [test_screens_and_safety.py](../../example/core/test_screens_and_safety.py) | monitor-coordinate and honest-send invariants |
+| Main process | `example/main.py` | Gemini Live session, audio queues, prompt/context, tool dispatch, monitoring, reconnect |
+| UI | `example/ui.py` | PyQt HUD, input, settings, avatar/status, confirmations |
+| Actions | `example/actions` | bundled local tools and proactive tasks |
+| Tool discovery | `example/core/action_loader.py` | scans/validates `TOOL` modules, collisions, dispatch |
+| Plugins | `example/core/plugin_loader.py`, `example/plugins/_template.py` | drop-in Python plugin discovery and execution |
+| Safety | `example/core/confirm.py`, `example/core/undo.py` | UI-issued confirmation and in-memory undo |
+| Memory | `example/memory/memory_manager.py` | categorized JSON facts, prompt budget/index, lexical recall |
+| Config | `example/memory/config_manager.py`, `example/config/api_keys.json` | local settings and plaintext provider key |
+| Voice | `example/core/wake_word.py`, `example/core/echo.py`, `example/core/viseme.py`, `example/core/audio_devices.py` | local wake word, echo guard, lip sync, audio selection |
+| Vision | `example/core/screens.py`, `example/actions/screen_processor.py` | screen capture, monitor mapping, image injection |
+| Dashboard | `example/dashboard/server.py` | phone/browser dashboard and WebSocket control |
+| Tests | `example/core/test_screens_and_safety.py` | monitor-coordinate and honest-send invariants |
 
 ## Behaviors To Preserve
 

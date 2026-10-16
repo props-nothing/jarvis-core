@@ -138,6 +138,44 @@ impl SessionTarget {
     }
 }
 
+/// Capacity policy for runs identified by a durable objective prefix.
+///
+/// The prefix preserves the existing native-subagent identity until an explicit
+/// parent/child relation is introduced. Limits are checked inside the start transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunAdmissionLimits {
+    objective_prefix: String,
+    max_working: u32,
+    max_unsettled: u32,
+}
+
+impl RunAdmissionLimits {
+    /// Validates a nonempty prefix and positive working/unfinished limits.
+    ///
+    /// # Errors
+    /// Returns an invalid-request error for an empty prefix, zero/oversized limits,
+    /// or a working limit larger than the unfinished limit.
+    pub fn new(
+        prefix: &str,
+        max_working: usize,
+        max_unsettled: usize,
+    ) -> Result<Self, DatabaseError> {
+        let invalid = || DatabaseError::InvalidRunRequest {
+            field: "admission limits",
+        };
+        let max_working = u32::try_from(max_working).map_err(|_| invalid())?;
+        let max_unsettled = u32::try_from(max_unsettled).map_err(|_| invalid())?;
+        if prefix.is_empty() || max_working == 0 || max_working > max_unsettled {
+            return Err(invalid());
+        }
+        Ok(Self {
+            objective_prefix: prefix.to_owned(),
+            max_working,
+            max_unsettled,
+        })
+    }
+}
+
 /// The session, run, and first event to create atomically.
 ///
 /// Every identifier is supplied by the caller so the use case can record them before the
@@ -155,6 +193,7 @@ pub struct StartRunInput {
     channel: SessionChannel,
     correlation_id: CorrelationId,
     started_at: UtcTimestamp,
+    admission_limits: Option<RunAdmissionLimits>,
 }
 
 impl StartRunInput {
@@ -257,7 +296,25 @@ impl StartRunInput {
             channel,
             correlation_id,
             started_at,
+            admission_limits: None,
         })
+    }
+
+    /// Applies capacity limits to this start, refusing a mismatched objective marker.
+    ///
+    /// # Errors
+    /// Returns an invalid-request error when the run does not belong to the counted class.
+    pub fn with_admission_limits(
+        mut self,
+        limits: RunAdmissionLimits,
+    ) -> Result<Self, DatabaseError> {
+        if !self.objective.starts_with(&limits.objective_prefix) {
+            return Err(DatabaseError::InvalidRunRequest {
+                field: "admission prefix",
+            });
+        }
+        self.admission_limits = Some(limits);
+        Ok(self)
     }
 
     /// Returns the run identifier that will be created.
@@ -522,6 +579,7 @@ async fn classify_session_attachment(
 /// - [`DatabaseError::SessionNotFound`] when a continuation names a session this identity may not
 ///   write into, or one that does not exist.
 /// - [`DatabaseError::SessionNotWritable`] when a continuation names an archived session.
+/// - [`DatabaseError::RunCapacityExceeded`] when the supplied admission class is full.
 /// - [`DatabaseError::Sqlite`] for any other persistence failure.
 pub async fn start_run(
     database: &SqliteDatabase,
@@ -538,7 +596,24 @@ pub async fn start_run(
             source,
         })?;
 
-    // The identity is checked first so an unseeded profile reports its specific cause. The
+    if let Some(limits) = &input.admission_limits {
+        let (unsettled, working): (i64, i64) = sqlx::query_as(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN state <> 'awaiting_approval' THEN 1 ELSE 0 END), 0) \
+             FROM agent_runs WHERE workspace_id = ?1 AND state NOT IN ('completed', 'cancelled', 'failed') \
+             AND substr(COALESCE(full_objective, objective), 1, length(?2)) = ?2",
+        )
+        .bind(&input.workspace_id)
+        .bind(&limits.objective_prefix)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|source| DatabaseError::Sqlite { operation: "check run admission capacity", source })?;
+        if working >= i64::from(limits.max_working) || unsettled >= i64::from(limits.max_unsettled)
+        {
+            return Err(DatabaseError::RunCapacityExceeded);
+        }
+    }
+
+    // The identity is checked before writes so an unseeded profile reports its specific cause. The
     // foreign keys would refuse the insert anyway, but as an opaque constraint failure that
     // names neither the missing table nor the direction of the problem.
     let identity_count = sqlx::query_scalar::<_, i64>(
@@ -874,6 +949,179 @@ mod tests {
             at(0),
         )
         .unwrap_or_else(|error| panic!("start input: {error}"))
+    }
+
+    async fn limited_input(database: &SqliteDatabase, task: &str) -> StartRunInput {
+        start_input(
+            database,
+            SessionTarget::New,
+            jarvis_core::SessionId::new().to_string(),
+            &format!("child: {task}"),
+        )
+        .await
+        .with_admission_limits(
+            RunAdmissionLimits::new("child: ", 4, 16)
+                .unwrap_or_else(|error| panic!("limits: {error}")),
+        )
+        .unwrap_or_else(|error| panic!("limited input: {error}"))
+    }
+
+    async fn start_counts(database: &SqliteDatabase) -> (i64, i64, i64, i64) {
+        sqlx::query_as("SELECT (SELECT COUNT(*) FROM sessions), (SELECT COUNT(*) FROM agent_runs), (SELECT COUNT(*) FROM messages), (SELECT COUNT(*) FROM run_events)")
+            .fetch_one(database.pool()).await.unwrap_or_else(|error| panic!("counts: {error}"))
+    }
+
+    #[tokio::test]
+    async fn admission_counts_older_children_beyond_fifty_unrelated_runs() {
+        let (_profile, database) = database().await;
+        let mut children = Vec::new();
+        for index in 0..4 {
+            let input = limited_input(&database, &format!("old {index}")).await;
+            children.push(
+                start_run(&database, &input)
+                    .await
+                    .unwrap_or_else(|error| panic!("start child: {error}")),
+            );
+        }
+        for index in 0..60 {
+            let input = start_input(
+                &database,
+                SessionTarget::New,
+                jarvis_core::SessionId::new().to_string(),
+                &format!("unrelated {index}"),
+            )
+            .await;
+            start_run(&database, &input)
+                .await
+                .unwrap_or_else(|error| panic!("start unrelated: {error}"));
+        }
+        let before = start_counts(&database).await;
+        let input = limited_input(&database, "one too many").await;
+        assert!(matches!(
+            start_run(&database, &input).await,
+            Err(DatabaseError::RunCapacityExceeded)
+        ));
+        assert_eq!(
+            start_counts(&database).await,
+            before,
+            "refusal must write no session, run, message or event"
+        );
+        let listed =
+            crate::read_runs_by_objective_prefix(&database, &input.workspace_id, "child: ", 20)
+                .await
+                .unwrap_or_else(|error| panic!("list: {error}"));
+        assert_eq!(listed.len(), 4);
+        assert!(
+            children
+                .iter()
+                .all(|child| listed.iter().any(|run| run.id() == child.run_id()))
+        );
+        for index in 0..25 {
+            let finished = start_input(
+                &database,
+                SessionTarget::New,
+                jarvis_core::SessionId::new().to_string(),
+                &format!("child: finished {index}"),
+            )
+            .await;
+            let child = start_run(&database, &finished)
+                .await
+                .unwrap_or_else(|error| panic!("start finished fixture: {error}"));
+            sqlx::query("UPDATE agent_runs SET state = 'completed', terminal_outcome = 'succeeded', completed_at = ?2 WHERE id = ?1")
+                .bind(child.run_id())
+                .bind(at(1).to_string())
+                .execute(database.pool())
+                .await
+                .unwrap_or_else(|error| panic!("finish fixture: {error}"));
+        }
+        let listed =
+            crate::read_runs_by_objective_prefix(&database, &input.workspace_id, "child: ", 20)
+                .await
+                .unwrap_or_else(|error| panic!("list unfinished first: {error}"));
+        assert_eq!(listed.len(), 20);
+        assert!(
+            children
+                .iter()
+                .all(|child| listed[..4].iter().any(|run| run.id() == child.run_id())),
+            "newer completed children must not hide unfinished children"
+        );
+        assert!(
+            listed[4..]
+                .iter()
+                .all(|run| run.terminal_outcome().is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn admission_counts_all_parked_children_without_using_working_slots() {
+        let (_profile, database) = database().await;
+        for index in 0..16 {
+            let input = limited_input(&database, &format!("parked {index}")).await;
+            let child = start_run(&database, &input)
+                .await
+                .unwrap_or_else(|error| panic!("start child: {error}"));
+            sqlx::query("UPDATE agent_runs SET state = 'awaiting_approval' WHERE id = ?1")
+                .bind(child.run_id())
+                .execute(database.pool())
+                .await
+                .unwrap_or_else(|error| panic!("park fixture: {error}"));
+        }
+        for index in 0..60 {
+            let input = start_input(
+                &database,
+                SessionTarget::New,
+                jarvis_core::SessionId::new().to_string(),
+                &format!("unrelated {index}"),
+            )
+            .await;
+            start_run(&database, &input)
+                .await
+                .unwrap_or_else(|error| panic!("start unrelated: {error}"));
+        }
+        let before = start_counts(&database).await;
+        let input = limited_input(&database, "past unfinished cap").await;
+        assert!(matches!(
+            start_run(&database, &input).await,
+            Err(DatabaseError::RunCapacityExceeded)
+        ));
+        assert_eq!(start_counts(&database).await, before);
+    }
+
+    #[tokio::test]
+    async fn concurrent_admissions_reserve_only_the_remaining_slot() {
+        let (_profile, database) = database().await;
+        let database = std::sync::Arc::new(database);
+        for index in 0..3 {
+            let input = limited_input(&database, &format!("existing {index}")).await;
+            start_run(&database, &input)
+                .await
+                .unwrap_or_else(|error| panic!("start child: {error}"));
+        }
+        let before = start_counts(&database).await;
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(12));
+        let mut tasks = Vec::new();
+        for index in 0..12 {
+            let input = limited_input(&database, &format!("racing {index}")).await;
+            let database = std::sync::Arc::clone(&database);
+            let barrier = std::sync::Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                start_run(&database, &input).await
+            }));
+        }
+        let mut accepted = 0;
+        for task in tasks {
+            match task.await.unwrap_or_else(|error| panic!("task: {error}")) {
+                Ok(_) => accepted += 1,
+                Err(DatabaseError::RunCapacityExceeded) => {}
+                Err(error) => panic!("unexpected refusal: {error}"),
+            }
+        }
+        assert_eq!(accepted, 1);
+        assert_eq!(
+            start_counts(&database).await,
+            (before.0 + 1, before.1 + 1, before.2 + 1, before.3 + 1)
+        );
     }
 
     /// Runs started at the same moment all succeed. The start reads (the identity) before it writes, so a deferred transaction lost

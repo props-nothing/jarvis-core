@@ -19,6 +19,8 @@ mod recall_tests;
 
 #[path = "memory_browse_tests.rs"]
 mod browse_tests;
+#[path = "memory_correction_tests.rs"]
+mod correction_tests;
 
 const WORKSPACE: &str = "0198f000-0000-7000-8000-000000000001";
 const OTHER_WORKSPACE: &str = "0198f000-0000-7000-8000-000000000002";

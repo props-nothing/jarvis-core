@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-10-03
 
+**Amended by:** [ADR-0228](0228-native-subagent-admission-counts-and-starts-in-one-transaction.md) makes admission count/start atomic across the relevant workspace history and prioritizes unfinished children in listing. The limits apply at admission; approval resume is unchanged, and structured parent linkage/cancellation remain separate work.
+
 ## Context
 
 One agent in one conversation is the ceiling of a chat window. The product's promise is an assistant that can hand

@@ -616,11 +616,6 @@ async fn settle_interrupted_runs(
     }
 }
 
-/// Establishes every owned resource, failing closed before the daemon serves.
-///
-/// Order matters: the credential is read before logging so the redactor can mask
-/// it from the first recorded line, and the singleton lock is taken before the
-/// database so a second daemon never touches state.
 /// Names (never values) any `JARVIS_` variable that is set but not used, so a mistyped override does not vanish silently.
 fn warn_about_unused_environment() {
     let unused = jarvis_storage::unrecognized_environment_keys(std::env::vars_os());
@@ -674,6 +669,9 @@ fn compose_phone(
     phone
 }
 
+/// Establishes owned resources before the daemon serves. Configuration and
+/// credentials are validated first; singleton ownership precedes log rotation
+/// and database access so a rejected second daemon cannot alter active logs.
 async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonError> {
     let health = Arc::new(HealthState::new());
     let paths = resolve_paths(root)?;
@@ -691,14 +689,15 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     let secrets: Vec<String> = std::iter::once(credential.expose().to_owned())
         .chain(mcp_access.key())
         .collect();
+    // Logging may rotate a partial record left by a previous process. A second
+    // startup must establish ownership before touching the active writer's file.
+    let lock_path = paths.runtime().join(DAEMON_LOCK_FILE_NAME);
+    let singleton = SingletonGuard::acquire(&lock_path, build)?;
     let logging = Logging::init(
         paths.logs(),
         loaded_config.config().logging().level(),
         Redactor::new(secrets),
     )?;
-
-    let lock_path = paths.runtime().join(DAEMON_LOCK_FILE_NAME);
-    let singleton = SingletonGuard::acquire(&lock_path, build)?;
 
     // Wrapped in a shared handle immediately, because both the daemon's lifetime state and the tool
     // pipeline need the same connection pool. Two handles to one SQLite file would be two pools over
@@ -2249,6 +2248,63 @@ fn signal_event(event: Option<()>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn duplicate_start_does_not_rotate_or_modify_the_owners_partial_log() {
+        let scratch = std::env::temp_dir().join(format!(
+            "jarvis-duplicate-start-{}",
+            jarvis_core::scratch_tag()
+        ));
+        fs::create_dir_all(&scratch).unwrap_or_else(|error| panic!("scratch: {error}"));
+        // Resolve the macOS temporary-directory alias in the fixture; production
+        // credential and path validation must continue rejecting symlink roots.
+        let root =
+            fs::canonicalize(&scratch).unwrap_or_else(|error| panic!("canonicalize: {error}"));
+        let paths = AppPaths::from_root(&root).unwrap_or_else(|error| panic!("paths: {error}"));
+        paths
+            .prepare()
+            .unwrap_or_else(|error| panic!("prepare: {error}"));
+        let build = BuildInfo::current();
+        let owner = SingletonGuard::acquire(&paths.runtime().join(DAEMON_LOCK_FILE_NAME), build)
+            .unwrap_or_else(|error| panic!("owner lock: {error}"));
+        let log = paths.logs().join(jarvis_observability::LOG_FILE_NAME);
+        let partial = b"{\"owner_write_in_progress\":";
+        fs::write(&log, partial).unwrap_or_else(|error| panic!("fixture log: {error}"));
+
+        let rejected = start(build, Some(&root))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("the second daemon must be rejected"));
+        assert!(
+            matches!(
+                rejected,
+                DaemonError::Singleton(SingletonError::AlreadyRunning)
+            ),
+            "{rejected}"
+        );
+        assert_eq!(
+            fs::read(&log).unwrap_or_else(|error| panic!("read log: {error}")),
+            partial
+        );
+        for index in 1..=jarvis_observability::RETAINED_LOG_FILES {
+            assert!(
+                !paths
+                    .logs()
+                    .join(format!("{}.{}", jarvis_observability::LOG_FILE_NAME, index))
+                    .exists()
+            );
+        }
+        assert!(
+            !paths
+                .data()
+                .join(jarvis_storage::DEFAULT_DATABASE_FILENAME)
+                .exists()
+        );
+        owner
+            .release()
+            .unwrap_or_else(|error| panic!("release owner: {error}"));
+        jarvis_core::remove_scratch_dir(&root);
+    }
 
     #[tokio::test]
     async fn injected_shutdown_future_is_awaitable_without_os_signal() {

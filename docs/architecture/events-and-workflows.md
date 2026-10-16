@@ -1,5 +1,7 @@
 # Events, Scheduling, And Workflows
 
+> **Target contract with a smaller current implementation:** schedules and mail/file/secret-path webhook triggers start ordinary durable runs; quiet hours are implemented. The generic event envelope, outbox/inbox, multi-step workflow engine and compensation machinery below remain parked under ADR-0167 until a named process requires them. Current trigger authentication is documented in [the user guide](../user/triggers.md).
+
 ## Event Envelope
 
 Every admitted event has:

@@ -89,6 +89,10 @@ pub enum FindingCode {
     LogsEmpty,
     /// The structured log is readable.
     LogsReadable,
+    /// A managed log segment exceeds its retention size bound.
+    LogsOverLimit,
+    /// The current log cannot be read as complete structured records.
+    LogsUnreadable,
     /// No per-user service definition exists.
     ServiceAbsent,
     /// A service is not applicable to this installation mode.
@@ -146,6 +150,8 @@ impl FindingCode {
             Self::RedactionSelfTestFailed => "redaction.self_test_failed",
             Self::LogsEmpty => "logs.empty",
             Self::LogsReadable => "logs.readable",
+            Self::LogsOverLimit => "logs.over_limit",
+            Self::LogsUnreadable => "logs.unreadable",
             Self::ServiceAbsent => "service.absent",
             Self::ServiceNotApplicable => "service.not_applicable",
             Self::ServiceCurrent => "service.current",
@@ -195,6 +201,8 @@ impl FindingCode {
             | Self::ProtocolUnreachable
             | Self::ServiceForeign
             | Self::ServiceUnreadable
+            | Self::LogsOverLimit
+            | Self::LogsUnreadable
             | Self::RedactionSelfTestFailed => Severity::Error,
         }
     }
@@ -266,6 +274,12 @@ impl FindingCode {
                 "Stop using this build and report a secret-redaction defect; diagnostics may leak secrets."
             }
             Self::LogsEmpty => "No action required; records appear once the daemon runs.",
+            Self::LogsOverLimit => {
+                "Stop the daemon, move oversized jarvisd.jsonl or jarvisd.jsonl.1 through .3 outside the log directory for archival, then restart and run `jarvis doctor`."
+            }
+            Self::LogsUnreadable => {
+                "Check log file permissions and contents; stop the daemon and archive malformed logs before restarting, then run `jarvis doctor`."
+            }
             Self::ServiceAbsent => {
                 "No action required unless this installation should start automatically at logon."
             }
@@ -388,6 +402,8 @@ mod tests {
         FindingCode::RedactionSelfTestFailed,
         FindingCode::LogsEmpty,
         FindingCode::LogsReadable,
+        FindingCode::LogsOverLimit,
+        FindingCode::LogsUnreadable,
         FindingCode::ServiceAbsent,
         FindingCode::ServiceNotApplicable,
         FindingCode::ServiceCurrent,

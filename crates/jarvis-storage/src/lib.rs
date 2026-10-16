@@ -89,7 +89,7 @@ pub use memory_repository::{
     read_entity_memories, read_memory_discovery_page, read_retrievable_memories,
     read_subject_relations, read_task_memory_candidates, read_workspace_entities,
     read_workspace_memories, record_alias, record_entity, record_memory, record_relation,
-    record_tombstone, reinforce_memory, resolve_alias,
+    record_tombstone, reinforce_memory, replace_memory, resolve_alias,
 };
 pub use message_repository::{
     MAX_MESSAGE_PAGE, StoredMessage, append_message, count_messages, find_message, read_messages,
@@ -122,8 +122,9 @@ pub use run_event_repository::{
 pub use run_repository::{
     INTERRUPTED_ERROR_CODE, InterruptedRun, MAX_OBJECTIVE_CHARS, NewRun, StoredRun,
     TerminalTransition, continuable_interrupted_runs, count_working_runs, create_run, find_run,
-    read_recent_runs, recover_interrupted_runs, request_run_cancellation,
-    settle_parked_run_cancelled, settle_run, transition_run, withdraw_cancelled_run_approvals,
+    read_recent_runs, read_runs_by_objective_prefix, recover_interrupted_runs,
+    request_run_cancellation, settle_parked_run_cancelled, settle_run, transition_run,
+    withdraw_cancelled_run_approvals,
 };
 pub use run_transcript_repository::{
     MAX_RUN_TRANSCRIPT_BYTES, delete_run_transcript, load_run_transcript, save_run_transcript,
@@ -133,8 +134,8 @@ pub use schedule_repository::{
     list_schedules, record_schedule_run, record_schedule_skip, set_schedule_enabled,
 };
 pub use session_repository::{
-    API_SESSION_CHANNEL, NewSession, SessionTarget, StartRunInput, StartedRun, StoredSession,
-    find_session, start_run,
+    API_SESSION_CHANNEL, NewSession, RunAdmissionLimits, SessionTarget, StartRunInput, StartedRun,
+    StoredSession, find_session, start_run,
 };
 pub use skill_repository::{
     StoredSkillRevision, ToolValidator, archive_skill_revision, delete_skill_revision,

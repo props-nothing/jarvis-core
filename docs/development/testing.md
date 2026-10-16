@@ -70,6 +70,15 @@ Two properties are worth preserving if this gate is edited:
   stderr while it runs blocks on EOF that arrives only at exit, which hangs the gate
   instead of failing it.
 
+## Documentation consistency
+
+```text
+node --test scripts/test-docs.mjs
+node scripts/check-docs.mjs
+```
+
+CI checks repository-owned Markdown for local file/heading links and duplicate or mismatched canonical ADR identifiers. Dated evidence belongs in `docs/history/`; an archived result does not prove a current acceptance gate. The checker excludes vendored documentation and remote URLs, so capability claims and external contracts still need review against code and official sources. For the separate website checkout, also run `node scripts/check-docs.mjs --root frontend` from the core repository.
+
 ## Browser console regressions
 
 The embedded HUD has dependency-free Node tests for configuration-overview honesty, settings search and tab focus, offline appearance migration/reset, storage failures, stale loads, restart availability, draft safety, live-counter truthfulness, accent-independent approval colors, shortcut boundaries, dialog focus restoration, quiet atmosphere and stationary reduced-motion orbits:

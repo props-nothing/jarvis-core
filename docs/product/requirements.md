@@ -6,6 +6,20 @@
 
 > **Goals, not release claims.** Requirement IDs describe the target behavior and remain stable for acceptance tracking. Some journeys below include unshipped profiles and interfaces. Consult the [delivery summary](../../README.md#built-experimental-next) and [backlog](../../TODO.md) for what is implemented, verified live, pending or parked.
 
+## Current implementation differences
+
+Reconciled 2026-10-16; these limitations keep the target requirements below from being read as release promises.
+
+| Target | Current behavior and disposition |
+| --- | --- |
+| Install without a toolchain or cloud account | Public setup builds from source. New CLI onboarding requires a working ElevenLabs TTS key by owner choice (ADR-0214); existing profiles can still run without cloud speech. Signed binaries and browser-independent local voice remain open. |
+| OS-backed local secret storage | Current model/MCP keys and OAuth grants use private profile files. Keychain migration is P11-015. |
+| Runtime interchangeability and isolation | Native runs and ACP v1 coding are implemented. Coding defaults to in-place host execution, with optional worktrees; native agent tools are not all mediated by JARVIS. A scoped tool bridge and enforceable sandbox remain separate work. No private JARVIS runtime protocol is required (ADR-0167/0222). |
+| Durable multi-step workflows | Ordinary runs, approvals, schedules and triggers exist. Workflow dependencies, compensation and long multi-step waits remain parked until a named requirement needs them. |
+| Server and multiple devices | The supported implementation path is the local SQLite profile. Full PostgreSQL/server/device/role semantics remain unshipped. |
+
+The active backlog tracks remaining acceptance. This table does not waive a requirement, claim every provider path is verified, or change the owner's authority over effects.
+
 ## Product Definition
 
 JARVIS is a user-controlled personal AI operating layer. It receives requests and events, builds bounded context, selects a reasoning runtime and model, requests capabilities through policy-controlled tools, persists durable state and memory, and returns results through the user's chosen interface.
@@ -16,7 +30,7 @@ JARVIS is not a chatbot wrapper, an unrestricted automation script, or a rebrand
 
 ### Personal local
 
-One user, one machine, SQLite, OS keychain, local-only daemon, optional cloud or local models, and optional desktop/voice clients. This is the default install.
+One user, one machine, SQLite and a local-only daemon, with local or hosted models. The current default uses private secret files and browser/CLI clients; OS keychains, browser-independent voice and a conditional desktop shell are target capabilities. See the current setup constraint above.
 
 ### Personal server
 
@@ -92,7 +106,7 @@ Multiple authenticated users and workspaces with roles, connector ownership, aud
 ### Events And Workflows
 
 - `FR-EVENT-001`: Admit authenticated events durably with schema version, source, causation, correlation, sensitivity, and dedupe identity.
-- `FR-WORKFLOW-001`: Support sequential/parallel steps, dependencies, conditions, retries, delays, schedules, event waits, approvals, cancellation, and compensation metadata.
+- `FR-WORKFLOW-001`: Target sequential/parallel steps, dependencies, conditions, retries, delays, schedules, event waits, approvals, cancellation, and compensation metadata. The separate multi-step engine remains parked under ADR-0167; ordinary runs, schedules and triggers are the current execution path.
 - `FR-WORKFLOW-002`: Recover waits and in-progress work after process restart without duplicating external effects.
 - `FR-PROACTIVE-001`: Respect quiet hours, frequency budgets, relevance, deduplication, channel preference, and user disable controls.
 
@@ -100,7 +114,7 @@ Multiple authenticated users and workspaces with roles, connector ownership, aud
 
 - `FR-VOICE-001`: Keep voice providers replaceable behind a provider-neutral contract.
 - `FR-VOICE-002`: Support local voice clients, inbound calls, and policy-controlled outbound calls.
-- `FR-VOICE-003`: Support ElevenLabs with JARVIS as the brain through current OpenAI-compatible streaming endpoints.
+- `FR-VOICE-003`: Deferred target: support ElevenLabs with JARVIS as the brain through OpenAI-compatible streaming endpoints only when a selected use case requires that transport (ADR-0167). Current outbound-call acceptance does not establish this endpoint contract.
 - `FR-VOICE-004`: Optionally expose a least-privilege MCP profile to an ElevenLabs-owned agent.
 - `FR-VOICE-005`: Correlate calls, sessions, transcripts, tools, approvals, and webhook events without trusting caller-supplied identity.
 - `FR-VOICE-006`: Make recording, transcript, consent/disclosure, retention, and deletion policies explicit.

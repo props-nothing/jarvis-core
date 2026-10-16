@@ -15,7 +15,9 @@
 use std::{fs, io::Read, path::Path};
 
 use jarvis_core::{DAEMON_LOCK_FILE_NAME, LogLevel, SafeMessage};
-use jarvis_observability::{LOG_FILE_NAME, Redactor, count_lines};
+use jarvis_observability::{
+    LOG_FILE_NAME, MAX_LOG_FILE_BYTES, Redactor, log_storage_stats, read_tail,
+};
 use jarvis_protocol::{MAX_SUPPORTED_PROTOCOL, MIN_SUPPORTED_PROTOCOL, PROTOCOL_VERSION};
 use jarvis_storage::{AppPaths, ConfigStore, CredentialStore, DatabaseState, inspect_database};
 
@@ -725,35 +727,70 @@ fn check_service(paths: &AppPaths) -> CheckResult {
 fn check_logs(paths: &AppPaths) -> CheckResult {
     const NAME: &str = "logs";
     let path = paths.logs().join(LOG_FILE_NAME);
-    match count_lines(&path) {
-        Ok(0) => CheckResult::from_findings(
+    let Ok(stats) = log_storage_stats(&path) else {
+        return CheckResult::from_findings(
+            NAME,
+            vec![Finding::new(
+                FindingCode::LogsUnreadable,
+                safe("managed log metadata could not be read"),
+            )],
+        );
+    };
+    if stats.over_limit {
+        return CheckResult::from_findings(
+            NAME,
+            vec![
+                Finding::new(
+                    FindingCode::LogsOverLimit,
+                    safe("a managed log segment exceeds the retention limit"),
+                )
+                .with_evidence("active_bytes", stats.active_bytes.to_string())
+                .with_evidence("total_bytes", stats.total_bytes.to_string())
+                .with_evidence("maximum_segment_bytes", MAX_LOG_FILE_BYTES.to_string()),
+            ],
+        );
+    }
+    if stats.active_bytes == 0 {
+        return CheckResult::from_findings(
             NAME,
             vec![Finding::new(
                 FindingCode::LogsEmpty,
-                safe("no log records have been written yet"),
+                safe("the active log contains no records"),
             )],
-        ),
-        Ok(count) => CheckResult {
+        );
+    }
+    // Inspect only a bounded sample, not an unbounded count of every record.
+    let readable = read_tail(&path, 1).is_ok_and(|tail| {
+        tail.last().is_some_and(|line| {
+            serde_json::from_str::<serde_json::Value>(&line.text)
+                .is_ok_and(|record| record.is_object())
+        })
+    });
+    if readable {
+        CheckResult {
             name: NAME,
             outcome: Outcome::Passed,
             findings: vec![
                 Finding::new(
                     FindingCode::LogsReadable,
-                    safe("the structured log is readable"),
+                    safe("recent structured log sample is readable and segment sizes are bounded"),
                 )
-                .with_evidence("records", count.to_string()),
+                .with_evidence("active_bytes", stats.active_bytes.to_string())
+                .with_evidence("total_bytes", stats.total_bytes.to_string())
+                .with_evidence("maximum_segment_bytes", MAX_LOG_FILE_BYTES.to_string()),
             ],
-        },
-        Err(error) => CheckResult::from_findings(
+        }
+    } else {
+        CheckResult::from_findings(
             NAME,
             vec![
                 Finding::new(
-                    FindingCode::PathsUnavailable,
-                    safe("the structured log could not be read"),
+                    FindingCode::LogsUnreadable,
+                    safe("the bounded log sample contains no readable structured record"),
                 )
-                .with_evidence("detail", bounded(&error.to_string())),
+                .with_evidence("active_bytes", stats.active_bytes.to_string()),
             ],
-        ),
+        )
     }
 }
 
@@ -854,6 +891,63 @@ pub const fn runtime_source_name(source: jarvis_storage::RuntimePathSource) -> &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_diagnosis_checks_sizes_and_sample_without_mutating_evidence() {
+        let root =
+            std::env::temp_dir().join(format!("jarvis-log-doctor-{}", jarvis_core::scratch_tag()));
+        let paths = AppPaths::from_root(&root).unwrap_or_else(|error| panic!("paths: {error}"));
+        fs::create_dir_all(paths.logs()).unwrap_or_else(|error| panic!("mkdir: {error}"));
+        let path = paths.logs().join(LOG_FILE_NAME);
+        assert_eq!(
+            check_logs(&paths).findings[0].code(),
+            FindingCode::LogsEmpty
+        );
+        fs::write(&path, b"{\"ok\":true}\n").unwrap_or_else(|error| panic!("write: {error}"));
+        let healthy = check_logs(&paths);
+        assert_eq!(healthy.findings[0].code(), FindingCode::LogsReadable);
+        assert!(
+            healthy.findings[0]
+                .evidence()
+                .iter()
+                .any(|(key, _)| key == "active_bytes")
+        );
+        assert!(
+            !healthy.findings[0]
+                .evidence()
+                .iter()
+                .any(|(key, _)| key == "records")
+        );
+
+        let archive = paths.logs().join(format!("{LOG_FILE_NAME}.2"));
+        let file = fs::File::create(&archive).unwrap_or_else(|error| panic!("create: {error}"));
+        file.set_len(MAX_LOG_FILE_BYTES + 1)
+            .unwrap_or_else(|error| panic!("size: {error}"));
+        drop(file);
+        let over = check_logs(&paths);
+        assert_eq!(over.findings[0].code(), FindingCode::LogsOverLimit);
+        assert_eq!(over.outcome, Outcome::Failed);
+        assert_eq!(
+            fs::metadata(&archive)
+                .unwrap_or_else(|error| panic!("metadata: {error}"))
+                .len(),
+            MAX_LOG_FILE_BYTES + 1
+        );
+        fs::remove_file(&archive).unwrap_or_else(|error| panic!("remove fixture: {error}"));
+
+        for invalid in [b"not JSON\n".as_slice(), b"{\"unfinished\":", b"\xff\n"] {
+            fs::write(&path, invalid).unwrap_or_else(|error| panic!("write: {error}"));
+            assert_eq!(
+                check_logs(&paths).findings[0].code(),
+                FindingCode::LogsUnreadable
+            );
+            assert_eq!(
+                fs::read(&path).unwrap_or_else(|error| panic!("read: {error}")),
+                invalid
+            );
+        }
+        jarvis_core::remove_scratch_dir(&root);
+    }
 
     /// **Both branches of the sandbox finding, asserted directly rather than through whatever host runs the
     /// suite.**

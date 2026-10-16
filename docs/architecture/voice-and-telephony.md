@@ -1,5 +1,7 @@
 # Voice And Telephony
 
+> **Current versus future:** browser voice and optional ElevenLabs synthesis are implemented; new CLI onboarding requires the owner's working ElevenLabs key. The owner has reported successful outbound calls through an ElevenLabs agent. Local browser-independent speech, general inbound/provider-neutral telephony and vendor-shaped streaming transports below remain separate unshipped or deferred targets. See [phone limits](../user/phone.md) and [the backlog](../../TODO.md).
+
 ## Boundary
 
 Voice is a client/channel of JARVIS. It can transport audio, text, interruptions, call controls, and provider metadata, but it does not own canonical identity, reasoning policy, tools, memory, workflow state, approvals, or audit.

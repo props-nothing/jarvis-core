@@ -1,12 +1,14 @@
 # Storage Architecture
 
+> **Current local profile:** SQLite and private profile files are implemented. Secrets are permission-protected files; OS keychain storage is the unshipped P11-015 target. PostgreSQL/server mode, complete workflow storage and some conceptual entities below are design contracts, not claims that every repository or table exists. SQL migrations are executable truth.
+
 ## Modes
 
 ### Local mode
 
 - SQLite is canonical structured storage.
 - Local application-data directories hold large artifacts.
-- The OS keychain holds secret material; the database stores `SecretRef` identifiers.
+- Private profile files hold current keys/OAuth grants; configuration exposes references rather than values. An OS-backed keychain with explicit fallback and migration remains a target (`P11-015`).
 - SQLite full-text search is available before semantic retrieval.
 
 ### Server mode

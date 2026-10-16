@@ -52,7 +52,7 @@ Credential presence never grants tool authority. New servers retain the normal u
 
 Real-child tests prove intended-child injection, sibling isolation, pre-spawn missing-key refusal, stderr suppression, result/identity/schema/error redaction, and re-resolution on rotation/removal. A real-profile-storage-to-host test checks key status, connection success, removal and unchanged approval posture. CLI process tests and the console DOM test cover value-free management paths.
 
-An ignored opt-in test verifies a selected native GitHub MCP v2.0.2 binary, discovers `get_me` and makes only that read with an owner-supplied private key file. It is not automatically run and never prints the returned account. The separate approved/denied disposable GitHub write remains an owner-run check. [The backlog](../../TODO.md#credential-backed-local-mcp-2026-10-15) records exact commands and results; no provider acceptance is implied by fixture success.
+An ignored opt-in test verifies a selected native GitHub MCP v2.0.2 binary, discovers `get_me` and makes only that read with an owner-supplied private key file. It is not automatically run and never prints the returned account. The separate approved/denied disposable GitHub write remains an owner-run check. [The backlog](../history/todo-owner-evidence-through-2026-10-16.md#credential-backed-local-mcp-2026-10-15) records exact commands and results; no provider acceptance is implied by fixture success.
 
 ## Alternatives
 

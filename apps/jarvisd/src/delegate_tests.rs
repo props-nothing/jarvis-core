@@ -513,6 +513,9 @@ async fn a_full_house_points_at_the_list() {
     for index in 0..MAX_ACTIVE_SUBAGENTS {
         start(&fixture, &format!("{DELEGATED_NOTICE}task {index}")).await;
     }
+    for index in 0..60 {
+        start(&fixture, &format!("unrelated newer work {index}")).await;
+    }
     let parent = start(&fixture, "one more").await;
     let model = parent_model(vec![
         Turn::tool_call(
@@ -526,4 +529,15 @@ async fn a_full_house_points_at_the_list() {
     let results = tool_results(&model);
     assert!(results[0].contains(r#""outcome":"refused""#), "{results:?}");
     assert!(results[0].contains("jarvis.agent.list"), "{results:?}");
+    let listing = start(&fixture, "find the older children").await;
+    let model = parent_model(vec![
+        Turn::tool_call("list", LIST_TOOL, "{}"),
+        Turn::answer("listed"),
+    ]);
+    drive_parent(&fixture, &model, &listing.run_id).await;
+    let listed = tool_results(&model);
+    let page: serde_json::Value =
+        serde_json::from_str(&listed[0]).unwrap_or_else(|error| panic!("list JSON: {error}"));
+    assert_eq!(page["running"], 4);
+    assert_eq!(page["agents"].as_array().map(Vec::len), Some(4));
 }

@@ -52,7 +52,7 @@ flowchart TB
     end
 
     subgraph Data
-        Local[SQLite + local object files + OS keychain]
+        Local[SQLite + local object files + private profile secrets]
         Server[PostgreSQL + pgvector + object storage + secret manager]
     end
 
@@ -132,7 +132,7 @@ sequenceDiagram
     A-->>U: Stream activity and final response
 ```
 
-The runtime never receives a credential. It receives tool descriptions and scoped handles. A tool request returns to the application and policy layers before any effect occurs.
+Native model requests receive tool descriptions and scoped handles, not JARVIS credential values. JARVIS-owned tool requests return through application policy before execution. External ACP agents use their own authentication and native tools under task approval; these are host processes, and a scoped JARVIS tool bridge remains separate work.
 
 ## Proactive Event Flow
 
@@ -163,7 +163,7 @@ sequenceDiagram
 
 - one `jarvisd` per profile
 - SQLite with write-ahead logging and local object directory
-- OS keychain for secret material
+- private profile secret files today; OS keychain storage remains a target (`P11-015`)
 - Unix socket or Windows named pipe for local clients
 - loopback HTTP only when needed by browser, OAuth, MCP HTTP, or voice callbacks
 - per-user service, never machine-wide by default

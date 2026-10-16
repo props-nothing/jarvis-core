@@ -52,6 +52,9 @@ pub use recall::{MAX_RECALL_CANDIDATES, read_task_memory_candidates};
 #[path = "memory_browse_repository.rs"]
 mod browse;
 pub use browse::read_memory_discovery_page;
+#[path = "memory_correction_repository.rs"]
+mod correction;
+pub use correction::replace_memory;
 
 /// The kinds of thing an entity can be.
 ///
@@ -509,6 +512,17 @@ pub async fn link_memory_entity(
     memory_id: MemoryId,
     entity: EntityRef,
 ) -> Result<(), DatabaseError> {
+    link_memory_entity_on(database.pool(), memory_id, entity).await
+}
+
+async fn link_memory_entity_on<'c, E>(
+    executor: E,
+    memory_id: MemoryId,
+    entity: EntityRef,
+) -> Result<(), DatabaseError>
+where
+    E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
+{
     sqlx::query(
         "INSERT INTO memory_entities (memory_id, entity_id, matched_by) VALUES (?1, ?2, ?3) \
          ON CONFLICT (memory_id, entity_id) DO UPDATE SET matched_by = \
@@ -525,7 +539,7 @@ pub async fn link_memory_entity(
     .bind(memory_id.to_string())
     .bind(entity.entity_id().to_string())
     .bind(entity.matched_by().as_str())
-    .execute(database.pool())
+    .execute(executor)
     .await
     .map(|_| ())
     .map_err(|source| DatabaseError::Sqlite {

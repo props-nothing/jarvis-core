@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-10-13
 
+**Amended by:** [ADR-0222](0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md) makes both start names durable queued jobs with in-place defaults and no imposed total deadline; [ADR-0224](0224-coding-waits-and-verification-preserve-real-task-outcomes.md) preserves quiet waits and independent verification. The original evidence below remains historical.
+
 ## Context
 
 `jarvis.code.delegate` waits for an ACP coding agent inside one tool call, whose platform limit is ten minutes (the task itself was capped at seven). Real coding jobs take longer and the owner should not need an open chat while the agent works. The result, branch and reason for a failure must survive a daemon restart, but restarting an agent automatically after a crash could repeat edits or commands.

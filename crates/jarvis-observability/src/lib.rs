@@ -8,7 +8,8 @@ mod logging;
 mod redact;
 
 pub use logging::{
-    DEFAULT_TAIL_LINES, LOG_FILE_NAME, LogLine, Logging, LoggingError, MAX_TAIL_LINES, count_lines,
-    read_tail,
+    DEFAULT_TAIL_LINES, LOG_FILE_NAME, LogLine, LogStorageStats, Logging, LoggingError,
+    MAX_LOG_FILE_BYTES, MAX_TAIL_BYTES, MAX_TAIL_LINES, RETAINED_LOG_FILES, count_lines,
+    log_storage_stats, read_tail,
 };
 pub use redact::{MAX_LINE_BYTES, MAX_SECRETS, MIN_SECRET_BYTES, Redactor};

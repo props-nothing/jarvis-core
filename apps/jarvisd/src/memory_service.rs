@@ -46,7 +46,7 @@ use jarvis_storage::{
     archive_session_summaries, count_memory_entity_links, count_messages, find_entity,
     find_memory_including_deleted, load_local_identity, purge_memory, read_all_memories,
     read_retrievable_memories, read_session_summaries, read_unsummarized_ranges,
-    read_workspace_memories, record_memory, record_summary,
+    read_workspace_memories, record_memory, record_summary, replace_memory,
 };
 
 /// The most claims one listing, search, or export page returns.
@@ -544,16 +544,14 @@ impl MemoryService {
             reason: "unkeyable",
             detail: format!("{error}"),
         })?;
-        record_memory(&self.database, &replacement, &key).await?;
-
-        // The original is archived **after** the replacement is durable. A crash between them leaves two
-        // current claims rather than none, which is the recoverable direction: the user can see both and
-        // correct again, whereas archiving first would leave no current claim for a correction that never
-        // landed.
-        apply_memory_transition(
+        // Recheck the inspected version and lifecycle in the transaction that writes both claims.
+        // A refused correction must not leave an active replacement or incomplete entity links.
+        replace_memory(
             &self.database,
             memory_id,
-            jarvis_storage::MemoryTransition::ReplaceWith(replacement.id()),
+            request.expected_version,
+            &replacement,
+            &key,
             UtcTimestamp::now(&SystemClock),
         )
         .await?;
@@ -1688,6 +1686,49 @@ mod tests {
             claim: None,
             supersedes: None,
         }
+    }
+
+    #[tokio::test]
+    async fn correcting_an_already_superseded_memory_leaves_no_new_claim() {
+        let (service, database, _profile) = service().await;
+        let subject = entity(&database).await;
+        let original = service
+            .remember(&remember_request(&subject, "Prefers dark roast coffee"))
+            .await
+            .unwrap_or_else(|error| panic!("remember: {error}"));
+        let request = |content: &str, expected_version| CorrectMemoryRequest {
+            content: content.to_owned(),
+            expected_version,
+            entity_ids: None,
+        };
+        service
+            .correct(
+                &original.memory_id,
+                &request("Prefers light roast coffee", original.version),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("first correction: {error}"));
+        let archived = service
+            .read(&original.memory_id)
+            .await
+            .unwrap_or_else(|error| panic!("read: {error}"));
+        assert!(matches!(
+            service
+                .correct(
+                    &original.memory_id,
+                    &request("Prefers herbal tea", archived.reference.version)
+                )
+                .await,
+            Err(MemoryServiceError::Conflict)
+        ));
+        let exported = service
+            .export(20, 0)
+            .await
+            .unwrap_or_else(|error| panic!("export: {error}"));
+        assert_eq!(
+            exported.count, 2,
+            "a failed correction must not insert a third claim"
+        );
     }
 
     /// **The whole lifecycle, end to end.** Remember, list, read, correct, and forget, with each step's

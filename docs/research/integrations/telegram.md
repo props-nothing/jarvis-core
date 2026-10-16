@@ -1,6 +1,6 @@
 ---
 integration: telegram
-status: implemented-against-a-stand-in
+status: implemented
 last_verified: 2026-10-11
 owners: []
 selected_spec_version: "Telegram Bot API 10.3 (announced 2026-08-24)"
@@ -8,6 +8,8 @@ selected_sdk: null
 ---
 
 # Telegram (the Bot API)
+
+**Evidence update (2026-10-16):** the owner reported the real-phone path working on 2026-10-11; that exposed raw Markdown and led to ADR-0186 formatting. The dated fixture evidence below is retained, and does not establish every current formatting, image, approval or failure path on a real account. See [current acceptance](../../../TODO.md).
 
 ## Scope
 
@@ -83,7 +85,9 @@ A Telegram SDK crate (a large dependency for five methods and a second type voca
 
 - Done, offline: a stand-in that follows the contract above drives the daemon through pairing (wrong code, five tries, a second writer, a stranger, a restart), an approval card with two buttons and one tap, a stranger's tap, a late tap, a rejected token never echoed, chunking and the code's shape (9 tests in `telegram_tests.rs`).
 - Done, live against the real daemon and a real model, with the stand-in as Telegram: Settings tab to paired, a question answered, a stranger ignored, an approval card approved by a tap that really created the schedule.
-- **Run by the owner on a real phone (2026-10-11): works** (pairing, answers). That run showed the formatting problem `ADR-0186` fixes. The rest of this item is the original plan and is **partly confirmed by that run**; the keyboard clean-up and typing indicator below were not reported either way.`n- **Formatting facts used (Bot API HTML style, read 2026-10-11):** supported tags `b strong i em u ins s strike del span.tg-spoiler a code pre blockquote`; `pre` may hold `code class="language-x"`; all `<`, `>`, `&` outside tags must be entities; only `&lt; &gt; &amp; &quot;` are named entities; entities may nest except inside `pre` and `code`; no headings, lists or tables exist, so JARVIS draws them. Not proven against Telegram's parser here (no way to call it without a token): what happens with a tag nested in `code`; that is why a message answered `400 ... can't parse entities` is resent as plain text.`n- **(Earlier, unconfirmed at the time:) not done: any call to the real Telegram.** That needs a bot token. Until it is run, these assumptions are unproven: `editMessageText` with an empty `inline_keyboard` removes the buttons (the page states `reply_markup` is optional and does not say what an omitted or empty one does); `sendChatAction` accepts `typing`; a private chat's `chat.id` equals the user's `from.id` (documented elsewhere for private chats, relied on here for the tap check).
+- **Run by the owner on a real phone (2026-10-11): works** (pairing, answers). That run showed the formatting problem `ADR-0186` fixes. The rest of this item is the original plan and is **partly confirmed by that run**; the keyboard clean-up and typing indicator below were not reported either way.
+- **Formatting facts used (Bot API HTML style, read 2026-10-11):** supported tags `b strong i em u ins s strike del span.tg-spoiler a code pre blockquote`; `pre` may hold `code class="language-x"`; all `<`, `>`, `&` outside tags must be entities; only `&lt; &gt; &amp; &quot;` are named entities; entities may nest except inside `pre` and `code`; no headings, lists or tables exist, so JARVIS draws them. Not proven against Telegram's parser here (no way to call it without a token): what happens with a tag nested in `code`; that is why a message answered `400 ... can't parse entities` is resent as plain text.
+- **(Earlier, unconfirmed at the time:) not done: any call to the real Telegram.** That needs a bot token. Until it is run, these assumptions are unproven: `editMessageText` with an empty `inline_keyboard` removes the buttons (the page states `reply_markup` is optional and does not say what an omitted or empty one does); `sendChatAction` accepts `typing`; a private chat's `chat.id` equals the user's `from.id` (documented elsewhere for private chats, relied on here for the tap check).
 
 ## Unresolved Questions
 

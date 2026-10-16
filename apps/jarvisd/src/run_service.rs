@@ -34,9 +34,10 @@ use jarvis_protocol::{
     rest_error, safe,
 };
 use jarvis_storage::{
-    API_SESSION_CHANNEL, DatabaseError, LinkKind, SessionTarget, SqliteDatabase, StartRunInput,
-    find_approval, find_project, find_run, link_project, load_local_identity, project_for,
-    record_decision, request_run_cancellation, settle_parked_run_cancelled, start_run,
+    API_SESSION_CHANNEL, DatabaseError, LinkKind, RunAdmissionLimits, SessionTarget,
+    SqliteDatabase, StartRunInput, find_approval, find_project, find_run, link_project,
+    load_local_identity, project_for, record_decision, request_run_cancellation,
+    settle_parked_run_cancelled, start_run,
 };
 
 /// A run use-case failure that maps onto a status and the shared error envelope.
@@ -48,6 +49,10 @@ pub struct RunServiceError {
 }
 
 impl RunServiceError {
+    pub(crate) fn is_at_capacity(&self) -> bool {
+        self.status == StatusCode::TOO_MANY_REQUESTS
+    }
+
     fn new(status: StatusCode, code: ErrorCode, message: &str) -> Self {
         Self {
             status,
@@ -90,6 +95,27 @@ impl RunService {
     pub fn start(
         &self,
         request: &StartRunRequest,
+    ) -> impl std::future::Future<Output = Result<RunReply, RunServiceError>> + '_ {
+        self.start_with_admission(request, None)
+    }
+
+    pub(crate) async fn start_delegated(
+        &self,
+        request: &StartRunRequest,
+    ) -> Result<RunReply, RunServiceError> {
+        let limits = RunAdmissionLimits::new(
+            crate::delegate::DELEGATED_NOTICE,
+            crate::delegate::MAX_ACTIVE_SUBAGENTS,
+            crate::delegate::MAX_UNSETTLED_SUBAGENTS,
+        )
+        .map_err(|error| map_database_error(&error))?;
+        self.start_with_admission(request, Some(limits)).await
+    }
+
+    fn start_with_admission(
+        &self,
+        request: &StartRunRequest,
+        admission_limits: Option<RunAdmissionLimits>,
     ) -> impl std::future::Future<Output = Result<RunReply, RunServiceError>> + '_ {
         let objective = request.objective.trim().to_owned();
         let idempotency_key = request.idempotency_key.clone();
@@ -171,6 +197,12 @@ impl RunService {
             )
             .map_err(|error| map_database_error(&error))?;
 
+            let input = match admission_limits {
+                Some(limits) => input
+                    .with_admission_limits(limits)
+                    .map_err(|error| map_database_error(&error))?,
+                None => input,
+            };
             let started = start_run(&self.database, &input)
                 .await
                 .map_err(|error| map_database_error(&error))?;
@@ -366,6 +398,11 @@ fn map_identity_error(error: &DatabaseError) -> RunServiceError {
 /// well-formed and simply absent, so blaming the caller's content would be wrong.
 fn map_database_error(error: &DatabaseError) -> RunServiceError {
     match error {
+        DatabaseError::RunCapacityExceeded => RunServiceError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::Conflict,
+            "the sub-agent working or unfinished limit has been reached; inspect jarvis.agent.list and collect results or answer pending approvals",
+        ),
         DatabaseError::RunNotFound => RunServiceError::new(
             StatusCode::NOT_FOUND,
             ErrorCode::Validation,

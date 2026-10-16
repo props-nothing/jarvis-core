@@ -34,7 +34,7 @@ After the named MCP key slice, the owner asked for easier Settings setup, prefer
 
 The implementation is accepted only with callback forgery/replay/expiry tests, real local HTTP token/identity/refresh failure fixtures, persisted grant restore and disconnect/concurrency checks; HTTP request tests prove current-token lookup, endpoint confinement and SSE bounds; console tests cover write-only secret clearing, validated out-of-band provider navigation, no browser storage, saved-versus-live status and no automatic restart. The callback and all mutation/status endpoints retain their separate public/owner-authenticated boundaries.
 
-Exact commands/results and outstanding provider checks belong in [the acceptance ledger](../../TODO.md#oauth-first-settings-connections-2026-10-15). Live browser consent requires the owner's registered app and is not proven by mocks. Do not call the GitHub connection live-verified until that check and a remote read through the real provider pass.
+Exact commands/results and outstanding provider checks belong in [the acceptance ledger](../history/todo-owner-evidence-through-2026-10-16.md#oauth-first-settings-connections-2026-10-15). Live browser consent requires the owner's registered app and is not proven by mocks. Do not call the GitHub connection live-verified until that check and a remote read through the real provider pass.
 
 ## Alternatives
 

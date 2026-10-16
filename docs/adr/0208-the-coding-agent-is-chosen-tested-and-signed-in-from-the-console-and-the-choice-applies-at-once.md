@@ -5,7 +5,7 @@ Date: 2026-10-13
 
 ## Context
 
-`ADR-0207` hands coding tasks to an ACP agent, but choosing one meant `jarvis config set code_agent npx -y …` in a terminal and then a restart, with a test only by running a real task. The owner asked for the setup to be easy from the console, and for more agents than Copilot and Gemini, ChatGPT (Codex) among them. Reading the Codex adapter showed that agents need more than a launch command: the adapter offers two sign-in methods (`api-key`, `chat-gpt`) through ACP's `authenticate`, and it made a session without asking for one, so a handshake that succeeds does not show that the agent is usable.
+`ADR-0230` hands coding tasks to an ACP agent, but choosing one meant `jarvis config set code_agent npx -y …` in a terminal and then a restart, with a test only by running a real task. The owner asked for the setup to be easy from the console, and for more agents than Copilot and Gemini, ChatGPT (Codex) among them. Reading the Codex adapter showed that agents need more than a launch command: the adapter offers two sign-in methods (`api-key`, `chat-gpt`) through ACP's `authenticate`, and it made a session without asking for one, so a handshake that succeeds does not show that the agent is usable.
 
 ## Decision
 

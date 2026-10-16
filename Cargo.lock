@@ -1518,6 +1518,7 @@ name = "jarvis-observability"
 version = "0.1.0"
 dependencies = [
  "jarvis-core",
+ "serde_json",
  "thiserror",
  "tracing",
  "tracing-subscriber",

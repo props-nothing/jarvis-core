@@ -36,7 +36,7 @@ The workspace is taken from the stored run and the destination ceiling from mode
 - A deterministic 30-question English/Dutch fixture benchmark retrieves the expected old fact first in 30/30 cases; the previous newest-24 candidate baseline contains 0/30. This measures retrieval postconditions, not a live model's answer quality.
 - A scripted-model executor test inspects the actual model request and its stored selection event, not just an assistant's report.
 - Correction/forgetting and provenance/fence/token-accounting tests exercise the real storage and conversion paths.
-- Exact commands and current results are recorded in [the acceptance ledger](../../TODO.md#owner-selected-task-aware-memory-2026-10-15). Owner-account/live-model and native macOS/Linux verification remain open.
+- Exact commands and current results are recorded in [the acceptance ledger](../history/todo-owner-evidence-through-2026-10-16.md#owner-selected-task-aware-memory-2026-10-15). Owner-account/live-model and native macOS/Linux verification remain open.
 
 ## Alternatives
 

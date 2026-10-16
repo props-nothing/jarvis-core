@@ -183,7 +183,7 @@ No single signal may dominate by accident. Store component scores and the final 
 
 Native records include fenced memory IDs, source references, confidence and validity metadata, sized together with the claim. The context event records references and selection reasons without copying claim text. Ordinary context fallback is labelled as such, not as a question match. Shared keyword normalization follows stored search keys' Unicode/punctuation rules; English/Dutch question filler removal applies only to native task queries, not canonical keys.
 
-This is not an embedding index, alias/relationship traversal, or automatic project/file retrieval. The scan uses existing search keys and bounds results/pages, not total database work. The [user guide](../user/memory.md) and [acceptance ledger](../../TODO.md#owner-selected-task-aware-memory-2026-10-15) distinguish tested fixture behavior from the outstanding live-provider and corpus-latency checks.
+This is not an embedding index, alias/relationship traversal, or automatic project/file retrieval. The scan uses existing search keys and bounds results/pages, not total database work. The [user guide](../user/memory.md) and [acceptance ledger](../history/todo-owner-evidence-through-2026-10-16.md#owner-selected-task-aware-memory-2026-10-15) distinguish tested fixture behavior from the outstanding live-provider and corpus-latency checks.
 
 ## Context Assembly
 

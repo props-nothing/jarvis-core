@@ -1,5 +1,7 @@
 # Security Architecture And Threat Model
 
+> **Current execution limits:** canonical JARVIS tool authorization is deterministic, but approved commands, ACP agents and managed development processes execute with owner OS privileges. Native agent tools do not all re-enter JARVIS. Worktrees and initial-directory checks are not filesystem/network isolation. Current secrets use private files, not keychain encryption. See [coding trust boundaries](../user/code-agents.md#review-and-trust-boundaries) and [SECURITY.md](../../SECURITY.md).
+
 ## Security Objective
 
 JARVIS handles personal context and can create real-world effects. Its primary objective is to ensure that only an authenticated, authorized actor operating within explicit workspace policy can cause a bounded capability to execute, while preserving evidence and protecting secrets and personal data.

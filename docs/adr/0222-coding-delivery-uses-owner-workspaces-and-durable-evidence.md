@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-15
-- Supersedes: the mandatory-worktree, automatic-commit and fixed-total-deadline defaults in ADR-0207/0209; other protocol and ownership decisions remain.
+- Supersedes: the mandatory-worktree, automatic-commit and fixed-total-deadline defaults in ADR-0230/0209; other protocol and ownership decisions remain.
 
 ## Context
 
@@ -28,7 +28,7 @@ Handshake, HTTP, file/output sizes and per-check deadlines remain resource/recov
 
 ## Verification
 
-The 2026-10-16 release repair restores the shared resolver's support for canonical absolute directories retained by queued tasks and continuation, with current granted-root checks reapplied before execution. New regressions refuse outside directories and ambiguous relative matches, while duplicate grants resolving to the same directory remain unambiguous. See the [release repair ledger](../../TODO.md#owner-requested-release-build-repair-2026-10-16) for focused and workspace results.
+The 2026-10-16 release repair restores the shared resolver's support for canonical absolute directories retained by queued tasks and continuation, with current granted-root checks reapplied before execution. New regressions refuse outside directories and ambiguous relative matches, while duplicate grants resolving to the same directory remain unambiguous. See the [release repair ledger](../history/todo-owner-evidence-through-2026-10-16.md#owner-requested-release-build-repair-2026-10-16) for focused and workspace results.
 
 Regression coverage must demonstrate non-Git/dirty-folder in-place editing, no automatic commit, ambiguous/outside roots refused, no omitted-deadline expiry, startup/queued cancellation, request recovery, schema-28 task/activity retention and full-brief approval/denial semantics. Skill resources, hostile paths/links/frontmatter and oversized reports must fail closed. Real managed HTTP preview readiness must remain browser-unverified. Public GitHub download is an explicit ignored network smoke into disposable storage, not package/script execution or owner-account acceptance.
 

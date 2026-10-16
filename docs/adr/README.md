@@ -224,8 +224,6 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0205](0205-the-owner-sets-the-call-limits-and-can-delete-unused-temporary-tool-servers.md) | The owner sets the call limits and can delete unused temporary tool servers | Accepted |
 | [0206](0206-the-phone-agent-gets-a-callback-through-a-sub-agent-not-a-phone-tool.md) | The phone agent gets a callback through a sub-agent, not a phone tool | Accepted |
 | [0207](0207-a-tool-the-owner-trusted-runs-without-a-console-question-during-the-owners-own-phone-call.md) | A tool the owner trusted runs without a console question during the owner's own phone call | Accepted |
-| [0206](0206-jarvis-keeps-a-search-index-over-the-folders-the-owner-granted-and-answers-with-the-passage-and-its-source.md) | JARVIS keeps a search index over the folders the owner granted, and answers with the passage and its source | Accepted |
-| [0207](0207-coding-tasks-go-to-an-acp-agent-in-its-own-git-worktree-and-its-permission-requests-are-answered-by-policy.md) | Coding tasks go to an ACP agent in its own git worktree, and its permission requests are answered by policy | Accepted |
 | [0208](0208-the-coding-agent-is-chosen-tested-and-signed-in-from-the-console-and-the-choice-applies-at-once.md) | The coding agent is chosen, tested and signed in from the console, and the choice applies at once | Accepted |
 | [0209](0209-background-coding-tasks-return-immediately-keep-durable-status-and-notify-the-owner.md) | Background coding tasks return immediately, keep durable status and notify the owner | Accepted |
 | [0210](0210-coding-task-activity-is-bounded-durable-and-not-a-result.md) | Coding-task activity is bounded, durable and not a result | Accepted |
@@ -244,3 +242,14 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0223](0223-memory-discovery-browses-before-guessing-and-reads-by-id.md) | Memory discovery browses before guessing and reads by ID | Accepted |
 | [0224](0224-coding-waits-and-verification-preserve-real-task-outcomes.md) | Coding waits and verification preserve real task outcomes | Accepted |
 | [0225](0225-hud-controls-use-explicit-state-and-task-navigation.md) | HUD controls use explicit state and task navigation | Accepted |
+| [0226](0226-logs-share-redaction-and-bounded-retention.md) | Logs share redaction and bounded retention | Accepted |
+| [0227](0227-transactional-memory-corrections-commit-one-versioned-change.md) | Transactional memory corrections commit one versioned change | Accepted |
+| [0228](0228-native-subagent-admission-counts-and-starts-in-one-transaction.md) | Native subagent admission counts and starts in one transaction | Accepted |
+| [0229](0229-jarvis-keeps-a-search-index-over-the-folders-the-owner-granted-and-answers-with-the-passage-and-its-source.md) | JARVIS keeps a search index over the folders the owner granted, and answers with the passage and its source | Accepted |
+| [0230](0230-coding-tasks-go-to-an-acp-agent-in-its-own-git-worktree-and-its-permission-requests-are-answered-by-policy.md) | Coding tasks go to an ACP agent in its own git worktree, and its permission requests are answered by policy | Accepted |
+
+## Historical identifier aliases
+
+Two decisions accidentally reused phone-decision IDs. The canonical records are now ADR-0229 (file knowledge search, formerly the other ADR-0206) and ADR-0230 (coding delegation, formerly the other ADR-0207). Their old descriptive filenames remain link aliases; bare historical numbers require context. The accepted phone decisions retain ADR-0206 and ADR-0207.
+
+A later amendment must be linked from the original record as well as this index. Canonical ADR headings and filename prefixes are unique; an alias uses a Historical ADR heading.

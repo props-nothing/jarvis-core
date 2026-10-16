@@ -1,5 +1,7 @@
 # Runtime And Model Architecture
 
+> **Current implementation (2026-10-16):** native Rust runs plus an ACP v1 coding client. MCP supplies tool interoperability. ADR-0167 supersedes a private JARVIS runtime-worker protocol and per-framework workers; ADR-0222/0224 define current in-place queued coding. The generic domain-port sketches and selection policy below are design targets where no implementation is named. See [coding behavior and limits](../user/code-agents.md).
+
 ## Three Separate Concepts
 
 - A **provider** authenticates and transports model requests, for example OpenAI, Anthropic, Google, Ollama, or an OpenAI-compatible endpoint.
@@ -49,7 +51,7 @@ Terminal states are immutable: once a run is `completed`, `cancelled`, or `faile
 
 ## Domain Port
 
-The exact Rust API will be finalized in `P7-001`, but it should preserve this shape:
+This original generic port is a design sketch, not the current ACP API or an additional protocol to implement. ACP-native lifecycle operations are translated by `jarvis-runtimes`; introduce a wider domain port only when another supported runtime needs it:
 
 ```rust
 #[async_trait]
@@ -105,7 +107,7 @@ The supervisor owns:
 - restart backoff and circuit breaking
 - native-session binding and cleanup
 
-An external runtime must request host tools through the runtime protocol. Direct native tools are disabled unless a separate sandbox policy and audit adapter intentionally enables them. A runtime's internal memory/checkpoints may support continuation, but they are runtime state, not canonical user memory.
+Current ACP agents use their own native tools under the owner's task approval and cooperative ACP permission policy. JARVIS does not intercept every native tool, provide whole-host filesystem/network confinement, or restore an ACP session after restart. A worktree is optional review organization, not a sandbox. A scoped agent-to-JARVIS MCP bridge and enforceable optional confinement are separate backlog items. Host-mediated JARVIS tools still use the canonical pipeline. Runtime checkpoints remain adapter state, never canonical user memory.
 
 ## Runtime Selection
 
@@ -120,9 +122,9 @@ Selection is deterministic policy followed by scoring:
 Examples:
 
 - simple answer: native runtime with a low-latency model
-- repository coding: OpenClaw/ACP or another sandboxed coding runtime
+- repository coding: the selected ACP agent, with its host-execution limits explicit
 - provider-independent structured workflow: native workflow engine
-- graph-specific experiment: LangGraph worker
+- graph-specific experiment: only a named requirement can justify a new adapter; prefer existing ACP/MCP contracts
 - private offline task: native runtime with a local model
 
 ## Model Gateway
@@ -222,12 +224,8 @@ Model calls are generally repeatable but may incur cost. Every attempt is record
 
 Tool effects are not model retries. The runtime emits a tool intent; JARVIS executes it through the canonical tool pipeline with its own idempotency and ambiguity rules.
 
-## Adapter Intent
+## Adapter policy
 
-- **OpenClaw:** use for mature agent/channel/coding behaviors through an official runtime, ACP, or gateway contract verified at implementation time.
-- **OpenAI Agents:** run as a Python worker when its runner, sandbox, realtime, or specialist-agent behavior is useful.
-- **LangGraph:** use as a Python worker for a named graph/checkpoint use case, not as the platform-wide workflow database.
-- **ACP:** implement as a general runtime interoperability adapter.
-- **Local models:** expose through the model gateway using documented OpenAI-compatible or native APIs; local does not mean trusted.
+Use the existing ACP client for supported coding agents, and MCP for tool servers. OpenClaw, OpenAI Agents, LangGraph and other frameworks do not each need a JARVIS-specific worker. A native per-framework adapter requires a named unmet requirement and an ADR (ADR-0167). Local models use the model gateway through a documented supported API; local does not mean trusted.
 
-Every adapter requires a current research record, protocol fixtures, version-skew behavior, and a removal/degradation plan.
+Every added adapter requires a current research record, protocol fixtures, version-skew behavior and a removal/degradation plan.

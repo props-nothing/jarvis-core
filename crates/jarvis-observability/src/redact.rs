@@ -65,6 +65,7 @@ pub struct Redactor {
 #[derive(Debug)]
 struct Inner {
     secrets: Vec<String>,
+    escaped_secrets: Vec<String>,
 }
 
 impl Redactor {
@@ -80,17 +81,29 @@ impl Redactor {
         S: Into<String>,
     {
         let mut retained = Vec::new();
+        let mut escaped_secrets = Vec::new();
         for secret in secrets {
             if retained.len() >= MAX_SECRETS {
                 break;
             }
             let secret = secret.into();
             if secret.len() >= MIN_SECRET_BYTES {
+                // JSON and Debug formatters can escape quotes/backslashes in a
+                // known credential. Match that spelling as well as raw text.
+                if let Ok(encoded) = serde_json::to_string(&secret) {
+                    let escaped = &encoded[1..encoded.len() - 1];
+                    if escaped != secret {
+                        escaped_secrets.push(escaped.to_owned());
+                    }
+                }
                 retained.push(secret);
             }
         }
         Self {
-            inner: Arc::new(Inner { secrets: retained }),
+            inner: Arc::new(Inner {
+                secrets: retained,
+                escaped_secrets,
+            }),
         }
     }
 
@@ -113,10 +126,11 @@ impl Redactor {
     /// boundary with an explicit omitted-byte count.
     #[must_use]
     pub fn redact_line(&self, line: &str) -> String {
-        let bounded = truncate_utf8(line, MAX_LINE_BYTES);
-        let mut masked = self.mask_secrets(&bounded);
+        // Mask before truncation: cutting through a known secret first would
+        // leave a credential prefix which no longer matches the full value.
+        let mut masked = self.mask_secrets(line);
         masked = mask_credentials(&masked);
-        masked
+        truncate_utf8(&masked, MAX_LINE_BYTES)
     }
 
     fn mask_secrets(&self, line: &str) -> String {
@@ -124,7 +138,7 @@ impl Redactor {
             return line.to_owned();
         }
         let mut ranges = Vec::new();
-        for secret in &self.inner.secrets {
+        for secret in self.inner.secrets.iter().chain(&self.inner.escaped_secrets) {
             let mut from = 0;
             while let Some(offset) = line[from..].find(secret.as_str()) {
                 let start = from + offset;
@@ -144,7 +158,9 @@ fn truncate_utf8(value: &str, budget: usize) -> String {
     if value.len() <= budget {
         return value.to_owned();
     }
-    let mut end = budget;
+    // Reserve the maximum decimal usize plus the fixed notice before cutting,
+    // so the notice itself cannot exceed the promised byte budget.
+    let mut end = budget.saturating_sub(48);
     while end > 0 && !value.is_char_boundary(end) {
         end -= 1;
     }
@@ -190,10 +206,16 @@ fn key_value_ranges(lower: &[u8], key: &str) -> Vec<(usize, usize)> {
             continue;
         }
         cursor += 1;
-        while cursor < lower.len() && matches!(lower[cursor], b' ' | b'"' | b'\'') {
+        while cursor < lower.len() && lower[cursor] == b' ' {
             cursor += 1;
         }
-        let value_end = value_end(lower, cursor);
+        let value_end = if cursor < lower.len() && matches!(lower[cursor], b'"' | b'\'') {
+            let quote = lower[cursor];
+            cursor += 1;
+            quoted_value_end(lower, cursor, quote)
+        } else {
+            value_end(lower, cursor)
+        };
         if value_end > cursor {
             ranges.push((cursor, value_end));
         }
@@ -270,6 +292,20 @@ fn value_end(lower: &[u8], start: usize) -> usize {
     let mut cursor = start;
     while cursor < lower.len() && !VALUE_TERMINATORS.contains(&lower[cursor]) {
         cursor += 1;
+    }
+    cursor
+}
+
+fn quoted_value_end(lower: &[u8], mut cursor: usize, quote: u8) -> usize {
+    while cursor < lower.len() {
+        if lower[cursor] == quote {
+            break;
+        }
+        cursor = if lower[cursor] == b'\\' {
+            (cursor + 2).min(lower.len())
+        } else {
+            cursor + 1
+        };
     }
     cursor
 }
@@ -424,6 +460,21 @@ mod tests {
         assert!(redacted.contains("truncated"));
         // The truncation notice itself must not create invalid UTF-8.
         assert!(std::str::from_utf8(redacted.as_bytes()).is_ok());
+        assert!(redacted.len() <= MAX_LINE_BYTES);
+    }
+
+    #[test]
+    fn known_secrets_straddling_the_truncation_boundary_leave_no_prefix() {
+        let prefix = "canary-secret-prefix-";
+        let secret = format!("{prefix}{}", "z".repeat(80));
+        let redactor = Redactor::new([secret.clone()]);
+        let line = format!("{}{secret}", "x".repeat(MAX_LINE_BYTES - 30));
+        let redacted = redactor.redact_line(&line);
+        assert!(
+            !redacted.contains(prefix),
+            "truncation leaked a known secret prefix"
+        );
+        assert!(redacted.len() <= MAX_LINE_BYTES);
     }
 
     #[test]

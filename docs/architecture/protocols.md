@@ -1,5 +1,7 @@
 # Protocol Architecture
 
+> **Implementation versus target:** local IPC status/health and authenticated HTTP run/tool surfaces are implemented. External coding uses ACP v1, not a JARVIS-specific worker protocol. The voice compatibility endpoints and full provider-webhook contract below remain deferred targets; current outbound calls use provider polling and generic webhook triggers use a secret path. See [backlog](../../TODO.md) and [coding guide](../user/code-agents.md).
+
 ## Principles
 
 - Domain types are not wire types.
@@ -239,22 +241,11 @@ Classes include authentication, authorization, validation, conflict/version, app
 
 Legacy SSE support is adapter/version driven only when a concrete integration still requires it.
 
-## Runtime Worker Protocol
+## External runtime protocol: ACP
 
-The JARVIS runtime protocol is separate from MCP because it manages an agent execution lifecycle, not just tools/resources.
+ADR-0167 supersedes the proposed private JARVIS worker protocol. The current adapter speaks Agent Client Protocol v1 over bounded stdio: initialize/capability negotiation, session creation, prompt/activity, cooperative permission requests, cancellation and process settlement. Agent-native session handles stay in the adapter.
 
-It supports:
-
-- handshake and capability negotiation
-- start/resume/cancel
-- ordered runtime event stream
-- host-mediated tool requests
-- human/input requests
-- artifacts and usage
-- liveness and graceful settlement
-- opaque native-session binding
-
-Transport may be framed stdio for local workers or authenticated HTTP/WebSocket for remote workers. The same conformance suite applies to both.
+Jobs, full requests, activity and independent verification belong to JARVIS. Restart interrupts unfinished jobs; approved continuation starts a fresh in-place agent rather than restoring a protocol session. Ordinary task approval does not mean every native filesystem/terminal operation enters the JARVIS tool pipeline. A per-launch scoped MCP tool bridge and optional enforceable confinement remain separate work. See [ADR-0222](../adr/0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md) and [ACP research](../research/integrations/acp.md).
 
 ## OpenAI-Compatible Voice Boundary
 
@@ -292,10 +283,10 @@ Track independently:
 - local daemon protocol version
 - REST API major version
 - event schema version
-- runtime protocol version
+- negotiated ACP/runtime-adapter protocol version
 - database schema version
 - configuration schema version
 - connector/tool version
 - negotiated MCP specification version
 
-`jarvis status --json` and `jarvis doctor --json` expose these without secrets. Updates preflight compatibility before replacing a running daemon.
+Target: `jarvis status --json` and `jarvis doctor --json` should expose the applicable compatibility versions without secrets. The complete version inventory and update preflight are release-backlog requirements, not claims that every boundary above has shipped.

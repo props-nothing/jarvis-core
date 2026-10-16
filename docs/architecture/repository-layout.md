@@ -4,11 +4,11 @@
 
 [Documentation](../README.md) / [Architecture map](../../ARCHITECTURE.md) / [Development setup](../development/getting-started.md)
 
-> **Target tree, not an inventory.** The tree below retains planned directories. The live [Cargo workspace](../../Cargo.toml) determines which members exist, and [TODO.md](../../TODO.md) records their delivery evidence. The browser console is composed in `apps/jarvisd`; `frontend/` is the separate product website. Framework-per-directory runtime workers and a Tauri client remain plans, not shipped paths.
+> **Target tree, not an inventory.** The tree below retains planned directories. The live [Cargo workspace](../../Cargo.toml) determines which members exist, and [TODO.md](../../TODO.md) records their delivery evidence. The browser console is composed in `apps/jarvisd`; `frontend/` is the separate product website. Framework-per-directory runtime workers were superseded by ACP/MCP-first integration (ADR-0167); a Tauri client remains demand-gated.
 
 ## Target Tree
 
-Create this tree incrementally. Phase 1 begins with only the six members named in `P1-001`; later crates appear when their behavior is implemented.
+This is a boundary map, not a directory-creation checklist. Keep only components justified by implemented behavior; the original framework-per-worker plan was superseded by ADR-0167. The Cargo workspace is the executable inventory.
 
 Implemented members beyond the initial six include observability, diagnostics, models, MCP identity and transport, sandboxing, web fetch, document handling, connectors, runtimes, tools and voice contracts. A crate existing does not prove that every planned adapter is reachable or verified. `tests/e2e` contains process-level acceptance gates; the backlog records what each gate establishes.
 
@@ -45,12 +45,6 @@ jarvis-core/
 |   |-- jarvis-workflows/        durable events, schedules, workflow workers
 |   |-- jarvis-voice/            voice/call contracts and provider adapters
 |   `-- jarvis-observability/    tracing, metrics, audit sinks, redaction
-|
-|-- runtimes/                    out-of-process runtime workers
-|   |-- openclaw/
-|   |-- openai-agents/
-|   |-- langgraph/
-|   `-- examples/
 |
 |-- extensions/                  separately packaged process/WASI/MCP extensions
 |   |-- manifests/
@@ -350,7 +344,7 @@ If two adapter areas share only a small DTO, keep the DTO in core/protocol rathe
 
 ## External Workers
 
-`runtimes/<name>` contains independently runnable workers and their language-native dependency files. Each worker implements a released JARVIS runtime protocol version and has contract fixtures. It cannot link to private Rust internals.
+External coding agents run through the ACP client in `crates/jarvis-runtimes`; their own packages and credentials remain external. Do not create `runtimes/<framework>` workers or a private JARVIS runtime protocol merely to follow the old target tree. A new adapter needs a named requirement, current research and an ADR.
 
 `extensions/` is for separately distributed capability providers. Prefer MCP, versioned HTTP/stdio, or WASI. Native dynamic libraries are not the default extension ABI.
 

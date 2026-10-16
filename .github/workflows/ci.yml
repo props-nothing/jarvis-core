@@ -42,6 +42,10 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
+      - name: Check documentation links and ADR identifiers
+        run: |
+          node --test scripts/test-docs.mjs
+          node scripts/check-docs.mjs
       - name: Check the console scripts parse
         # The console is plain JavaScript embedded in the daemon, so a syntax slip would otherwise show only as a blank page.
         shell: bash

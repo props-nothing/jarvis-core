@@ -36,6 +36,7 @@ Use a local or hosted OpenAI-compatible model, choose a fallback, and reach the 
 | **Keep a project moving** | Project goals, guidance, journals, recurring schedules, mail/file/webhook triggers, quiet hours, digests and run/token budgets. |
 | **Remember deliberately** | Proposed memories and procedures that the owner approves, with inspectable state rather than a provider-owned chat history. |
 | **Extend its reach** | Managed MCP servers and an opt-in app endpoint; Telegram for phone access. Additional services through existing protocols first. |
+| **Delegate coding** | Queued work in your permitted folder, full skill bundles, independent checks and managed previews. Git/worktrees are opt-in; approved agents run as host processes. |
 | **Stay accountable** | Durable approvals, cancellation, audit records, model usage and evaluation suites. Sub-agents and background work use the same authority boundary. |
 
 See [the user guide](docs/user/quick-start.md), [abilities](docs/user/abilities.md) and [settings](docs/user/settings.md) for setup, defaults and limits.
@@ -70,7 +71,7 @@ For a new setup, the first run guides provider/model selection, requires a worki
 
 **Working assistant:** browser and CLI, Google tools, Telegram, MCP management, approved skills, time-zone schedules and triggers, project journals, model routing and spend guards. The [backlog](TODO.md) records the acceptance evidence and remaining live checks.
 
-**Limited first slices:** outbound calls to listed owner numbers through an ElevenLabs agent have been run live by the owner. ACP coding-agent delegation has recorded ordinary/background Codex task verification and console activity/diff review; real-account console sign-in and real-agent cancellation remain unverified. Completion is not independent test evidence, and a worktree is **not a sandbox**. See [coding agents](docs/user/code-agents.md) and [the roadmap](ROADMAP.md).
+**Limited first slices:** outbound calls to listed owner numbers through an ElevenLabs agent have been run live by the owner. ACP coding has recorded ordinary/background Codex tasks and a dependency-install/check smoke; real-account console sign-in, real-agent cancellation and complete desktop/mobile website acceptance remain open. Jobs default to in-place work without automatic commits or an imposed total deadline. Independent checks report their own outcome; an agent's completion alone is not delivery proof, and host execution is **not a sandbox**. See [coding agents](docs/user/code-agents.md) and [the roadmap](ROADMAP.md).
 
 **Not shipped:** a Tauri desktop client, browser-independent local voice, general telephony, signed public installers and the complete server/multi-device profile. The multi-step durable workflow engine is parked until a named requirement needs more than ordinary runs and schedules.
 

@@ -24,9 +24,9 @@ authority that is not a client, and asking it first is what found a real defect.
 
 The official JSON Schema for `2026-07-28` is a single document published by the specification project. This
 crate vendors the **`$defs` closure reachable from the result types it emits** — 11 definitions, 41 KB,
-extracted by [`extract.ps1`](../../../crates/jarvis-mcp-transport/tests/spec/extract.ps1) — with the source URL,
+extracted by [`extract.ps1`](../../crates/jarvis-mcp-transport/tests/spec/extract.ps1) — with the source URL,
 access date, licence, and extraction rule in
-[`tests/spec/README.md`](../../../crates/jarvis-mcp-transport/tests/spec/README.md).
+[`tests/spec/README.md`](../../crates/jarvis-mcp-transport/tests/spec/README.md).
 
 A **derived** slice rather than a hand-picked one, because a hand-picked set is how a slice quietly stops
 covering the field that changes: nobody notices a definition that *should* have been added.

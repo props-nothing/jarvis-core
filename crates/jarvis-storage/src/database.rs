@@ -108,6 +108,9 @@ impl DaemonStopReason {
 /// Errors produced while opening, checking, backing up, or migrating SQLite.
 #[derive(Debug, Error)]
 pub enum DatabaseError {
+    /// The transaction could not reserve a working or unfinished run slot.
+    #[error("the run admission capacity has been reached")]
+    RunCapacityExceeded,
     /// The requested database path was not absolute.
     #[error("the SQLite database path is not absolute")]
     RelativePath,

@@ -117,9 +117,10 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["http2", 
 #   - `transport-child-process` -- stdio via a spawned child, the standard local MCP shape.
 #   - `transport-streamable-http-client-reqwest` -- the current HTTP transport, on the `reqwest`
 #     already in this graph rather than a second HTTP stack.
-# `server` is OFF: the daemon is a client and host until `P3-009`. `auth` is OFF: JARVIS
-# authorization is not MCP authorization, and the OAuth machinery would be a second, unowned
-# token lifecycle. `macros` is OFF because the `#[tool]`/`#[tool_router]` macros generate a *server*.
+# `server`, `transport-io` and `transport-streamable-http-server` were added for the
+# opt-in JARVIS MCP server in `P3-009`. `auth` remains OFF: JARVIS owns the named
+# credentials and pre-registered OAuth lifecycle in its adapters. `macros` remains
+# OFF because the server binds canonical tool contracts without generated routers.
 # See docs/research/integrations/mcp.md for the measured evidence behind this set.
 rmcp = { version = "=3.4.0", default-features = false, features = [
     "client",

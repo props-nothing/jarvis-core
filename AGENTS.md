@@ -5,8 +5,8 @@ These instructions apply to the entire repository.
 ## Source Of Truth
 
 - Read `docs/architecture/overview.md`, `docs/product/requirements.md`, and `ROADMAP.md` before changing architecture or scope.
-- Treat `example/` as a behavior and migration reference, not as the production architecture.
-- Do not copy code from `example/` into the new platform until its CC BY-NC 4.0 license is confirmed compatible with the target distribution. Prefer a clean-room implementation of documented behavior.
+- The former `example/` is removed. Treat any historical prototype copy and `docs/migration/python-prototype.md` as behavior/migration references, not production architecture.
+- Do not copy historical prototype code into the platform until its CC BY-NC 4.0 license is confirmed compatible with the target distribution. Prefer a clean-room implementation of documented behavior.
 - Keep Rust as the durable control plane. Models, agent frameworks, voice providers, databases, and MCP servers are replaceable adapters.
 
 ## External Integrations
@@ -24,6 +24,7 @@ These instructions apply to the entire repository.
 - Provider SDK types must not cross JARVIS domain boundaries.
 - Canonical memory, permissions, approvals, audit records, and workflow state belong to JARVIS, never to a model or external runtime.
 - All tool calls pass through schema validation, authentication, authorization, risk classification, approval policy, timeout, idempotency where relevant, execution, and audit.
+- This pipeline governs JARVIS-owned tool calls. An approved ACP job or managed process is an explicit host-execution effect; its native tools are not all intercepted. Preserve the documented ADR-0222 boundary and never describe a worktree or initial-directory check as an OS sandbox.
 - Keep approvals light (`docs/adr/0136-an-approval-is-a-yes-or-no-from-the-owner.md`): policy decides what is asked, and the owner answers with one click, one command or one spoken word from any surface holding the local credential. Do not add steps, codes, devices or levels to answering an approval; make the question clearer or ask less often instead.
 - The model may request an effect; deterministic Rust policy decides whether it may happen.
 - SQLite is the default local backend. PostgreSQL plus pgvector is the server and multi-device backend.

@@ -15,7 +15,9 @@
 //!   `jarvis.agent.*` tool from it (see [`is_delegated_objective`]), so delegation is **one level deep**: a
 //!   sub-agent cannot start sub-agents, and no model can multiply itself. The marker is durable, so a sub-agent that
 //!   parks for approval and is resumed after a restart is still one.
-//! - **At most [`MAX_ACTIVE_SUBAGENTS`] are active at once**, so a model cannot fan out without bound.
+//! - **New children require a working slot below [`MAX_ACTIVE_SUBAGENTS`] and an unfinished slot below
+//!   [`MAX_UNSETTLED_SUBAGENTS`].** Counting and starting share a storage transaction. Approval resumption
+//!   retains its own lifecycle; this is admission control, not a scheduler for already-admitted runs.
 //!
 //! # What comes back
 //!
@@ -76,7 +78,7 @@ available to answer questions, so make reasonable assumptions.\n\nTask: ";
 /// The most characters of a task. With the notice it fits a run objective (4,096) with room to spare.
 pub const MAX_TASK_CHARS: usize = 50_000;
 
-/// The most sub-agents running at once.
+/// The working-child count above which a new child is refused.
 pub const MAX_ACTIVE_SUBAGENTS: usize = 4;
 
 /// How long `delegate` waits for a sub-agent before reporting it still running.
@@ -491,45 +493,29 @@ impl AgentTool {
             return Err(refused("the tool surface is shutting down"));
         };
 
-        let workspace = jarvis_storage::load_local_identity(&self.database)
-            .await
-            .map(|identity| identity.workspace_id().to_owned())
-            .map_err(|_| refused("the local identity is not available"))?;
-        let active = self.active_subagents(&workspace).await?;
-        let unsettled = self.unsettled_subagents(&workspace).await?;
-        if unsettled >= MAX_UNSETTLED_SUBAGENTS {
-            return Ok(json!({
-                "outcome": "refused",
-                "run_id": "",
-                "detail": format!(
-                    "{unsettled} sub-agents have not finished (some wait for the user's approval); see them with jarvis.agent.list, collect what is done with jarvis.agent.result and ask the user to answer the pending approvals"
-                ),
-            }));
-        }
-        if active >= MAX_ACTIVE_SUBAGENTS {
-            return Ok(json!({
-                "outcome": "refused",
-                "run_id": "",
-                "detail": format!(
-                    "{active} sub-agents are already running, which is the most at once; see them with jarvis.agent.list and collect one with jarvis.agent.result first"
-                ),
-            }));
-        }
-
         // A sub-agent works in its parent's project, so it knows the folder and the owner's guidance (ADR-0151).
         let project_id = crate::project_context::project_of_call(&self.database, call_id)
             .await
             .map(|(project, _)| project.id);
         let started = self
             .runs
-            .start(&StartRunRequest {
+            .start_delegated(&StartRunRequest {
                 objective: format!("{DELEGATED_NOTICE}{task}"),
                 session_id: None,
                 idempotency_key: None,
                 project_id,
             })
-            .await
-            .map_err(|_| refused("the sub-agent could not be started"))?;
+            .await;
+        let started = match started {
+            Ok(started) => started,
+            Err(error) if error.is_at_capacity() => {
+                return Ok(json!({
+                    "outcome": "refused", "run_id": "",
+                    "detail": "The sub-agent working or unfinished limit has been reached. Inspect jarvis.agent.list, collect results with jarvis.agent.result, or ask the owner to answer pending approvals.",
+                }));
+            }
+            Err(_) => return Err(refused("the sub-agent could not be started")),
+        };
 
         let database = Arc::clone(&self.database);
         let executor = Arc::clone(&self.executor);
@@ -594,33 +580,6 @@ impl AgentTool {
             .await
     }
 
-    /// The sub-agents of the workspace that have not settled, newest first.
-    async fn active_runs(&self, workspace: &str) -> Result<Vec<StoredRun>, AdapterError> {
-        let recent = jarvis_storage::read_recent_runs(&self.database, workspace, 50)
-            .await
-            .map_err(|_| refused("the recent runs could not be read"))?;
-        Ok(recent
-            .into_iter()
-            .filter(|run| !run.state().is_terminal() && is_delegated_objective(run.objective()))
-            .collect())
-    }
-
-    /// Counts the sub-agents that are **working**. One parked for the owner's approval holds no compute, so it does not hold a slot: before
-    /// this, four sub-agents waiting on approvals nobody had answered blocked every new delegation for hours.
-    async fn active_subagents(&self, workspace: &str) -> Result<usize, AdapterError> {
-        Ok(self
-            .active_runs(workspace)
-            .await?
-            .iter()
-            .filter(|run| run.state() != jarvis_core::RunState::AwaitingApproval)
-            .count())
-    }
-
-    /// Counts every sub-agent that has not settled, parked ones included.
-    async fn unsettled_subagents(&self, workspace: &str) -> Result<usize, AdapterError> {
-        Ok(self.active_runs(workspace).await?.len())
-    }
-
     /// `jarvis.agent.list`: every recent sub-agent with its state and the start of its task. The slots are global to the workspace and
     /// were invisible: a model told "4 are running" had no way to find which, so a scheduled run could be blocked for hours by
     /// sub-agents it could not see (the owner's capability audit, cycle 7).
@@ -629,9 +588,14 @@ impl AgentTool {
             .await
             .map(|identity| identity.workspace_id().to_owned())
             .map_err(|_| refused("the local identity is not available"))?;
-        let recent = jarvis_storage::read_recent_runs(&self.database, &workspace, 50)
-            .await
-            .map_err(|_| refused("the recent runs could not be read"))?;
+        let recent = jarvis_storage::read_runs_by_objective_prefix(
+            &self.database,
+            &workspace,
+            DELEGATED_NOTICE,
+            20,
+        )
+        .await
+        .map_err(|_| refused("the recent runs could not be read"))?;
         let mut agents = Vec::new();
         let mut running = 0_usize;
         for run in recent
