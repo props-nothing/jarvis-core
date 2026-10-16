@@ -20,6 +20,10 @@ Hosted follow-up: `8fcd458` / CI `38920832954` passed all native Clippy jobs, de
 
 The isolated daemon job now explicitly builds its sibling MCP peer executable. With the old executable moved aside, the missing-peer guard failed as expected; the exact new build command then made the same test pass. The repair passed 138 MCP tests, four GitHub settings tests, four storage credential tests, all 3,110 default workspace tests (five existing ignored), formatting, strict Clippy, all 32 release-flow regressions and workflow lint locally. No production credential guard or CI assertion was relaxed.
 
+Second hosted follow-up: `b930f73` / CI `38923320820` passed nine jobs, including macOS and all native acceptance gates. The Windows daemon suite passed 834 tests but its real preview fixture exceeded a ten-second startup wait. Give only that Windows fixture 30 seconds and report the last process state/output on failure; preserve all HTTP, occupied-port, browser-honesty and process-stop assertions. A temporary 11-second child-start control failed before the change and passed afterward; a child that never listens still failed at 30 seconds with its stderr in the diagnostic. The ordinary five process tests pass in 1.19s. Final hosted/package verification remains open.
+
+Preview repair validation: formatting, strict all-target/all-feature workspace Clippy and all 3,110 locked default workspace tests passed, with zero failures and five existing ignored tests. The MCP peer was explicitly built and its missing-binary guard enabled. Logs and temporary controls are retained under `artifacts/ci-review/preview-startup-2026-10-16/` in the primary checkout. No workflow, release check or production behavior changed in this repair.
+
 ## Owner-requested settings consistency (2026-10-16)
 
 Follow-up under [ADR-0225](docs/adr/0225-hud-controls-use-explicit-state-and-task-navigation.md).

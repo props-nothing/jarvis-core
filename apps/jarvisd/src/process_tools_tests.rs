@@ -126,18 +126,25 @@ async fn a_real_loopback_preview_is_reachable_but_never_claimed_browser_verified
         .await
         .unwrap();
     let id = answer["process_id"].as_str().unwrap();
-    let status = tokio::time::timeout(Duration::from_secs(10), async {
+    // This is a real child startup check, not a ten-second latency contract.
+    // Loaded Windows runners need more headroom; successful starts do not wait.
+    let startup_limit = Duration::from_secs(if cfg!(windows) { 30 } else { 10 });
+    let mut status = Value::Null;
+    tokio::time::timeout(startup_limit, async {
         loop {
-            let status = tool.status(id).await.unwrap();
+            status = tool.status(id).await.unwrap();
             if status["port_reachable"] == true {
-                break status;
+                break;
             }
             assert_eq!(status["process"]["status"], "running", "{status}");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|error| {
+        let _ = tool.stop(id);
+        panic!("preview startup exceeded {startup_limit:?}: {error}; last status: {status}");
+    });
     assert_eq!(status["browser_verified"], false);
     let body = reqwest::get(status["preview_url"].as_str().unwrap())
         .await
