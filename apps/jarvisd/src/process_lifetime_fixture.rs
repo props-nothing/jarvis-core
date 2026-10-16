@@ -14,23 +14,33 @@ pub(crate) fn command(folder: &Path) -> Value {
         std::fs::write(
             folder.join("child.ps1"),
             r"param([string]$Folder)
-[System.IO.File]::WriteAllText((Join-Path $Folder 'child-ready'), [string]$PID)
-Start-Sleep -Seconds 60
+$PSModuleAutoLoadingPreference = 'None'
+$ErrorActionPreference = 'Stop'
+[System.IO.File]::WriteAllText([System.IO.Path]::Combine($Folder, 'child-ready'), [string]$PID)
+[System.Threading.Thread]::Sleep(60000)
 ",
         )
         .unwrap();
+        // Keep the generated fixture independent of module discovery/cache warmup
+        // and machine script policy. These flags apply only to its own processes.
         std::fs::write(folder.join("root.ps1"), r#"param([string]$Folder)
-$info = New-Object System.Diagnostics.ProcessStartInfo
-$info.FileName = (Get-Process -Id $PID).Path
-$info.Arguments = '-NoProfile -NonInteractive -File "' + (Join-Path $Folder 'child.ps1') + '" "' + $Folder + '"'
+$PSModuleAutoLoadingPreference = 'None'
+$ErrorActionPreference = 'Stop'
+$info = [System.Diagnostics.ProcessStartInfo]::new()
+$info.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + [System.IO.Path]::Combine($Folder, 'child.ps1') + '" "' + $Folder + '"'
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
+$info.RedirectStandardError = $true
 $child = [System.Diagnostics.Process]::Start($info)
-[System.IO.File]::WriteAllText((Join-Path $Folder 'pids'), ([string]$PID + ' ' + [string]$child.Id))
+[System.IO.File]::WriteAllText([System.IO.Path]::Combine($Folder, 'pids'), ([string]$PID + ' ' + [string]$child.Id))
 $until = [DateTime]::UtcNow.AddSeconds(60)
-while (-not (Test-Path -LiteralPath (Join-Path $Folder 'release')) -and [DateTime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 20 }
+while (-not [System.IO.File]::Exists([System.IO.Path]::Combine($Folder, 'release')) -and [DateTime]::UtcNow -lt $until) {
+    if ($child.HasExited) { throw ('fixture child exited ' + $child.ExitCode + ': ' + $child.StandardError.ReadToEnd()) }
+    [System.Threading.Thread]::Sleep(20)
+}
 "#).unwrap();
-        json!({"program":"powershell", "arguments":["-NoProfile","-NonInteractive","-File",folder.join("root.ps1").to_string_lossy(),folder.to_string_lossy()],"timeout_seconds":30})
+        json!({"program":"powershell", "arguments":["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",folder.join("root.ps1").to_string_lossy(),folder.to_string_lossy()],"timeout_seconds":30})
     }
     #[cfg(not(windows))]
     {
@@ -52,7 +62,7 @@ pub(crate) struct LiveTree {
     armed: bool,
 }
 
-pub(crate) async fn ready(folder: &Path) -> LiveTree {
+pub(crate) async fn ready(folder: &Path) -> Result<LiveTree, String> {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if let Ok(pids) = std::fs::read_to_string(folder.join("pids")) {
@@ -88,7 +98,13 @@ pub(crate) async fn ready(folder: &Path) -> LiveTree {
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("root and descendant must become ready"))
+    .map_err(|_| {
+        format!(
+            "root and descendant must become ready within 20s; pids={:?}; child-ready={:?}",
+            std::fs::read_to_string(folder.join("pids")),
+            std::fs::read_to_string(folder.join("child-ready"))
+        )
+    })
 }
 
 pub(crate) fn running(pid: u32) -> bool {

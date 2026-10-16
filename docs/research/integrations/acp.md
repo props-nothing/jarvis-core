@@ -1,6 +1,6 @@
 ---
 integration: acp
-status: researched
+status: implemented
 last_verified: 2026-10-16
 owners: []
 selected_spec_version: "ACP protocol v1 (stable); v2 is draft and is refused"
@@ -9,6 +9,7 @@ selected_sdk: "none: a small JARVIS client over JSON-RPC on stdio (see Decisions
 
 # Agent Client Protocol (ACP)
 
+The ACP v1 client is implemented. Recorded Windows Codex checks cover specific real-agent paths; fresh sign-in, other providers/platforms and complete website delivery remain separate acceptance work. See [the current backlog](../../../TODO.md) for the latest workspace and native lifecycle results. This status does not turn the original first-slice scope below into a current feature limit.
 
 > **Current defaults supersede the original worktree slice:** ADR-0222/0224 use in-place queued jobs, optional worktrees, no default total deadline and independently reported verification. The original protocol research and first-slice findings below retain their dates. See [coding delivery](coding-delivery.md) and [the current user guide](../../user/code-agents.md); a worktree is not confinement.
 

@@ -54,6 +54,41 @@ async fn run(tool: &CommandRunTool, arguments: &Value) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{error}: {text}"))
 }
 
+async fn command_tree_ready(
+    folder: &std::path::Path,
+    task: &mut AbortOnDrop<Value>,
+) -> process_fixture::LiveTree {
+    tokio::select! {
+        output = &mut *task => panic!("command exited before fixture readiness: {output:?}"),
+        ready = process_fixture::ready(folder) => match ready {
+            Ok(tree) => tree,
+            Err(error) => {
+                let output = tokio::time::timeout(Duration::from_secs(1), task).await;
+                panic!("{error}; command result (or still running): {output:?}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "fixture-startup-failure")]
+async fn tree_readiness_reports_an_early_command_failure() {
+    let scratch = Scratch::new();
+    let tool = tool_in(&scratch);
+    let arguments = if cfg!(windows) {
+        json!({"program":"cmd", "arguments":["/C","echo fixture-startup-failure 1>&2 & exit /B 7"]})
+    } else {
+        json!({"program":"sh", "arguments":["-c","echo fixture-startup-failure >&2; exit 7"]})
+    };
+    let mut task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
+    let _tree = tokio::time::timeout(
+        Duration::from_secs(5),
+        command_tree_ready(&scratch.0, &mut task),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("early command failure was hidden by the readiness timeout"));
+}
+
 #[test]
 fn the_contract_is_code_execution_that_asks_unless_the_owner_trusts_it() {
     let definition = CommandRunTool::definition().unwrap_or_else(|error| panic!("{error}"));
@@ -485,8 +520,8 @@ async fn ordinary_root_exit_terminates_descendants_and_preserves_unrelated_proce
     let scratch = Scratch::new();
     let arguments = process_fixture::command(&scratch.0);
     let tool = tool_in(&scratch);
-    let task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
-    let tree = process_fixture::ready(&scratch.0).await;
+    let mut task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
+    let tree = command_tree_ready(&scratch.0, &mut task).await;
 
     let mut unrelated_command = if cfg!(windows) {
         let mut command = tokio::process::Command::new("ping");
@@ -534,8 +569,8 @@ async fn dropping_a_running_command_terminates_the_root_and_descendant() {
     let scratch = Scratch::new();
     let arguments = process_fixture::command(&scratch.0);
     let tool = tool_in(&scratch);
-    let task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
-    let tree = process_fixture::ready(&scratch.0).await;
+    let mut task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
+    let tree = command_tree_ready(&scratch.0, &mut task).await;
     drop(task);
     tree.assert_gone().await;
 }
@@ -546,8 +581,8 @@ async fn command_timeout_terminates_an_observed_live_descendant() {
     let mut arguments = process_fixture::command(&scratch.0);
     arguments["timeout_seconds"] = json!(20);
     let tool = tool_in(&scratch);
-    let task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
-    let tree = process_fixture::ready(&scratch.0).await;
+    let mut task = AbortOnDrop::new(tokio::spawn(async move { run(&tool, &arguments).await }));
+    let tree = command_tree_ready(&scratch.0, &mut task).await;
     let output = tokio::time::timeout(Duration::from_secs(30), task)
         .await
         .unwrap_or_else(|_| panic!("command timeout must settle"))

@@ -36,6 +36,50 @@ async fn terminal(tool: &ProcessTools, id: &str) -> Record {
     panic!("managed process did not settle");
 }
 
+async fn managed_tree_ready(
+    folder: &std::path::Path,
+    tool: &ProcessTools,
+    id: &str,
+) -> crate::command_run::process_fixture::LiveTree {
+    let ended = async {
+        loop {
+            let status = tool.status(id).await.unwrap();
+            assert_eq!(
+                status["process"]["status"], "running",
+                "managed process exited before fixture readiness: {status}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    tokio::select! {
+        () = ended => unreachable!("the monitor runs until it reports a failure"),
+        ready = crate::command_run::process_fixture::ready(folder) => match ready {
+            Ok(tree) => tree,
+            Err(error) => panic!("{error}; managed process status: {:?}", tool.status(id).await),
+        }
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "\"stderr_tail\":\"<<JARVIS-UNTRUSTED-DATA>>\\nfixture-startup-failure")]
+async fn tree_readiness_reports_an_early_managed_process_failure() {
+    let scratch = Scratch::new();
+    let tool = scratch.tool();
+    let command = if cfg!(windows) {
+        json!({"program":"cmd", "arguments":["/C","echo fixture-startup-failure 1>&2 & exit /B 7"]})
+    } else {
+        json!({"program":"sh", "arguments":["-c","echo fixture-startup-failure >&2; exit 7"]})
+    };
+    let answer = tool.start(&command).await.unwrap();
+    let id = answer["process_id"].as_str().unwrap();
+    let _tree = tokio::time::timeout(
+        Duration::from_secs(5),
+        managed_tree_ready(&scratch.0, &tool, id),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("early managed failure was hidden by the readiness timeout"));
+}
+
 #[tokio::test]
 async fn commands_run_in_settings_folder_and_completed_logs_survive_recreation() {
     let scratch = Scratch::new();
@@ -85,7 +129,7 @@ async fn managed_root_exit_terminates_a_descendant_before_losing_the_live_record
     let command = process_fixture::command(&scratch.0);
     let answer = tool.start(&command).await.unwrap();
     let id = answer["process_id"].as_str().unwrap();
-    let tree = process_fixture::ready(&scratch.0).await;
+    let tree = managed_tree_ready(&scratch.0, &tool, id).await;
     std::fs::write(scratch.0.join("release"), "exit root only").unwrap();
     let completed = terminal(&tool, id).await;
     assert_eq!(completed.status, "exited");
@@ -104,7 +148,7 @@ async fn managed_stop_terminates_both_observed_members_of_the_process_tree() {
     let command = process_fixture::command(&scratch.0);
     let answer = tool.start(&command).await.unwrap();
     let id = answer["process_id"].as_str().unwrap();
-    let tree = process_fixture::ready(&scratch.0).await;
+    let tree = managed_tree_ready(&scratch.0, &tool, id).await;
     assert_eq!(tool.stop(id).unwrap()["stop_requested"], true);
     assert_eq!(terminal(&tool, id).await.status, "stopped");
     tree.assert_gone().await;

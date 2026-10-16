@@ -1,6 +1,6 @@
 ---
 integration: github-oauth-settings
-status: researched
+status: implemented
 last_verified: 2026-10-16
 owners: []
 selected_spec_version: "GitHub OAuth web application flow with S256 PKCE; GitHub REST 2026-03-10; MCP 2026-07-28"
@@ -8,6 +8,8 @@ selected_sdk: "Existing reqwest =0.13.5, rmcp =3.4.0 and JARVIS AuthorizationTra
 ---
 
 # Persistent GitHub sign-in from Settings
+
+Persistent Settings OAuth, identity verification, refresh and disconnect are implemented and tested with local fixtures. App registration, browser consent and real owner-account GitHub/MCP acceptance remain open; implementation status does not establish those live gates.
 
 ## Authority-race fixture timing refresh (2026-10-16)
 
