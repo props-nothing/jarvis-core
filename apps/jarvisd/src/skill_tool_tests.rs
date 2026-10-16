@@ -16,7 +16,7 @@ async fn tool() -> (Scratch, Arc<SqliteDatabase>, SkillProposeTool) {
     let path = std::env::temp_dir().join(format!("jskill-{}", &tag[tag.len() - 12..]));
     std::fs::create_dir_all(&path).unwrap_or_else(|error| panic!("create scratch: {error}"));
     let database = Arc::new(
-        SqliteDatabase::open(&path.join("jarvis.sqlite3"))
+        SqliteDatabase::test_fixture(&path.join("jarvis.sqlite3"))
             .await
             .unwrap_or_else(|error| panic!("open the database: {error}")),
     );

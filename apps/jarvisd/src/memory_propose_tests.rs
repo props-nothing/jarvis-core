@@ -72,7 +72,7 @@ fn at(offset_seconds: i128) -> UtcTimestamp {
 async fn database() -> (TempRoot, Arc<SqliteDatabase>) {
     let directory = TempRoot::new();
     let database = Arc::new(must(
-        SqliteDatabase::open(&directory.join("jarvis.sqlite3")).await,
+        SqliteDatabase::test_fixture(&directory.join("jarvis.sqlite3")).await,
     ));
     (directory, database)
 }

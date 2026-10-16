@@ -31,6 +31,9 @@ mod tool_call_repository;
 mod trigger_repository;
 mod workspace_repository;
 
+#[cfg(any(test, feature = "test-support"))]
+mod test_support;
+
 pub use approval_repository::{
     MAX_APPROVAL_ARGUMENTS_BYTES, attach_approval_arguments, clear_approval_arguments,
     clear_arguments_of_started_calls, create_approval, find_approval, read_approval_arguments,

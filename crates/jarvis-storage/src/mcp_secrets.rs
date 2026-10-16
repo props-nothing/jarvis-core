@@ -184,7 +184,7 @@ fn linked(metadata: &Metadata) -> bool {
 fn private_permissions(metadata: &Metadata) -> Option<fs::Permissions> {
     use std::os::unix::fs::PermissionsExt;
     let permissions = metadata.permissions();
-    (permissions.mode() & 0o077 == 0).then_some(permissions)
+    (permissions.mode().trailing_zeros() >= 6).then_some(permissions)
 }
 
 #[cfg(unix)]
@@ -336,6 +336,25 @@ mod tests {
         fs::remove_file(profile.file()).unwrap_or_else(|error| panic!("fixture: {error}"));
         fs::create_dir(profile.file()).unwrap_or_else(|error| panic!("fixture: {error}"));
         profile.rejects_all_operations();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn public_permissions_are_not_preserved_on_overwrite() {
+        use std::os::unix::fs::PermissionsExt;
+        let profile = Profile::new();
+        assert_eq!(set(&profile.paths, &profile.reference, "canary"), Ok(()));
+        for public_mode in [0o640, 0o604, 0o666] {
+            fs::set_permissions(profile.file(), fs::Permissions::from_mode(public_mode))
+                .unwrap_or_else(|error| panic!("fixture permissions: {error}"));
+            assert_eq!(set(&profile.paths, &profile.reference, "rotated"), Ok(()));
+            let mode = fs::metadata(profile.file())
+                .unwrap_or_else(|error| panic!("metadata: {error}"))
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "public permissions must not be restored");
+        }
     }
 
     #[cfg(unix)]

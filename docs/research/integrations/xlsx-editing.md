@@ -4,10 +4,12 @@ status: implemented
 last_verified: 2026-10-15
 owners: []
 selected_spec_version: "ECMA-376 / ISO 29500 SpreadsheetML transitional; Microsoft Open XML SDK reference 3.0.1"
-selected_sdk: "zip 9.0.1; roxmltree 0.21.1 (existing workspace dependencies)"
+selected_sdk: "zip 9.0.4; roxmltree 0.21.1 (existing workspace dependencies)"
 ---
 
 # Editing existing Excel workbooks without rebuilding them
+
+Dependency follow-up, 2026-10-16: ZIP is pinned to `=9.0.4` because 9.0.1 was yanked. See [the CI dependency repair record](github-actions-rust-ci.md) for current official sources and passing workbook regressions. Historical 9.0.1 references below retain their original verification dates.
 
 ## Scope
 

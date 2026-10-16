@@ -149,9 +149,10 @@ fn proposal(workspace_id: &str) -> SkillRevision {
 /// and it looked like a hang rather than a slowdown.
 async fn database() -> (TestDirectory, crate::SqliteDatabase, String) {
     let directory = TestDirectory::new();
-    let database = crate::SqliteDatabase::open(&directory.0.join(crate::DEFAULT_DATABASE_FILENAME))
-        .await
-        .unwrap_or_else(|error| panic!("open fixture database: {error}"));
+    let database =
+        crate::SqliteDatabase::test_fixture(&directory.0.join(crate::DEFAULT_DATABASE_FILENAME))
+            .await
+            .unwrap_or_else(|error| panic!("open fixture database: {error}"));
     let identity = crate::load_local_identity(&database)
         .await
         .unwrap_or_else(|error| panic!("the fixture must be seeded: {error}"));

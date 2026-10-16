@@ -13,6 +13,14 @@ One third-party asset is bundled in the product, with its licence verified again
 Rust dependencies are checked against the licence allowlist by `cargo deny` in CI; a shipped archive also needs a generated list of
 their licences before a public release (`P9-017`).
 
+## Patched Office dependencies
+
+`vendor/docx-rs-0.4.22` (MIT, bokuweb) and `vendor/rust_xlsxwriter-0.99.1`
+(MIT OR Apache-2.0, John McNamara) retain their upstream sources and licenses.
+Only their normalized Cargo manifests change the ZIP requirement to 9.0.4,
+because their published ZIP 8 dependencies are yanked. Archive checksums,
+source URLs and removal criteria are recorded in [vendor/README.md](vendor/README.md).
+
 ## Local Prototype
 
 The former `example/` prototype identified itself as **Creative Commons BY-NC 4.0** and credited FatihMakes. It was removed from the current tree on 2026-10-13. Historical copies retain those terms; JARVIS's Apache-2.0 license does not relicense them. Do not copy its implementation into this distribution without explicit legal review or permission.

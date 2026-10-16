@@ -375,7 +375,7 @@ mod tests {
 
     async fn database() -> (TempProfile, SqliteDatabase) {
         let profile = TempProfile::new();
-        let database = SqliteDatabase::open(&profile.database_path())
+        let database = SqliteDatabase::test_fixture(&profile.database_path())
             .await
             .unwrap_or_else(|error| panic!("open fixture database: {error}"));
         (profile, database)

@@ -72,6 +72,7 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "
 tracing.workspace = true
 
 [dev-dependencies]
+jarvis-storage = { workspace = true, features = ["test-support"] }
 # `ServiceExt::oneshot` drives a `Router` without binding a socket, so the gateway's
 # authentication and routing are tested as a real `tower` service rather than by calling the
 # handlers directly, which would bypass the layers the tests exist to falsify.

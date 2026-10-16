@@ -1198,7 +1198,7 @@ mod tests {
     async fn seeded_database() -> (TestDirectory, SqliteDatabase) {
         let directory = TestDirectory::new();
         let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
-        let database = must(SqliteDatabase::open(&path).await);
+        let database = must(SqliteDatabase::test_fixture(&path).await);
         seed_identity(database.pool()).await;
         (directory, database)
     }

@@ -66,7 +66,7 @@ fn at(minute: i128) -> UtcTimestamp {
 async fn seeded_database() -> (TestDirectory, SqliteDatabase) {
     let directory = TestDirectory::new();
     let database =
-        must(SqliteDatabase::open(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
+        must(SqliteDatabase::test_fixture(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
     // The second workspace exists so a boundary test can name a real one rather than a fabricated identifier
     // — a foreign key would refuse the latter, and the test would pass for the wrong reason.
     for (id, name) in [(WORKSPACE, "first"), (OTHER_WORKSPACE, "second")] {

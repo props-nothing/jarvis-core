@@ -2434,7 +2434,7 @@ mod tests {
     ) {
         let profile = TempProfile::new();
         let database = Arc::new(
-            jarvis_storage::SqliteDatabase::open(&profile.database_path())
+            jarvis_storage::SqliteDatabase::test_fixture(&profile.database_path())
                 .await
                 .unwrap_or_else(|error| panic!("open fixture database: {error}")),
         );

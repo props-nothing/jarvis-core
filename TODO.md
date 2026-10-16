@@ -6,6 +6,16 @@
 
 This is the execution ledger. Work top to bottom unless an ADR records why ordering changed. A box may be checked only when its acceptance evidence exists. Update this file in the same change as the implementation.
 
+## Owner-requested CI and release reliability (2026-10-16)
+
+Owner-selected next slice: repair the reviewed failures and timeouts while retaining the release checks. Research: [Rust CI](docs/research/integrations/github-actions-rust-ci.md).
+
+- [x] Replace the Unix Clippy-triggering permission expression with its equivalent bit check and add a public-mode refusal regression. Replace both yanked ZIP versions with 9.0.4, using manifest-only patches to the official Office-writer sources; strict Windows Clippy, all 31 document tests and all four dependency-policy checks pass. Native Unix execution remains part of the hosted follow-up below.
+- [x] Add pinned Rust dependency caches, 60-minute Windows Rust/package jobs, separate lint/tests, three Windows test partitions and retained diagnostics. Workflow lint and all 32 release-flow regressions pass, including exact package coverage and unchanged release eligibility.
+- [x] Reuse closed migration-image bytes for independent ordinary database fixtures; retain fresh migration/startup/permission tests and production durability settings. The same 21 approval tests with four threads fell from 5.45s to 1.71s locally; isolation, persistence, pragma and overwrite-refusal regressions pass.
+- [x] Windows verification: default-feature and all-feature locked workspace runs each passed **3,110 tests**, zero failures, five existing ignored. Formatting, strict workspace Clippy, all four dependency-policy checks, **179 JavaScript tests**, deterministic typed-HUD rebuild, archive/license regressions and actionlint passed. Freshly built binaries passed all three acceptance gates with both skip guards enabled. Evidence: `artifacts/ci-review/`; [testing notes](docs/development/testing.md) and [research/limits](docs/research/integrations/github-actions-rust-ci.md).
+- [ ] After pushing, verify native Linux/macOS/Windows CI, cold/warm cache behavior and all five release packages on GitHub. Check any required-status rules against the new job names. Local evidence does not prove hosted performance, Unix-only execution or draft uploads.
+
 ## Owner-requested settings consistency (2026-10-16)
 
 Follow-up under [ADR-0225](docs/adr/0225-hud-controls-use-explicit-state-and-task-navigation.md).

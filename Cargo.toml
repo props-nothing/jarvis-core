@@ -21,6 +21,14 @@ members = [
     "tests/e2e",
 ]
 resolver = "3"
+exclude = ["vendor/docx-rs-0.4.22", "vendor/rust_xlsxwriter-0.99.1"]
+
+# The published Office writers require yanked ZIP 8. These audited copies change
+# only that manifest dependency to ZIP 9; remove once upstream publishes it.
+# See vendor/README.md and docs/research/integrations/github-actions-rust-ci.md.
+[patch.crates-io]
+docx-rs = { path = "vendor/docx-rs-0.4.22" }
+rust_xlsxwriter = { path = "vendor/rust_xlsxwriter-0.99.1" }
 
 [workspace.package]
 version = "0.1.0"
@@ -58,7 +66,7 @@ etcetera = "0.11.0"
 # `flate2` already provides.
 lopdf = { version = "0.45.0", default-features = false }
 roxmltree = "0.21.1"
-zip = { version = "9.0.1", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "=9.0.4", default-features = false, features = ["deflate-flate2"] }
 futures-core = "0.3.34"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 getrandom = "0.4.3"

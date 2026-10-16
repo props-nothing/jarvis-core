@@ -100,7 +100,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("jt-{}", &jarvis_core::scratch_tag()[24..]));
         std::fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("{error}"));
-        let database = SqliteDatabase::open(&directory.join("t.sqlite3"))
+        let database = SqliteDatabase::test_fixture(&directory.join("t.sqlite3"))
             .await
             .unwrap_or_else(|error| panic!("open: {error}"));
         let now = UtcTimestamp::now(&SystemClock);

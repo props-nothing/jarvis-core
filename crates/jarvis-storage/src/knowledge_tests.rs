@@ -40,7 +40,7 @@ fn now() -> UtcTimestamp {
 async fn database() -> (TestDirectory, SqliteDatabase) {
     let directory = TestDirectory::new();
     let database =
-        must(SqliteDatabase::open(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
+        must(SqliteDatabase::test_fixture(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
     (directory, database)
 }
 

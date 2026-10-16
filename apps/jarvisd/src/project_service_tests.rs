@@ -41,7 +41,7 @@ async fn fixture() -> Fixture {
         std::env::temp_dir().join(format!("jarvis-project-svc-{}", jarvis_core::scratch_tag()));
     must(std::fs::create_dir_all(&directory));
     let database = Arc::new(must(
-        SqliteDatabase::open(&directory.join("jarvis.sqlite3")).await,
+        SqliteDatabase::test_fixture(&directory.join("jarvis.sqlite3")).await,
     ));
     let credential = must(ClientCredential::generate());
     let presented = credential.expose().to_owned();

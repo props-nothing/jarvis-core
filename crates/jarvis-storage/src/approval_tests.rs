@@ -54,7 +54,7 @@ fn at(minute: i128) -> UtcTimestamp {
 async fn seeded_database() -> (TestDirectory, SqliteDatabase) {
     let directory = TestDirectory::new();
     let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
-    let database = must(SqliteDatabase::open(&path).await);
+    let database = must(SqliteDatabase::test_fixture(&path).await);
     must(
         sqlx::query(
             "INSERT INTO sessions (id, workspace_id, user_id, channel, status, created_at, \

@@ -36,7 +36,7 @@ async fn fixture() -> (Scratch, Arc<SqliteDatabase>, WorkspaceId) {
     let path = std::env::temp_dir().join(format!("jrecall-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(&path).unwrap_or_else(|error| panic!("scratch: {error}"));
     let database = Arc::new(
-        SqliteDatabase::open(&path.join("jarvis.sqlite3"))
+        SqliteDatabase::test_fixture(&path.join("jarvis.sqlite3"))
             .await
             .unwrap_or_else(|error| panic!("database: {error}")),
     );

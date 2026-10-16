@@ -15,7 +15,7 @@ async fn tool() -> (Scratch, ScheduleTool) {
     let tag = jarvis_core::scratch_tag();
     let path = std::env::temp_dir().join(format!("jst-{}", &tag[tag.len() - 12..]));
     std::fs::create_dir_all(&path).unwrap_or_else(|error| panic!("create scratch: {error}"));
-    let database = SqliteDatabase::open(&path.join("jarvis.sqlite3"))
+    let database = SqliteDatabase::test_fixture(&path.join("jarvis.sqlite3"))
         .await
         .unwrap_or_else(|error| panic!("open the database: {error}"));
     (Scratch(path), ScheduleTool::new(Arc::new(database)))

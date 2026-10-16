@@ -31,7 +31,7 @@ async fn database() -> (Scratch, Arc<SqliteDatabase>) {
     let tag = jarvis_core::scratch_tag();
     let path = std::env::temp_dir().join(format!("jpt-{}", &tag[tag.len() - 12..]));
     must(std::fs::create_dir_all(&path));
-    let database = must(SqliteDatabase::open(&path.join("jarvis.sqlite3")).await);
+    let database = must(SqliteDatabase::test_fixture(&path.join("jarvis.sqlite3")).await);
     (Scratch(path), Arc::new(database))
 }
 

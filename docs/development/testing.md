@@ -79,7 +79,7 @@ node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs
 cargo test -p jarvisd hud::tests --lib
 ```
 
-CI runs the JavaScript tests and syntax checks on Windows, macOS and Linux. The Node tests use controlled DOM shims; the Rust tests check the production asset and content-security boundaries. Neither proves a real provider connection or microphone path. For visual changes, additionally open the actual HUD assets in a browser, check narrow and desktop layouts, dialogs, picker Escape behavior, and offline/approval states against isolated fixtures. Do not send test requests through an owner's live model or change their saved permissions.
+CI runs these JavaScript tests, syntax checks and the deterministic typed-HUD rebuild once on Linux. Native Rust tests on Windows, macOS and Linux still check the production assets and content-security boundaries. The Node tests use controlled DOM shims; neither suite proves a real provider connection or microphone path. For visual changes, additionally open the actual HUD assets in a browser, check narrow and desktop layouts, dialogs, picker Escape behavior, and offline/approval states against isolated fixtures. Do not send test requests through an owner's live model or change their saved permissions.
 
 ## Release-flow regressions
 
@@ -89,6 +89,8 @@ bash scripts/test-package-release.sh
 ```
 
 These dependency-free fixtures exercise eligible CI events, exact commit selection, quality/draft job wiring, checksum and license refusal, and draft-only attachment. They also execute the production CI lint/test commands with a failing Cargo stand-in under Bash `-eo pipefail`: diagnostics must reach both the live log and the annotation file, and the step must still fail. Real hosted triggers, all platform archives and GitHub uploads need native Actions evidence.
+
+The workflow regressions also compare the native test matrix against workspace membership: every package must run exactly once per OS, with exactly one acceptance lane per OS. They retain all three acceptance gates, both missing-binary guards and the single preceding workspace build. Release/archive shell regressions continue to run on each native OS.
 
 The background coding-activity test waits for both public snapshots before requesting Stop. Cancelling after just the first snapshot can prevent the second from arriving, contradicting its later two-update assertion. Bounded 30-second readiness/completion waits allow loaded native runners without changing production deadlines or retrying a failing assertion. Its scratch path includes `private` on every OS, matching macOS canonical temporary paths: secrecy assertions reject the exact fixture thought/input/output markers, never a legitimate path component.
 
@@ -141,6 +143,10 @@ No fixture contains real tokens, cookies, emails, names, phone numbers, calendar
 Keep malformed, failed, paginated, rate-limited, empty, duplicated, out-of-order, and provider-upgrade fixtures alongside happy paths.
 
 ## Scratch Directories And Asynchronous Teardown
+
+Ordinary storage and daemon behavior fixtures use `SqliteDatabase::test_fixture`, available only to storage tests or through the opt-in `test-support` feature (a daemon dev-dependency). The first call runs the production migrations and closes the pool before caching the database bytes. Each fixture copies those bytes into its own new file and reopens through production validation, ACLs and connection settings. No live pool or mutable database is shared across test runtimes. `synchronous=FULL`, WAL, foreign keys and the production trust settings remain in force.
+
+Migration, startup and permission tests must continue to call `SqliteDatabase::open` on fresh databases. Fixture regressions check current schema/identity, independent writes, persistence after reopen, production pragmas and refusal to overwrite an existing file. On local Windows, the same 21 approval tests with four threads fell from 5.45s to 1.71s; this is a fixture measurement, not a hosted-run estimate.
 
 A fixture's scratch directory **must** be removed through `jarvis_core::remove_scratch_dir`, and its name **must**
 contain `jarvis_core::scratch_tag()`. Both rules exist because violating either is invisible at runtime: a
@@ -230,7 +236,11 @@ cargo test --workspace
 cargo deny check advisories bans licenses sources
 ```
 
-The first three commands run on native Windows, macOS, and Linux CI. The dependency-policy command runs once on Linux against the same committed lockfile. Later commands must be added to a root task runner only after they exist. CI and this document stay synchronized. Live tests require explicit flags and never run merely because a developer happens to have a credential in the environment.
+CI runs formatting once on Linux, and Clippy plus all-feature locked tests on native Windows, macOS and Linux. Lint and tests are separate jobs. Windows tests are split into storage, daemon and the remaining workspace; the latter builds the acceptance binaries once and runs all three phase gates. Linux/macOS each run the full workspace and the same acceptance gates. Windows Rust jobs allow 60 minutes; other native Rust jobs allow 30. The test step stops after 50/25 minutes to leave room for diagnostics and cache saving.
+
+Pinned Rust-cache actions retain dependency downloads/build products, keyed separately for Clippy, test partitions and release targets. PRs restore but do not save caches. Cache misses still run the same locked checks; no test or gate is conditional on a cache hit. Logs and Cargo build timings are uploaded even after failure. Main pushes and PRs trigger CI; tags call it through Release, avoiding a duplicate full tag run. Manual CI remains available. If repository rules require named job checks, update them to the new job names before merging.
+
+The dependency-policy command runs once on Linux against the same committed lockfile. Later commands must be added to a root task runner only after they exist. CI and this document stay synchronized. Live tests require explicit flags and never run merely because a developer happens to have a credential in the environment.
 
 ## Release Evidence
 

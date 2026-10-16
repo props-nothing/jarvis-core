@@ -4,10 +4,12 @@ status: implemented
 last_verified: 2026-10-11
 owners: []
 selected_spec_version: "ECMA-376 Office Open XML (SpreadsheetML, WordprocessingML); RFC 4180 for CSV"
-selected_sdk: "rust_xlsxwriter 0.99.1 and docx-rs 0.4.22 (crates.io, pinned)"
+selected_sdk: "rust_xlsxwriter 0.99.1 and docx-rs 0.4.22 (official crate sources, local ZIP 9.0.4 manifest patches)"
 ---
 
 # Writing Excel, Word and CSV files
+
+Dependency follow-up, 2026-10-16: both published writers still require yanked ZIP 8. Their exact official crate sources are temporarily vendored with only the ZIP requirement changed to `=9.0.4`. Licenses, archive hashes, official sources and regression evidence are in [the CI dependency repair record](github-actions-rust-ci.md). The API research below remains the original implementation evidence.
 
 ## Scope
 

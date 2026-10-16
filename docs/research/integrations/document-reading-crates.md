@@ -3,11 +3,13 @@ integration: document-reading-crates
 status: implemented
 last_verified: 2026-10-10
 owners: []
-selected_spec_version: "lopdf 0.45.0; zip 9.0.1; roxmltree 0.21.1; ECMA-376 (Office Open XML) as the container format"
+selected_spec_version: "lopdf 0.45.0; zip 9.0.4; roxmltree 0.21.1; ECMA-376 (Office Open XML) as the container format"
 selected_sdk: "lopdf, zip, roxmltree (crates.io)"
 ---
 
 # Reading PDF, Word, spreadsheet and slide files
+
+Dependency follow-up, 2026-10-16: ZIP is now pinned to `=9.0.4` after 9.0.1 was yanked. Official version/source checks and the passing reader/writer and hostile-archive regressions are recorded in [the CI dependency repair record](github-actions-rust-ci.md). Historical 9.0.1 references below describe the original API research.
 
 ## Scope
 

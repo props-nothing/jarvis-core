@@ -67,8 +67,8 @@ test('the runner entry point writes only an eligible SHA to GitHub outputs', () 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-function job(name) {
-  const match = workflow.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z-]+:|$(?![\\s\\S]))`, 'm'));
+function job(name, source = workflow) {
+  const match = source.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z-]+:|$(?![\\s\\S]))`, 'm'));
   assert.ok(match, `missing job: ${name}`);
   return match[1];
 }
@@ -94,6 +94,54 @@ test('workflow wiring gates all packaging paths and keeps builds read-only', () 
   }
 });
 
+test('native test partitions cover every workspace package exactly once on every OS', () => {
+  const root = new URL('../', import.meta.url);
+  const manifest = fs.readFileSync(new URL('Cargo.toml', root), 'utf8');
+  const paths = [...manifest.match(/members = \[([\s\S]*?)\]/)[1].matchAll(/"([^"]+)"/g)].map(match => match[1]);
+  const packages = paths.map(member => fs.readFileSync(new URL(`${member}/Cargo.toml`, root), 'utf8').match(/^name = "([^"]+)"/m)[1]);
+  const rows = [...job('rust-tests', ci).matchAll(/\{ os: ([\w-]+), suite: ([\w-]+), packages: '([^']+)' \}/g)];
+  for (const os of ['ubuntu-latest', 'macos-latest', 'windows-latest']) {
+    const selected = [];
+    const nativeRows = rows.filter(row => row[1] === os);
+    assert.ok(nativeRows.length, `no native tests for ${os}`);
+    for (const row of nativeRows) {
+      const args = row[3].split(' ');
+      const excluded = args.flatMap((arg, i) => arg === '--exclude' ? [args[i + 1]] : []);
+      const explicit = args.flatMap((arg, i) => arg === '-p' ? [args[i + 1]] : []);
+      selected.push(...(args.includes('--workspace') ? packages.filter(name => !excluded.includes(name)) : explicit));
+      for (const name of [...excluded, ...explicit]) assert.ok(packages.includes(name), `unknown package ${name}`);
+    }
+    assert.deepEqual(selected.sort(), [...packages].sort(), `${os}: missing or duplicate package coverage`);
+    assert.equal(nativeRows.filter(row => ['all', 'remaining'].includes(row[2])).length, 1, `${os}: exactly one native acceptance lane`);
+  }
+});
+
+test('job separation retains native gates, cold-build validation and timeout headroom', () => {
+  assert.match(ci, /push:\n    branches: \[main\]/);
+  assert.match(job('source-checks', ci), /cargo fmt --check/);
+  assert.match(job('source-checks', ci), /git diff --exit-code -- \.\.\/src\/hud\/generated/);
+  for (const name of ['rust-lint', 'rust-tests']) {
+    const body = job(name, ci);
+    assert.match(body, /windows-latest' && 60 \|\| 30/);
+    assert.match(body, /Swatinem\/rust-cache@[0-9a-f]{40}/);
+    assert.match(body, /save-if: \$\{\{ github.event_name != 'pull_request' \}\}/);
+    assert.doesNotMatch(body, /if:.*cache-hit/);
+    assert.match(body, /name: Retain diagnostics\n        if: always\(\)/);
+  }
+  const tests = job('rust-tests', ci);
+  assert.match(tests, /cargo test .*--all-features --locked --no-fail-fast/);
+  assert.equal([...tests.matchAll(/cargo build --workspace --all-features --locked/g)].length, 1);
+  for (const phase of [1, 2, 3]) {
+    const gate = tests.split(`      - name: Phase ${phase} acceptance gate\n`)[1].split('      - name: ')[0];
+    assert.match(gate, /if: matrix.suite == 'all' \|\| matrix.suite == 'remaining'/);
+    assert.match(gate, /ACCEPTANCE_REQUIRE_BINARIES: "1"/);
+    assert.match(gate, /ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"/);
+    assert.match(gate, new RegExp(`bash scripts/ci-run-gate.sh phase${phase}_gate`));
+  }
+  assert.match(job('package'), /key: release-\$\{\{ matrix.label \}\}/);
+  assert.doesNotMatch(job('package'), /if:.*cache-hit/);
+});
+
 const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/bash';
 
 for (const [command, output] of [['clippy', 'clippy.txt'], ['test', 'test.txt']]) {
@@ -109,7 +157,8 @@ printf 'Cargo stdout diagnostic\\n'
 printf 'Cargo stderr diagnostic\\n' >&2
 exit ${exitCode}
 `, { mode: 0o755 });
-        const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', 'export PATH="$PWD/bin:$PATH"\n' + match[1]], {
+        const commandLine = match[1].replace('${{ matrix.packages }}', '--workspace');
+        const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', 'export PATH="$PWD/bin:$PATH"\n' + commandLine], {
           cwd: dir, encoding: 'utf8',
         });
         assert.ifError(result.error);

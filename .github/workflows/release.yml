@@ -56,7 +56,7 @@ jobs:
       contents: read
     name: Package (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -77,11 +77,18 @@ jobs:
           persist-credentials: false
       - name: Report pinned toolchain
         run: |
+          rustup toolchain install
           rustup show active-toolchain
           cargo --version
       - name: Add the cross target
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
+      - name: Cache release dependencies
+        # Cache restoration is an optimization; the locked build always runs.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.label }}
+          cache-on-failure: true
       - name: Build release programs
         shell: bash
         run: |

@@ -602,7 +602,7 @@ mod tests {
     async fn seeded_database() -> (TestDirectory, SqliteDatabase) {
         let directory = TestDirectory::new();
         let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
-        let database = must(SqliteDatabase::open(&path).await);
+        let database = must(SqliteDatabase::test_fixture(&path).await);
         for statement in [
             "INSERT INTO users (id, display_name, status, created_at, updated_at, version) \
              VALUES ('0198f000-0000-7000-8000-000000000001', 'Local User', 'active', \

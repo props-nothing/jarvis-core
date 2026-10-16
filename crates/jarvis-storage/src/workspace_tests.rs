@@ -41,7 +41,7 @@ fn must<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
 /// Opens a migrated database, so migration `0005`'s seeded identity is present.
 async fn database() -> (TestDirectory, SqliteDatabase) {
     let directory = TestDirectory::new();
-    let database = must(SqliteDatabase::open(&directory.database_path()).await);
+    let database = must(SqliteDatabase::test_fixture(&directory.database_path()).await);
     (directory, database)
 }
 

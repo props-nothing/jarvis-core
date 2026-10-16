@@ -1,7 +1,10 @@
 name: CI
 
 on:
+  # PRs validate proposed changes; main validates merges. Tags are validated by
+  # Release's workflow_call, so a version tag does not run the full suite twice.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -13,26 +16,23 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: "1"
+
 jobs:
-  rust-quality:
-    name: Rust quality (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-    env:
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: "1"
+  source-checks:
+    name: Formatting and HUD
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Report pinned toolchain
+        with:
+          persist-credentials: false
+      - name: Install and report pinned toolchain
         run: |
+          rustup toolchain install
           rustup show active-toolchain
           rustc --version --verbose
           cargo --version
@@ -48,75 +48,52 @@ jobs:
         run: |
           set -e
           for script in hud mission head settings; do node --check "apps/jarvisd/src/hud/$script.js"; done
-      - name: Test console and release behavior
-        run: node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs scripts/test-hud-memory.mjs scripts/test-hud-polling.mjs scripts/test-hud-history.mjs scripts/test-release-flow.mjs
+      - name: Test console behavior
+        run: node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs scripts/test-hud-memory.mjs scripts/test-hud-polling.mjs scripts/test-hud-history.mjs
       - name: Build typed HUD controls and check embedded output
         working-directory: apps/jarvisd/ui
         run: |
           npm ci --ignore-scripts
           npm run build
           git diff --exit-code -- ../src/hud/generated
-      - name: Test archive contents and license notices
-        shell: bash
-        run: bash scripts/test-package-release.sh
+
+  rust-lint:
+    name: Rust lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 30 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install and report pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+          rustc --version --verbose
+          cargo --version
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: clippy-${{ matrix.os }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Lint all targets
-        # `--locked` keeps the lint run on the committed lockfile, like every other
-        # step. Without it a dependency could resolve differently here than in the
-        # test step, so a lint verdict would not describe the tree that was tested.
-        #
-        # `--message-format=short` prints one line per diagnostic as
-        # `file:line:column: level: message`, which the next step can turn into a
-        # GitHub annotation. Bash's explicit -o pipefail preserves Cargo failures
-        # through tee while keeping diagnostics visible even if a runner times out.
-        #
-        # This step failing on only some operating systems means a platform-gated
-        # lint: `#[cfg(unix)]` or `#[cfg(windows)]` code is not compiled by the other
-        # runners, so a warning it produces is invisible there. Two such failures were
-        # diagnosed by inference, because `jarvis-storage` and `jarvis-models` cannot
-        # be cross-linted on a machine without a C toolchain (bundled SQLite and
-        # The job log itself requires repository authentication and is not readable
-        # from an anonymous fetch, so the annotation step exists to make the next
-        # occurrence readable rather than deduced.
-        #
-        # `shell: bash` is explicit. The default shell on windows-latest is PowerShell,
-        # where redirecting a native command's stderr makes PowerShell treat it as an
-        # error record and fail the step even on success -- the same reason this
-        # repository's local runs read `$LASTEXITCODE` from a file instead of a pipe.
+        id: lint
         shell: bash
         run: cargo clippy --workspace --all-targets --all-features --locked --message-format=short -- -D warnings 2>&1 | tee clippy.txt
       - name: Annotate lint failures
-        if: failure()
+        if: failure() && steps.lint.outcome == 'failure'
         shell: bash
         run: |
-          # `set +e` first, because a reporting step must never be the thing that fails.
-          #
-          # GitHub runs `bash` steps with `-e -o pipefail`. Under `-e`, a `grep` that
-          # finds nothing exits 1 and aborts the script, so the previous version of this
-          # step FAILED ITSELF with exit code 1 and emitted only its first line -- the
-          # annotations showed "clippy.txt has 397 lines" and then nothing, which is why
-          # the underlying compile error stayed unreadable. It was validated locally with
-          # `set -u` only, which does not reproduce the runner's errexit. Validate shell
-          # steps with `bash -eo pipefail`.
           set +e
 
           [ -f clippy.txt ] || { echo "::error::clippy.txt was not created by the lint step"; exit 0; }
 
-          # Emit a SMALL, targeted region. GitHub caps annotations per check run and
-          # silently drops the rest, so the previous version -- which emitted up to 45
-          # lines from the first match to the end of the output -- had its annotations
-          # filled with cargo's `Checking ...` progress lines while the actual diagnostic
-          # was dropped. Fewer lines is the point: the goal is that the error survives
-          # the cap.
-          #
-          # One line per diagnostic, PLUS the tail unconditionally.
-          #
-          # The per-diagnostic lines are what make a single run reveal several lints,
-          # since GitHub caps annotations and drops the rest. But they assumed a
-          # short-format diagnostic exists at all, and an annotation set containing only
-          # "Process completed with exit code 101" proves the output had none -- a
-          # build-script failure, a linker error, or output the short format does not
-          # cover. So the tail is always emitted too, and the two together are the whole
-          # story: what the lints were, and what the process actually exited on.
           grep -a -E '^[^ ]+:[0-9]+:[0-9]+: (error|warning)' clippy.txt | head -n 10 | while IFS= read -r line; do
             echo "::error::diag: $line"
           done
@@ -130,54 +107,77 @@ jobs:
 
           echo "===== diagnostic (full) ====="
           cat clippy.txt
+      - name: Retain diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lint-${{ matrix.os }}
+          path: |
+            clippy.txt
+            test.txt
+            gate-*.txt
+            target/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 7
+
+  rust-tests:
+    name: Rust tests (${{ matrix.os }}, ${{ matrix.suite }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 30 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, suite: all, packages: '--workspace' }
+          - { os: macos-latest, suite: all, packages: '--workspace' }
+          - { os: windows-latest, suite: storage, packages: '-p jarvis-storage' }
+          - { os: windows-latest, suite: daemon, packages: '-p jarvisd' }
+          - { os: windows-latest, suite: remaining, packages: '--workspace --exclude jarvis-storage --exclude jarvisd' }
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install and report pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+          rustc --version --verbose
+          cargo --version
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: test-${{ matrix.os }}-${{ matrix.suite }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Test release behavior on the native shell
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        run: node --test scripts/test-release-flow.mjs
+      - name: Test archive contents and license notices
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        shell: bash
+        run: bash scripts/test-package-release.sh
       - name: Test workspace
-        # Output is streamed and captured so timeouts retain the last running tests and failures still get annotations,
-        # which are the only channel readable without repository authentication. The lint
-        # step got this treatment after five rounds of inference; the test step needs it
-        # for the same reason, because the failing crates cannot be compiled locally for
-        # a non-native target and so their unix-only tests run ONLY on this runner.
-        #
-        # `shell: bash` because the default shell on windows-latest is PowerShell, where
-        # redirecting a native command's stderr fails the step even on success.
-        #
-        # `ACCEPTANCE_REQUIRE_FIXTURE_PEER` turns a *skip* into a failure. The stdio tests in
-        # `jarvis-mcp-transport` exercise `connect_stdio` against a real child process and
-        # skip when the fixture binary is absent; `--all-features` builds it, so the skip
-        # cannot legitimately happen here, and without this a fixture that silently stopped
-        # being built would make those tests pass by not running.
-        #
-        # This is deliberately NOT `ACCEPTANCE_REQUIRE_BINARIES`, which the phase gates below
-        # read. That variable is about the APPLICATION binaries `jarvisd` and `jarvis`, and this
-        # step does not build them: `cargo test --workspace --all-features` builds each package's
-        # test harness and the `fixture-peer` binary (`--all-features` enables it), but never
-        # `target/<profile>/jarvisd`, which is where the gate looks. One variable carrying both
-        # meanings made this step assert a binary it never produces, and the Phase 1 gate failed on
-        # every operating system for four consecutive pushes. A variable that turns a skip into a
-        # failure must name the one artifact it is about.
+        id: tests
+        # Leave time for diagnostics/cache saving before the enclosing job limit.
+        timeout-minutes: ${{ matrix.os == 'windows-latest' && 50 || 25 }}
         env:
           ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"
         shell: bash
-        # --no-fail-fast: one failing crate must not hide the results of every crate after it (on Linux and macOS a failure in an
-        # early crate previously meant the rest were never reported).
-        run: cargo test --workspace --all-features --locked --no-fail-fast 2>&1 | tee test.txt
+        run: cargo test ${{ matrix.packages }} --all-features --locked --no-fail-fast --timings 2>&1 | tee test.txt
       - name: Annotate test failures
-        if: failure()
+        if: failure() && steps.tests.outcome == 'failure'
         shell: bash
         run: |
           set +e
           [ -f test.txt ] || { echo "::error::test.txt was not created by the test step"; exit 0; }
 
-          # A failing test reports `test <name> ... FAILED`, a `---- <name> stdout ----`
-          # block containing the panic, and a final `test result: FAILED` summary. Each
-          # pattern is emitted separately and labelled, because GitHub caps annotations
-          # and the label is what says which kind of line arrived.
           grep -a -E '^test .* FAILED|^failures:' test.txt | head -n 8 | while IFS= read -r line; do
             echo "::error::failed: $line"
           done
           grep -a -E '^thread .*panicked at|^assertion.*failed|^[[:space:]]+(left|right):' test.txt | head -n 10 | while IFS= read -r line; do
             echo "::error::panic: $line"
           done
-          # An abort can prevent libtest from printing any panic summary at all.
           grep -a -E 'has overflowed its stack|^fatal runtime error:|^[[:space:]]+process didn.t exit successfully:' test.txt | head -n 6 | while IFS= read -r line; do
             echo "::error::crash: $line"
           done
@@ -192,40 +192,42 @@ jobs:
           grep -a -B2 -A12 -E '^failures:|panicked at|has overflowed its stack|^fatal runtime error:|signal: [0-9]+' test.txt | head -n 120 || true
           echo "===== tail 30 ====="
           tail -n 30 test.txt || true
+      - name: Build current acceptance binaries once
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        run: cargo build --workspace --all-features --locked --timings
       - name: Phase 1 acceptance gate
-        # Runs the real jarvisd and jarvis binaries against a temporary portable
-        # root on this native OS. The gate exits with a skip when the binaries are
-        # absent, so ACCEPTANCE_REQUIRE_BINARIES turns that skip into a failure.
-        # The name avoids the JARVIS_ prefix because the daemon rejects unknown
-        # JARVIS_* variables as configuration errors.
-        env:
-          ACCEPTANCE_REQUIRE_BINARIES: "1"
-        run: |
-          cargo build --workspace --all-features --locked
-          bash scripts/ci-run-gate.sh phase1_gate
-      - name: Phase 2 acceptance gate
-        # Same shape as the Phase 1 gate, and the build is repeated deliberately: a
-        # stale `jarvisd` beside the test binary would let the gate pass against code
-        # that is not in this commit. That is not hypothetical — the gate's own
-        # falsification run passed until the daemon was rebuilt.
-        env:
-          ACCEPTANCE_REQUIRE_BINARIES: "1"
-        run: |
-          cargo build --workspace --all-features --locked
-          bash scripts/ci-run-gate.sh phase2_gate
-      - name: Phase 3 acceptance gate
-        # The Phase 3 gate needs a second artifact: `fixture-peer`, the hand-written MCP
-        # server it configures as a real child process. `--all-features` builds it, and
-        # `ACCEPTANCE_REQUIRE_FIXTURE_PEER` makes its absence a failure rather than a
-        # skip — the same per-artifact rule the workspace test step follows, because a
-        # single variable naming two artifacts is what made the Phase 1 gate red on
-        # every operating system for four pushes (`P3-014`).
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
         env:
           ACCEPTANCE_REQUIRE_BINARIES: "1"
           ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"
-        run: |
-          cargo build --workspace --all-features --locked
-          bash scripts/ci-run-gate.sh phase3_gate
+        shell: bash
+        run: bash scripts/ci-run-gate.sh phase1_gate
+      - name: Phase 2 acceptance gate
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        env:
+          ACCEPTANCE_REQUIRE_BINARIES: "1"
+          ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"
+        shell: bash
+        run: bash scripts/ci-run-gate.sh phase2_gate
+      - name: Phase 3 acceptance gate
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        env:
+          ACCEPTANCE_REQUIRE_BINARIES: "1"
+          ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"
+        shell: bash
+        run: bash scripts/ci-run-gate.sh phase3_gate
+      - name: Retain diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.suite }}
+          path: |
+            clippy.txt
+            test.txt
+            gate-*.txt
+            target/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 7
 
   dependency-policy:
     name: Dependency policy

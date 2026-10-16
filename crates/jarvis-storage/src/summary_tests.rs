@@ -118,7 +118,7 @@ async fn seeded_database(
 ) -> (TestDirectory, SqliteDatabase, SessionId, EntityId) {
     let directory = TestDirectory::new();
     let database =
-        must(SqliteDatabase::open(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
+        must(SqliteDatabase::test_fixture(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
     must(
         sqlx::query(
             "INSERT INTO workspaces \

@@ -624,8 +624,6 @@ dependencies = [
 [[package]]
 name = "docx-rs"
 version = "0.4.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fdf00e8af6d0b3e92d4bbf9b76f773d8b84ea80f310324ad16cbdc2e653e02c"
 dependencies = [
  "base64 0.22.1",
  "crc32fast",
@@ -634,7 +632,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "thiserror",
- "zip 8.6.0",
+ "zip",
 ]
 
 [[package]]
@@ -1455,7 +1453,7 @@ dependencies = [
  "rust_xlsxwriter",
  "serde_json",
  "thiserror",
- "zip 9.0.1",
+ "zip",
 ]
 
 [[package]]
@@ -1652,7 +1650,7 @@ dependencies = [
  "toml",
  "tower",
  "tracing",
- "zip 9.0.1",
+ "zip",
 ]
 
 [[package]]
@@ -2556,10 +2554,8 @@ dependencies = [
 [[package]]
 name = "rust_xlsxwriter"
 version = "0.99.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34f2d2cda7223168a14fb86bc7411dbc3379bd7d49749ecc53b91ed98585b6b0"
 dependencies = [
- "zip 8.6.0",
+ "zip",
 ]
 
 [[package]]
@@ -4130,23 +4126,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
-dependencies = [
- "crc32fast",
- "flate2",
- "indexmap",
- "memchr",
- "typed-path",
- "zopfli",
-]
-
-[[package]]
-name = "zip"
-version = "9.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e49ade69c4434c55dd651d36fe05f38e0578db948b773cbc01c48c4b5e560692"
+checksum = "a954114b47a54df49f83d2722814e86b23d4bb1b54a1b90fb7d92b41619ddc22"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -4154,6 +4136,7 @@ dependencies = [
  "memchr",
  "nix",
  "typed-path",
+ "zopfli",
 ]
 
 [[package]]

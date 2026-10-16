@@ -14,7 +14,7 @@ impl Drop for Scratch {
 async fn db() -> (Scratch, SqliteDatabase) {
     let p = std::env::temp_dir().join(format!("jdtask-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(&p).unwrap();
-    let db = SqliteDatabase::open(&p.join(DEFAULT_DATABASE_FILENAME))
+    let db = SqliteDatabase::test_fixture(&p.join(DEFAULT_DATABASE_FILENAME))
         .await
         .unwrap();
     (Scratch(p), db)
