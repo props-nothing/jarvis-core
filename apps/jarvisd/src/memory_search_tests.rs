@@ -6,6 +6,9 @@ use jarvis_protocol::RememberRequest;
 use super::*;
 use crate::memory_service::MemoryService;
 
+#[path = "memory_discovery_tests.rs"]
+mod discovery;
+
 struct Scratch(std::path::PathBuf);
 
 impl Drop for Scratch {
@@ -27,7 +30,7 @@ async fn fixture() -> (Scratch, Arc<SqliteDatabase>, MemorySearchTool) {
     (Scratch(path), database, tool)
 }
 
-async fn remember(database: &Arc<SqliteDatabase>, content: &str, importance: u8) {
+async fn remember(database: &Arc<SqliteDatabase>, content: &str, importance: u8) -> String {
     MemoryService::new(Arc::clone(database))
         .remember(&RememberRequest {
             content: content.to_owned(),
@@ -39,7 +42,16 @@ async fn remember(database: &Arc<SqliteDatabase>, content: &str, importance: u8)
             supersedes: None,
         })
         .await
-        .unwrap_or_else(|error| panic!("remember: {error}"));
+        .unwrap_or_else(|error| panic!("remember: {error}"))
+        .memory_id
+}
+
+async fn query(database: &Arc<SqliteDatabase>, destination: Sensitivity) -> MemoryQuery {
+    let workspace = MemoryService::new(Arc::clone(database))
+        .workspace()
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    crate::memory_recall::query_for(workspace, UtcTimestamp::now(&SystemClock), destination)
 }
 
 #[test]
@@ -51,7 +63,7 @@ fn the_contract_is_read_only_and_unasked() {
     assert!(definition.effects().contains(ToolEffect::ReadOnly));
 }
 
-/// **Every query word must match; results come back fenced as data, most important first; and the count says how much was looked at.**
+/// Complete word matches rank ahead of related partial matches; all details remain fenced data.
 #[tokio::test]
 async fn a_search_matches_every_word_and_fences_what_it_returns() {
     let (_scratch, database, tool) = fixture().await;
@@ -63,10 +75,10 @@ async fn a_search_matches_every_word_and_fences_what_it_returns() {
         9,
     )
     .await;
-    let now = UtcTimestamp::now(&SystemClock);
+    let query = query(&database, Sensitivity::Internal).await;
 
     let found = tool
-        .search("train", 5, now)
+        .search("train", 5, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(found["considered"], 3);
@@ -88,16 +100,16 @@ async fn a_search_matches_every_word_and_fences_what_it_returns() {
     );
 
     let narrowed = tool
-        .search("TRAIN utrecht", 5, now)
+        .search("TRAIN utrecht", 5, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
-        narrowed["count"], 1,
-        "every word must appear, whatever the case"
+        narrowed["count"], 2,
+        "related partial matches remain alongside a complete match"
     );
 
     let none = tool
-        .search("submarine", 5, now)
+        .search("submarine", 5, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(none["count"], 0);
@@ -108,7 +120,7 @@ async fn a_search_matches_every_word_and_fences_what_it_returns() {
     assert!(none["memories"].is_null());
 
     let limited = tool
-        .search("user", 1, now)
+        .search("user", 1, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(limited["count"], 1);
@@ -124,8 +136,10 @@ async fn nothing_a_run_would_withhold_is_returned_and_bad_arguments_are_refused(
         UtcTimestamp::now(&SystemClock).unix_nanos() + 100 * 365 * 24 * 3600 * 1_000_000_000,
     )
     .unwrap_or_else(|error| panic!("{error}"));
+    let mut query = query(&database, Sensitivity::Internal).await;
+    query.at = far;
     let later = tool
-        .search("tea", 5, far)
+        .search("tea", 5, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert!(later["count"].as_u64().unwrap_or(9) <= 1, "{later}");
@@ -134,6 +148,7 @@ async fn nothing_a_run_would_withhold_is_returned_and_bad_arguments_are_refused(
         json!({}),
         json!({ "query": "  " }),
         json!({ "query": "a".repeat(201) }),
+        json!({ "query": "x", "limit": 99 }),
     ] {
         assert!(
             matches!(
@@ -144,10 +159,8 @@ async fn nothing_a_run_would_withhold_is_returned_and_bad_arguments_are_refused(
         );
     }
     assert_eq!(
-        parse_arguments(&json!({ "query": "x", "limit": 99 }))
-            .map(|(_, limit)| limit)
-            .ok(),
-        Some(10)
+        parse_arguments(&json!({ "query": "x" })).ok(),
+        Some(("x".to_owned(), 5))
     );
 }
 
@@ -157,10 +170,10 @@ async fn when_no_claim_has_every_word_the_closest_is_offered_and_labelled() {
     let (_scratch, database, tool) = fixture().await;
     remember(&database, "The user prefers dark roast coffee", 5).await;
     remember(&database, "Their dentist appointment is on Tuesday", 5).await;
-    let now = UtcTimestamp::now(&SystemClock);
+    let query = query(&database, Sensitivity::Internal).await;
 
     let partial = tool
-        .search("coffee machine", 5, now)
+        .search("coffee machine", 5, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(partial["count"], 1);
@@ -179,12 +192,12 @@ async fn when_no_claim_has_every_word_the_closest_is_offered_and_labelled() {
     );
 
     let exact = tool
-        .search("dentist tuesday", 5, now)
+        .search("dentist tuesday", 5, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(exact["match"], "all words");
     let none = tool
-        .search("holiday", 5, now)
+        .search("holiday", 5, &query)
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(none["count"], 0, "no word in common is still nothing");

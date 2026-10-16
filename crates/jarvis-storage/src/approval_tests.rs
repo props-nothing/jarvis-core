@@ -601,3 +601,22 @@ async fn the_workspace_pending_list_excludes_decided_and_lapsed_approvals() {
         "another workspace's approvals must never be listed"
     );
 }
+
+#[tokio::test]
+async fn a_full_coding_brief_is_held_exactly_and_cleared_on_denial() {
+    let (_directory, database) = seeded_database().await;
+    let _run = live_run(&database).await;
+    let arguments = serde_json::json!({"task":"é".repeat(50_000),"allow_commands":true});
+    let request = approval_for("jarvis.code.delegate", &arguments);
+    let id = request.id().to_string();
+    must(create_approval(&database, &request).await);
+    assert!(must(
+        attach_approval_arguments(&database, &id, &arguments.to_string()).await
+    ));
+    assert_eq!(
+        must(read_approval_arguments(&database, &id).await),
+        Some(arguments.to_string())
+    );
+    must(record_decision(&database, &id, &deny(1)).await);
+    assert_eq!(must(read_approval_arguments(&database, &id).await), None);
+}

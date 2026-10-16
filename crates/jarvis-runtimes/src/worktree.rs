@@ -391,6 +391,42 @@ pub async fn finish(worktree: &Worktree, message: &str) -> Result<Outcome, Workt
     })
 }
 
+/// Reads an isolated checkout without staging or committing the owner's files.
+///
+/// # Errors
+///
+/// Returns an error when Git cannot inspect the checkout.
+pub async fn review(worktree: &Worktree) -> Result<Outcome, WorktreeError> {
+    let (stat, _) = git(
+        &worktree.path,
+        &["diff", "--stat", &worktree.base],
+        MAX_STAT_BYTES,
+        "diff",
+    )
+    .await?;
+    let (patch, patch_cut) = git(
+        &worktree.path,
+        &["diff", "--no-color", &worktree.base],
+        MAX_PATCH_BYTES,
+        "diff",
+    )
+    .await?;
+    let (status, _) = git(
+        &worktree.path,
+        &["status", "--porcelain"],
+        64 * 1024,
+        "status",
+    )
+    .await?;
+    Ok(Outcome {
+        commit: None,
+        files_changed: u32::try_from(status.lines().count()).unwrap_or(u32::MAX),
+        stat: format!("{stat}\n{status}"),
+        patch,
+        patch_cut,
+    })
+}
+
 #[cfg(test)]
 #[path = "worktree_tests.rs"]
 mod tests;

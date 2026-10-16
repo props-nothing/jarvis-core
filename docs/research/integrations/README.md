@@ -6,6 +6,7 @@ Every external integration requires a dated record based on current official sou
 
 | Integration | Official AI/docs index | Record | Status |
 | --- | --- | --- | --- |
+| Owner-workspace coding delivery | https://agentclientprotocol.com/llms.txt; https://agentskills.io/llms.txt | [coding-delivery.md](coding-delivery.md) | In-place jobs, bundle resources, independent checks and managed previews; scoped agent tool bridge and real-account/browser acceptance remain open |
 | MCP | https://modelcontextprotocol.io/llms.txt | [mcp.md](mcp.md) | `P3-007` complete: spec `2026-07-28` and `rmcp` 3.4.0 selected; not implemented |
 | Local MCP credentials | https://modelcontextprotocol.io/llms.txt | [mcp-stdio-credentials.md](mcp-stdio-credentials.md) | `P11-001b(a)`: server-bound named keys, explicit child environment and literal redaction built/tested 2026-10-15; GitHub v2.0.2 live-account read/write acceptance remains open |
 | Persistent GitHub Settings OAuth | https://docs.github.com/llms.txt | [github-oauth-settings.md](github-oauth-settings.md) | Persistent PKCE/identity/refresh, current-token read-only MCP and Connections UI built/tested with local fixtures; app registration/browser consent/live GitHub acceptance remain open |

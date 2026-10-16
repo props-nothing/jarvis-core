@@ -8,10 +8,10 @@ use jarvis_core::{IsolatedText, Sensitivity, SystemClock, UtcTimestamp};
 use jarvis_runtimes::acp::{ToolActivity, ToolNote};
 use jarvis_storage::{DelegatedTaskFinish, NewDelegatedTask, SqliteDatabase, StoredDelegatedTask};
 use jarvis_tools::{
-    AdapterError, ApprovalPolicy, Availability, BoundedOutput, EffectSet, Idempotency,
-    ProviderEvidence, RetryDeclaration, Scope, ScopeSet, ToolCallResult, ToolDefinition,
-    ToolDefinitionParts, ToolEffect, ToolExecutionRequest, ToolExecutor, ToolId, ToolOutcomeRecord,
-    ToolSchema, ToolSensitivity, ToolSource,
+    AdapterError, ApprovalPolicy, Availability, EffectSet, Idempotency, ProviderEvidence,
+    RetryDeclaration, Scope, ScopeSet, ToolCallResult, ToolDefinition, ToolDefinitionParts,
+    ToolEffect, ToolExecutionRequest, ToolExecutor, ToolId, ToolOutcomeRecord, ToolSchema,
+    ToolSensitivity, ToolSource,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -22,7 +22,8 @@ pub const START: &str = "jarvis.code.delegate_start";
 pub const STATUS: &str = "jarvis.code.delegate_status";
 pub const LIST: &str = "jarvis.code.delegate_list";
 pub const STOP: &str = "jarvis.code.delegate_stop";
-const START_INPUT: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["repository","task"],"properties":{"repository":{"type":"string","minLength":1,"maxLength":260},"task":{"type":"string","minLength":1,"maxLength":4000},"allow_commands":{"type":"boolean"},"minutes":{"type":"integer","minimum":1,"maximum":60}}}"#;
+pub const RESUME: &str = "jarvis.code.delegate_resume";
+const START_INPUT: &str = crate::code_delegate::INPUT_SCHEMA;
 const ID_INPUT: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["task_id"],"properties":{"task_id":{"type":"string","minLength":36,"maxLength":36}}}"#;
 const LIST_INPUT: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"properties":{"limit":{"type":"integer","minimum":1,"maximum":50}}}"#;
 const OUTPUT: &str =
@@ -86,7 +87,7 @@ impl AsyncCodeDelegateTool {
             make(
                 START,
                 "Start a background coding task",
-                "Starts the coding agent in its own git worktree and returns immediately with a task id. Use this instead of jarvis.code.delegate when the work may take longer than a few minutes. The owner is asked first. Poll jarvis.code.delegate_status; nothing is merged or pushed.",
+                "Starts a durable queued coding job in the folder permitted in Settings, in place by default and without an overall deadline. Commands and dependency setup are enabled by default for the approved task. Use delegate_status for progress and independent verification, delegate_stop to cancel. No Git operations unless worktree mode is explicitly selected. Finish website delivery with a managed preview and real browser checks; an agent summary is not evidence.",
                 START_INPUT,
                 ToolEffect::CodeExecution,
                 3,
@@ -116,19 +117,35 @@ impl AsyncCodeDelegateTool {
             make(
                 STOP,
                 "Stop a coding task",
-                "Cancels a running coding agent. Its worktree and branch are kept for review.",
+                "Cancels a queued or running coding job. No files are rolled back; queued cancellation starts no agent.",
                 ID_INPUT,
                 ToolEffect::Write,
                 1,
                 ApprovalPolicy::Auto,
                 30,
             )?,
+            make(
+                RESUME,
+                "Continue an interrupted coding task",
+                "Starts a new agent on the saved request and existing files of an interrupted, failed or cancelled in-place job. Requires fresh owner approval. Not restoration of its old process or conversation; inspect current state before repeating effects.",
+                ID_INPUT,
+                ToolEffect::CodeExecution,
+                3,
+                ApprovalPolicy::Ask,
+                60,
+            )?,
         ])
     }
     async fn start(&self, v: &Value) -> Result<Value, AdapterError> {
-        let args = Arguments::parse_with_max(v, 60).map_err(|reason| refused(&reason))?;
+        let mut args = Arguments::parse(v).map_err(|reason| refused(&reason))?;
+        args.repository = self
+            .inner
+            .resolve(&args.repository)?
+            .to_string_lossy()
+            .into_owned();
         let now = UtcTimestamp::now(&SystemClock);
-        let stored = jarvis_storage::create_delegated_task(
+        let request = serde_json::to_string(&args).map_err(|error| refused(&error.to_string()))?;
+        let stored = jarvis_storage::create_delegated_task_with_request(
             &self.db,
             &NewDelegatedTask {
                 workspace_id: &self.workspace,
@@ -138,6 +155,7 @@ impl AsyncCodeDelegateTool {
                 minutes: args.minutes,
                 now,
             },
+            Some(&request),
         )
         .await
         .map_err(|e| {
@@ -158,36 +176,14 @@ impl AsyncCodeDelegateTool {
         let notifications = self.notifications;
         tokio::spawn(async move {
             let result = run_recorded_task(&db, &workspace, &id, &inner, &args, &cancel).await;
-            let (status, branch, worktree, summary, result_json, error) = match result {
-                Ok(value) => {
-                    let outcome = value
-                        .get("outcome")
-                        .and_then(Value::as_str)
-                        .unwrap_or("failed");
-                    let status = if outcome == "completed" {
-                        "completed"
-                    } else if outcome == "cancelled" {
-                        "cancelled"
-                    } else {
-                        "failed"
-                    };
-                    (
-                        status,
-                        value
-                            .get("branch")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        value
-                            .get("worktree")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        value.get("agent_message").map(Value::to_string),
-                        Some(value.to_string()),
-                        None,
-                    )
-                }
-                Err(error) => ("failed", None, None, None, None, Some(error.to_string())),
-            };
+            let Completion {
+                status,
+                branch,
+                worktree,
+                summary,
+                result_json,
+                error,
+            } = completion(result);
             let finish = DelegatedTaskFinish {
                 status,
                 branch: branch.as_deref(),
@@ -204,15 +200,31 @@ impl AsyncCodeDelegateTool {
             }
             if let Err(error) = persisted {
                 tracing::error!(task_id = %id, %error, "coding task result could not be recorded");
+                let fallback = DelegatedTaskFinish {
+                    status: "failed",
+                    branch: None,
+                    worktree: None,
+                    summary: None,
+                    result_json: None,
+                    error: Some(
+                        "The agent stopped, but its final result could not be saved. Inspect files before continuing.",
+                    ),
+                    now: UtcTimestamp::now(&SystemClock),
+                };
+                if let Err(error) =
+                    jarvis_storage::finish_delegated_task(&db, &workspace, &id, &fallback).await
+                {
+                    tracing::error!(task_id = %id, %error, "coding task failure state could not be saved");
+                }
                 return;
             }
             if notifications {
                 crate::notify::show(
                     "JARVIS coding task",
                     if status == "completed" {
-                        "The coding agent finished. Open Coding tasks to review its branch."
+                        "The coding agent finished. Open Coding tasks to inspect its files and verification."
                     } else if status == "cancelled" {
-                        "The coding task was stopped. Its branch is kept for review."
+                        "The coding task was stopped. Its files are kept for review."
                     } else {
                         "The coding agent did not finish. Open Coding tasks for the reason."
                     },
@@ -254,13 +266,102 @@ impl AsyncCodeDelegateTool {
         if let Some(cancel) = found {
             cancel.notify_one();
             Ok(
-                json!({"outcome":"stop_requested","task_id":id,"note":"The worktree and branch will be kept."}),
+                json!({"outcome":"stop_requested","task_id":id,"note":"Existing files are kept. A queued task starts no agent."}),
             )
         } else {
             Err(refused("that coding task is not running"))
         }
     }
+
+    async fn resume(&self, value: &Value) -> Result<Value, AdapterError> {
+        let previous = jarvis_storage::find_delegated_task(&self.db, &self.workspace, id(value)?)
+            .await
+            .map_err(|_| refused("no coding task has that id"))?;
+        if matches!(previous.status.as_str(), "queued" | "running" | "completed") {
+            return Err(refused(
+                "only interrupted, failed or cancelled tasks can be continued",
+            ));
+        }
+        let mut request: Value =
+            serde_json::from_str(previous.request_json.as_deref().ok_or_else(|| {
+                refused(
+                    "this older task has no saved approved request; start a new task explicitly",
+                )
+            })?)
+            .map_err(|_| refused("the saved coding request is unreadable"))?;
+        if request["mode"] == "worktree" {
+            return Err(refused(
+                "review the isolated worktree before continuing it; start a new in-place task at its explicitly permitted path",
+            ));
+        }
+        let original = request["task"].as_str().unwrap_or("");
+        if original.chars().count() > 49_600 {
+            return Err(refused(
+                "The saved brief is too long to add safe continuation instructions. Start a new task with a shorter remaining-work brief.",
+            ));
+        }
+        request["task"] = json!(format!(
+            "Continue an earlier task that stopped. First inspect existing files, installed dependencies and verification results; do not replay completed installs, external effects or overwrite user edits. Repair and complete only remaining work. Original brief: {original}"
+        ));
+        let mut result = self.start(&request).await?;
+        result["continued_from"] = json!(previous.id);
+        result["recovery"] = json!(
+            "A new agent inspects existing files. This is not restoration of the old process or conversation; previously completed effects are not automatically replayed by JARVIS."
+        );
+        Ok(result)
+    }
 }
+struct Completion {
+    status: &'static str,
+    branch: Option<String>,
+    worktree: Option<String>,
+    summary: Option<String>,
+    result_json: Option<String>,
+    error: Option<String>,
+}
+
+fn completion(result: Result<Value, AdapterError>) -> Completion {
+    match result {
+        Ok(value) => {
+            let status = match value["outcome"].as_str() {
+                Some("completed") => "completed",
+                Some("cancelled") => "cancelled",
+                _ => "failed",
+            };
+            Completion {
+                status,
+                branch: value["branch"].as_str().map(str::to_owned),
+                worktree: value["worktree"].as_str().map(str::to_owned),
+                summary: value
+                    .get("agent_message")
+                    .map(|message| message.to_string().chars().take(12_000).collect()),
+                result_json: Some(bounded_result(value).to_string()),
+                error: None,
+            }
+        }
+        Err(error) => Completion {
+            status: "failed",
+            branch: None,
+            worktree: None,
+            summary: None,
+            result_json: None,
+            error: Some(error.to_string().chars().take(1000).collect()),
+        },
+    }
+}
+
+fn bounded_result(value: Value) -> Value {
+    if value.to_string().len() <= 240_000 {
+        return value;
+    }
+    let checks = value["verification"]["checks"].as_array().into_iter().flatten().take(16)
+        .map(|check| json!({"command":check["command"],"passed":check["passed"],"result_omitted":true})).collect::<Vec<_>>();
+    json!({"outcome":value["outcome"],"directory":value["directory"],"mode":value["mode"],
+        "branch":value["branch"],"worktree":value["worktree"],"details_omitted":true,
+        "verification":{"status":value["verification"]["status"],"checks":checks},
+        "next":"Detailed agent output exceeded storage limits. Inspect the files and rerun checks; no browser verification is implied."})
+}
+
 async fn run_recorded_task(
     db: &Arc<SqliteDatabase>,
     workspace: &str,
@@ -269,6 +370,11 @@ async fn run_recorded_task(
     args: &Arguments,
     cancel: &Notify,
 ) -> Result<Value, AdapterError> {
+    let Some(_permit) = inner.acquire(cancel).await? else {
+        return Ok(
+            json!({"outcome":"cancelled", "next":"Cancelled in the queue; no agent started."}),
+        );
+    };
     jarvis_storage::mark_delegated_task_running(db, workspace, id, UtcTimestamp::now(&SystemClock))
         .await
         .map_err(|error| {
@@ -334,6 +440,10 @@ fn id(v: &Value) -> Result<&str, AdapterError> {
         .ok_or_else(|| refused("a 36-character task_id is required"))
 }
 pub(crate) fn render_console(task: &StoredDelegatedTask) -> Value {
+    let request = task
+        .request_json
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
     let result = task
         .result_json
         .as_ref()
@@ -361,7 +471,7 @@ pub(crate) fn render_console(task: &StoredDelegatedTask) -> Value {
     let activity: Vec<Value> = task.activity.iter().map(|entry| {
         json!({"sequence":entry.sequence,"summary":entry.summary,"created_at":entry.created_at.to_string()})
     }).collect();
-    json!({"task_id":task.id,"repository":task.repository,"task":task.task,"allow_commands":task.allow_commands,"minutes":task.minutes,"status":task.status,"branch":task.branch,"worktree":task.worktree,"summary":task.summary,"result":result,"error":task.error,"created_at":task.created_at.to_string(),"updated_at":task.updated_at.to_string(),"finished_at":task.finished_at.map(|time|time.to_string()),"activity":activity,"activity_limited":limited})
+    json!({"task_id":task.id,"repository":task.repository,"task":task.task,"allow_commands":task.allow_commands,"minutes":task.minutes,"mode":request.as_ref().map(|request|&request["mode"]),"status":task.status,"branch":task.branch,"worktree":task.worktree,"summary":task.summary,"result":result,"error":task.error,"created_at":task.created_at.to_string(),"updated_at":task.updated_at.to_string(),"finished_at":task.finished_at.map(|time|time.to_string()),"activity":activity,"activity_limited":limited})
 }
 
 fn render(task: &StoredDelegatedTask) -> Value {
@@ -407,11 +517,11 @@ impl ToolExecutor for AsyncCodeDelegateTool {
             return Err(refused("the call was already past its deadline"));
         }
         let body = match r.tool().to_string().as_str() {
-            DELEGATE_TOOL => return self.inner.execute(r).await,
-            START => self.start(r.arguments()).await?,
+            DELEGATE_TOOL | START => self.start(r.arguments()).await?,
             STATUS => self.status(r.arguments()).await?,
             LIST => self.list(r.arguments()).await?,
             STOP => self.stop(r.arguments())?,
+            RESUME => self.resume(r.arguments()).await?,
             _ => {
                 return Err(AdapterError::NotImplemented {
                     tool: r.tool().to_string(),
@@ -429,7 +539,7 @@ impl ToolExecutor for AsyncCodeDelegateTool {
         Ok(ToolCallResult::new(
             rec,
             ev,
-            Some(BoundedOutput::from_bounded(body.to_string(), false)),
+            Some(crate::skill_bundles::tool_output(&body)),
             now,
         ))
     }

@@ -279,6 +279,38 @@ test("coding tasks expose durable review evidence as text, not markup or verifie
   assert.equal(h.putCalls.length, 0, "reviewing a result must never execute a task or command");
 });
 
+test("coding task defaults and independent evidence describe the Settings workspace without implying browser verification", async () => {
+  const directory = "C:/owner/websites";
+  const h = harness({ apiResponses: {
+    "/code-agents": { needs: { folder: true, node: true }, presets: [] },
+    "/code-agents/tasks": { tasks: [{
+      task_id: "in-place-task", repository: directory, task: "Build the website",
+      status: "failed", minutes: 0, allow_commands: true,
+      result: { directory, mode: "in_place", outcome: "verification_failed",
+        verification: { status: "failed", checks: [{ command: { program: "npm", arguments: ["run", "build"] }, passed: false }] } }
+    }] }
+  } });
+  h.initialize(); h.open(); await loadFixture(h, {
+    ...configuredFixture,
+    settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
+  });
+  h.select("files"); await flush();
+  const setup = h.$("settings-body").textContent;
+  assert.match(setup, /first folder by default/);
+  assert.match(setup, /No Git repository, branch or automatic commit/);
+  assert.match(setup, /without an overall time limit/);
+  assert.match(setup, /Git is optional; normal in-place coding does not need it/);
+  assert.doesNotMatch(setup, /install git first|in a copy of your repository/);
+  const review = classNodes(h, "code-task")[0];
+  assert.ok(review.textContent.includes(directory));
+  assert.match(review.textContent, /in_place/);
+  assert.match(review.textContent, /None/);
+  assert.match(review.textContent, /verification_failed/);
+  assert.match(review.textContent, /Independent checks/);
+  assert.ok(review.textContent.includes("Separate desktop/mobile inspection required"));
+  assert.equal(h.putCalls.length, 0);
+});
+
 test("coding task refresh preserves expanded reviews and focus, reports failures and clears stale empty results", async () => {
   const task = { task_id: "refresh-task", repository: "repo", task: "Fix the parser", status: "running", result: null };
   const responses = {

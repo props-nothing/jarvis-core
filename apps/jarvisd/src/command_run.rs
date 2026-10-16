@@ -226,9 +226,9 @@ const OUTPUT_SCHEMA: &str = r#"{
 /// The arguments of one call, after validation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandArgs {
-    program: String,
-    arguments: Vec<String>,
-    directory: String,
+    pub(crate) program: String,
+    pub(crate) arguments: Vec<String>,
+    pub(crate) directory: String,
     limit: Duration,
 }
 

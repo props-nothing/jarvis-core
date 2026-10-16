@@ -309,6 +309,49 @@ forget, and export.
 | `/api/v1/memories/{id}/correct` | `POST` | replaces the text, linking `supersedes` |
 | `/api/v1/memories/{id}/confirm` | `POST` | **accepts a proposal**, recording who accepted it |
 | `/api/v1/memories/{id}/forget` | `POST` | deletes it, returning a `DeletionReceipt` |
+| `/api/v1/memories/browse` | `POST` | current durable claims with bounded plain-text previews and live cursor paging |
+
+`MemoryBrowseRequest` accepts only optional `cursor`, `limit` (1–20, default 10), `memory_type`
+(`episodic`, `semantic`, `preference`, `relationship`, `procedural`) and exact `entity_id`.
+Unknown fields, invalid bounds/IDs/types and foreign/unknown cursors are refused. The authenticated
+owner workspace is not an argument. `MemoryBrowseReply` returns `memories` (flattened references
+with a 240-character `preview`) and `next_cursor` (last returned ID when more eligible rows exist,
+otherwise null). Order is creation time at whole-second precision descending, then ID descending;
+copy the cursor unchanged and reset after filter changes. Pagination is live, not snapshot isolation
+across requests. Current discovery excludes historical/proposed/future-valid records, working or
+conversation types, model-inference sources and task-plan predicates. Owner browse uses the local
+Restricted ceiling; existing owner list/read/export retain their distinct historical contracts.
+
+### Explicit model memory readers
+
+[ADR-0223](../adr/0223-memory-discovery-browses-before-guessing-and-reads-by-id.md). All three
+version-2.0.0 tools are read-only, risk 0, auto-approval, and require `memory.read`:
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `jarvis.memory.list` | same browse fields; `{}` is valid | `outcome:listed`, `count`, fenced `results` previews, `next_cursor`, coverage/guidance |
+| `jarvis.memory.search` | required topic `query` (1–200 characters with a word), optional `limit` (1–10, default 5) | `outcome:searched`, considered/matched counts, lexical coverage, per-result matched terms, previews, truncation flags and bounded compatibility `memories` |
+| `jarvis.memory.read` | required exact `memory_id` from discovery | `outcome:read`, ID/type/sensitivity and full fenced `memory` with provenance; absent/foreign/withheld IDs all return `outcome:unavailable` |
+
+The pipeline attaches trusted workspace/destination restrictions outside arguments. Missing context
+fails closed; unknown/remote placement defaults to Internal. No reader accepts a model-supplied
+workspace or sensitivity override. Model readers apply current-run eligibility and neutralize/fence
+memory content and provenance as data. Tool definitions allow up to Restricted output rather than
+mislabeling local-only records. Existing deterministic policy and audit remain mandatory.
+
+Search scans all currently eligible records in bounded 200-record pages and retains only top-N
+whole-word Unicode-normalized matches. Coverage precedes importance, recency and stable ID;
+partial matches remain alongside complete matches. `truncated` reports omitted matches and
+`details_truncated` reports omitted rendered detail blocks (16,000-character compatibility budget).
+Final serialized model responses must also fit the shared 12,000-character and 32 KiB UTF-8 caps.
+Drop search compatibility `memories` first (`null`, `details_truncated:true`), then whole result
+entries with updated `count` and `truncated:true` if necessary. Browse fitting adjusts `next_cursor`
+to the last retained ID so omitted entries remain reachable. Never cut JSON or isolation fences;
+refuse a single response that cannot fit safely. These model limits do not change owner browse pages.
+Maximum-size claims remain discoverable: if provenance and claim exceed a single isolation block,
+explicit readers fence metadata and complete claim independently, without changing native recall budgets.
+Use exact read instead of treating a preview as complete. There is no semantic index or constant-time
+latency claim. The existing owner `/memories/search` API retains its older bounded candidate behavior.
 
 ### Session summaries
 

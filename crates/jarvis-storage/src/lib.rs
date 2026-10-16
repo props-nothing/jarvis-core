@@ -57,8 +57,8 @@ pub use database::{
 pub use delegated_task_repository::{
     DelegatedTaskFinish, MAX_TASK_ACTIVITY_CHARS, MAX_TASK_ACTIVITY_RETAINED,
     MAX_TASK_ACTIVITY_SHOWN, NewDelegatedTask, StoredDelegatedTask, StoredDelegatedTaskActivity,
-    append_delegated_task_activity, create_delegated_task, find_delegated_task,
-    finish_delegated_task, interrupt_delegated_tasks, list_delegated_tasks,
+    append_delegated_task_activity, create_delegated_task, create_delegated_task_with_request,
+    find_delegated_task, finish_delegated_task, interrupt_delegated_tasks, list_delegated_tasks,
     mark_delegated_task_running,
 };
 pub use digest_repository::{
@@ -83,10 +83,10 @@ pub use memory_repository::{
     count_entity_memory_links, count_memory_entity_links, find_entity, find_memory,
     find_memory_including_deleted, is_tombstoned, link_memory_entity, merge_entities, purge_memory,
     read_alias_candidates, read_all_memories, read_entities_by_label, read_entity_aliases,
-    read_entity_memories, read_retrievable_memories, read_subject_relations,
-    read_task_memory_candidates, read_workspace_entities, read_workspace_memories, record_alias,
-    record_entity, record_memory, record_relation, record_tombstone, reinforce_memory,
-    resolve_alias,
+    read_entity_memories, read_memory_discovery_page, read_retrievable_memories,
+    read_subject_relations, read_task_memory_candidates, read_workspace_entities,
+    read_workspace_memories, record_alias, record_entity, record_memory, record_relation,
+    record_tombstone, reinforce_memory, resolve_alias,
 };
 pub use message_repository::{
     MAX_MESSAGE_PAGE, StoredMessage, append_message, count_messages, find_message, read_messages,

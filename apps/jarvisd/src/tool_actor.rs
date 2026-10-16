@@ -12,7 +12,7 @@
 //! workspace would let a caller name a workspace it was never granted. [`ToolActor`] carries
 //! identifiers read from those sources rather than parsed from a request body.
 
-use jarvis_core::{CorrelationId, SessionChannel};
+use jarvis_core::{CorrelationId, Sensitivity, SessionChannel};
 
 use jarvis_tools::ActorAuthority;
 use jarvis_tools::{Scope, ScopeSet};
@@ -43,6 +43,7 @@ pub struct ToolActor {
     scopes: ScopeSet,
     channel: SessionChannel,
     policy_version: String,
+    read_destination: Sensitivity,
 }
 
 impl ToolActor {
@@ -91,6 +92,7 @@ impl ToolActor {
             scopes: Self::required_scopes_for(served),
             channel: SessionChannel::Api,
             policy_version: policy_version.into(),
+            read_destination: Sensitivity::Internal,
         }
     }
 
@@ -171,6 +173,7 @@ impl ToolActor {
             scopes: ScopeSet::new([files, mcp]),
             channel,
             policy_version: policy_version.into(),
+            read_destination: Sensitivity::Internal,
         })
     }
 
@@ -232,6 +235,7 @@ impl ToolActor {
             scopes: ScopeSet::new(scopes),
             channel,
             policy_version: policy_version.into(),
+            read_destination: Sensitivity::Internal,
         }
     }
 
@@ -273,6 +277,7 @@ impl ToolActor {
             scopes,
             channel,
             policy_version: policy_version.into(),
+            read_destination: Sensitivity::Internal,
         }
     }
 
@@ -280,6 +285,19 @@ impl ToolActor {
     #[must_use]
     pub fn workspace_id(&self) -> &str {
         &self.workspace_id
+    }
+
+    /// Sets the verified model destination ceiling for this round.
+    #[must_use]
+    pub const fn with_read_destination(mut self, destination: Sensitivity) -> Self {
+        self.read_destination = destination;
+        self
+    }
+
+    /// Returns the destination ceiling; remote and unknown callers default to internal.
+    #[must_use]
+    pub const fn read_destination(&self) -> Sensitivity {
+        self.read_destination
     }
 
     /// Returns the run that made the call.

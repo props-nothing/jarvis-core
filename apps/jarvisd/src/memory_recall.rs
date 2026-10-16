@@ -20,6 +20,18 @@ pub(crate) struct MemoryRecall {
     pub(crate) summary: Value,
 }
 
+pub(crate) fn query_for(
+    workspace: WorkspaceId,
+    now: UtcTimestamp,
+    destination: Sensitivity,
+) -> MemoryQuery {
+    MemoryQuery::new(workspace, now)
+        .with_destination(destination)
+        .with_allowed_types(crate::executor::MODEL_MEMORY_TYPES.to_vec())
+        .with_minimum_trust(MemoryTrust::Untrusted)
+        .with_minimum_confidence(MemoryConfidence::Unverified)
+}
+
 pub(crate) async fn recall(
     database: &SqliteDatabase,
     workspace: WorkspaceId,
@@ -27,12 +39,7 @@ pub(crate) async fn recall(
     now: UtcTimestamp,
     destination: Sensitivity,
 ) -> Result<MemoryRecall, DatabaseError> {
-    let query = MemoryQuery::new(workspace, now)
-        .with_text(task_text(objective))
-        .with_destination(destination)
-        .with_allowed_types(crate::executor::MODEL_MEMORY_TYPES.to_vec())
-        .with_minimum_trust(MemoryTrust::Untrusted)
-        .with_minimum_confidence(MemoryConfidence::Unverified);
+    let query = query_for(workspace, now, destination).with_text(task_text(objective));
     let records = read_task_memory_candidates(database, &query, CANDIDATES)
         .await?
         .into_iter()

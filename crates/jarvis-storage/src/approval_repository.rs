@@ -248,7 +248,7 @@ pub async fn read_run_approvals(
 ///
 /// Matches the migration's `CHECK`, so the limit is stated once in Rust and enforced once in SQL rather than
 /// being a number a caller could exceed and learn about from a constraint failure.
-pub const MAX_APPROVAL_ARGUMENTS_BYTES: usize = 8192;
+pub const MAX_APPROVAL_ARGUMENTS_BYTES: usize = 1_048_576;
 
 /// Stores the arguments a pending approval is waiting on, so the person deciding can see them.
 ///

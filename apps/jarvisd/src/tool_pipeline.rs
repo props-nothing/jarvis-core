@@ -470,6 +470,7 @@ struct PreparedCall {
     arguments: Value,
     /// When the call was admitted, from which the deadline is computed.
     issued_at: UtcTimestamp,
+    read_context: Option<(String, jarvis_core::Sensitivity)>,
 }
 
 /// What admitting a call produced.
@@ -1013,6 +1014,7 @@ impl ToolPipeline {
             key: IdempotencyKey::parse(stored.idempotency_key())?,
             arguments,
             issued_at: now,
+            read_context: Some((actor.workspace_id().to_owned(), actor.read_destination())),
         };
 
         match self
@@ -1428,6 +1430,10 @@ impl ToolPipeline {
             deadline: deadline_after(now, definition.timeout_seconds()),
             correlation_id,
         })?;
+        let request = match actor.workspace_id().parse() {
+            Ok(workspace) => request.with_read_context(workspace, actor.read_destination()),
+            Err(_) => request,
+        };
 
         match self.dispatch.adapter_for(request.tool()) {
             Some(adapter) => Ok(ToolPipelineOutcome::Executed(Box::new(
@@ -1594,6 +1600,7 @@ impl ToolPipeline {
             key,
             arguments: arguments.clone(),
             issued_at: now,
+            read_context: Some((actor.workspace_id().to_owned(), actor.read_destination())),
         })))
     }
 
@@ -1714,6 +1721,13 @@ impl ToolPipeline {
             deadline: deadline_after(prepared.issued_at, definition.timeout_seconds()),
             correlation_id,
         })?;
+        let request = match prepared.read_context {
+            Some((workspace, destination)) => match workspace.parse() {
+                Ok(workspace) => request.with_read_context(workspace, destination),
+                Err(_) => request,
+            },
+            None => request,
+        };
 
         advance_tool_call(
             &self.database,

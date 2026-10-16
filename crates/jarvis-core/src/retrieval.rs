@@ -95,6 +95,8 @@ pub enum Ineligibility {
     /// An **equality**, not a containment or a hierarchy: the document's own boundary, and
     /// [`MemoryRecord::is_visible_in`] is the single place it is asked.
     ForeignWorkspace,
+    /// The claim does not become valid until after the query instant.
+    NotYetValid,
     /// The claim is not current truth at the query instant: superseded, expired, or deleted.
     ///
     /// The document requires obsolete claims "stop being retrieved as current truth", so a superseded
@@ -138,6 +140,7 @@ impl Ineligibility {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::ForeignWorkspace => "foreign_workspace",
+            Self::NotYetValid => "not_yet_valid",
             Self::NotCurrent { .. } => "not_current",
             Self::AboveDestination { .. } => "above_destination",
             Self::TypeNotAllowed { .. } => "type_not_allowed",
@@ -276,6 +279,9 @@ impl MemoryQuery {
         let status = record.effective_status_at(self.at);
         if !status.is_current_truth() {
             return Err(Ineligibility::NotCurrent { status });
+        }
+        if record.valid_from() > self.at {
+            return Err(Ineligibility::NotYetValid);
         }
         if !self.allowed_types.is_empty() && !self.allowed_types.contains(&record.memory_type()) {
             return Err(Ineligibility::TypeNotAllowed {

@@ -8,6 +8,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+serde_yaml_ng.workspace = true
 # Routing lives here, not in a domain crate: ADR-0011 places the HTTP gateway in the
 # composition root and forbids Axum in `jarvis-core`, `jarvis-application`, and
 # `jarvis-storage`. DTOs stay in `jarvis-protocol`.

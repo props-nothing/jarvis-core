@@ -45,7 +45,7 @@ const CORRECT_INPUT: &str = r#"{
   "additionalProperties": false,
   "required": ["memory_id", "claim", "corrected"],
   "properties": {
-    "memory_id": { "type": "string", "minLength": 36, "maxLength": 36, "description": "The memory_id jarvis.memory.search gave." },
+    "memory_id": { "type": "string", "minLength": 36, "maxLength": 36, "description": "The memory_id returned by jarvis.memory.list, search or read." },
     "claim": { "type": "string", "minLength": 1, "maxLength": 300, "description": "A quotation from the memory being corrected, at least 8 characters (or all of it if shorter). The owner reads this to know which memory; the tool refuses if it is not in that memory." },
     "corrected": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "The corrected claim, complete: it replaces the old one. A memory is one short fact: at most 32 different words (case and punctuation ignored). Longer than that is refused; keep the one fact and put the rest in a project note." }
   }
@@ -57,7 +57,7 @@ const FORGET_INPUT: &str = r#"{
   "additionalProperties": false,
   "required": ["memory_id", "claim"],
   "properties": {
-    "memory_id": { "type": "string", "minLength": 36, "maxLength": 36, "description": "The memory_id jarvis.memory.search gave." },
+    "memory_id": { "type": "string", "minLength": 36, "maxLength": 36, "description": "The memory_id returned by jarvis.memory.list, search or read." },
     "claim": { "type": "string", "minLength": 1, "maxLength": 300, "description": "A quotation from the memory to delete, at least 8 characters (or all of it if shorter). The owner reads this to know which memory; the tool refuses if it is not in that memory." }
   }
 }"#;
@@ -110,14 +110,14 @@ impl MemoryManageTool {
             Self::definition(
                 CORRECT_TOOL,
                 "Correct a memory",
-                "Replaces a remembered claim that is wrong or out of date with a corrected one (memory_id from jarvis.memory.search). Quote the \
+                "Replaces a remembered claim that is wrong or out of date with a corrected one (memory_id from jarvis.memory.list, search or read). Quote the \
                  claim being replaced so the owner can see which one. The owner is asked first.",
                 CORRECT_INPUT,
             )?,
             Self::definition(
                 FORGET_TOOL,
                 "Forget a memory",
-                "Deletes a remembered claim for good (memory_id from jarvis.memory.search), so it is not remembered again unless the owner says it \
+                "Deletes a remembered claim for good (memory_id from jarvis.memory.list, search or read), so it is not remembered again unless the owner says it \
                  anew. Quote the claim so the owner can see which one. The owner is asked first.",
                 FORGET_INPUT,
             )?,

@@ -30,7 +30,7 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use jarvis_core::{CorrelationId, UtcTimestamp};
+use jarvis_core::{CorrelationId, Sensitivity, UtcTimestamp, WorkspaceId};
 use serde_json::Value;
 
 use crate::execution::{AuthorizationReceipt, IdempotencyKey, ToolCallResult};
@@ -87,6 +87,7 @@ pub struct ToolExecutionRequest {
     idempotency_key: IdempotencyKey,
     deadline: UtcTimestamp,
     correlation_id: CorrelationId,
+    read_context: Option<(WorkspaceId, Sensitivity)>,
 }
 
 /// The declared fields of an execution request.
@@ -190,7 +191,25 @@ impl ToolExecutionRequest {
             idempotency_key,
             deadline,
             correlation_id,
+            read_context: None,
         })
+    }
+
+    /// Attaches the authenticated workspace and verified destination, never model arguments.
+    #[must_use]
+    pub const fn with_read_context(
+        mut self,
+        workspace: WorkspaceId,
+        destination: Sensitivity,
+    ) -> Self {
+        self.read_context = Some((workspace, destination));
+        self
+    }
+
+    /// Returns trusted read restrictions; canonical readers must refuse missing context.
+    #[must_use]
+    pub const fn read_context(&self) -> Option<(WorkspaceId, Sensitivity)> {
+        self.read_context
     }
 
     /// Returns the durable call identifier.

@@ -786,7 +786,7 @@ window.JarvisSettings = function (context) {
       var badge = el("span", "badge off", "off");
       title.appendChild(badge);
       card.appendChild(title);
-      card.appendChild(el("p", "lead", "Hands a bigger coding task to an agent you already use (ChatGPT/Codex, Claude, Copilot, Gemini and others). It works in its own copy of your repository on a new branch, so your own files are not touched; JARVIS asks you first and never merges or pushes. It needs a folder above and git."));
+      card.appendChild(el("p", "lead", "Hands a bigger coding task to an agent you already use (ChatGPT/Codex, Claude, Copilot, Gemini and others). It edits the folder permitted above in Settings, using the first folder by default. No Git repository, branch or automatic commit is needed. Commands and project dependency setup are enabled for the approved task. Jobs queue without an overall time limit unless you select one; Stop remains available. Isolated worktrees are an explicit option, not the default."));
       var holder = el("div");
       card.appendChild(holder);
       var out = el("p", "help", "");
@@ -804,8 +804,8 @@ window.JarvisSettings = function (context) {
         if (chosen === "custom") badge.textContent = "custom";
         else if (chosen) badge.textContent = "chosen";
         holder.appendChild(checklist([
-          { done: info.needs.folder, text: "A folder is granted (above), with your repository in it." },
-          { done: info.needs.git, text: info.needs.git ? "git is installed." : "git is not installed: install git first." },
+          { done: info.needs.folder, text: "A working folder is permitted above; the first is the default." },
+          { done: true, text: info.needs.git ? "Git is available for optional worktrees." : "Git is optional; normal in-place coding does not need it." },
           { done: ready, text: chosen ? "An agent is chosen." : info.detected ? "No agent is chosen; JARVIS will use the installed " + info.detected + "." : "Choose an agent below." }
         ]));
         var list = el("div");
@@ -853,7 +853,7 @@ window.JarvisSettings = function (context) {
         customActs.appendChild(customSave);
         customRow.appendChild(customActs);
         more.appendChild(customRow);
-        more.appendChild(el("p", "secthint", "Any agent that speaks the Agent Client Protocol over standard input and output works. It is started with this command, no shell, in a copy of your repository."));
+        more.appendChild(el("p", "secthint", "Any agent that speaks the Agent Client Protocol over standard input and output works. It is started with this command, no shell, in your Settings-permitted working folder."));
         holder.appendChild(more);
         var buttons = el("div", "acts");
         var test = el("button", "yes", "Test");
@@ -984,6 +984,9 @@ window.JarvisSettings = function (context) {
           }
           var result = task.result || {};
           field("Task", task.task_id);
+          field("Working folder", result.directory || task.repository);
+          field("Mode", task.mode || result.mode || "Legacy task");
+          field("Overall deadline", task.minutes ? task.minutes + " minutes" : "None (owner can stop)");
           field("Branch", task.branch || result.branch);
           field("Worktree", task.worktree || result.worktree);
           field("Created", task.created_at);
@@ -993,7 +996,9 @@ window.JarvisSettings = function (context) {
           field("Base commit", result.base_commit);
           field("Commit", result.commit);
           field("Files changed", result.files_changed);
-          if (task.result) field("Verification", "Not independently verified");
+          if (task.result) field("Verification", result.verification ? result.verification.status : "Not independently verified");
+          if (task.result) field("Website browser check", "Separate desktop/mobile inspection required");
+          if (result.verification) evidence("Independent checks", JSON.stringify(result.verification, null, 2));
           if (result.permissions) field("Permissions", result.permissions.allowed + " allowed, " + result.permissions.refused + " refused");
           [task.error, result.detail, result.result_unreadable, result.activity_error].concat(result.notes || []).forEach(function (note) {
             if (note) resultBody.appendChild(el("p", "help bad", note));

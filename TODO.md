@@ -6,6 +6,14 @@
 
 This is the execution ledger. Work top to bottom unless an ADR records why ordering changed. A box may be checked only when its acceptance evidence exists. Update this file in the same change as the implementation.
 
+## Owner-requested release build repair (2026-10-16)
+
+- Reproduced `cargo build --release`: nine compiler errors from missing storage re-exports (`read_memory_discovery_page`, `create_delegated_task_with_request`) and private `CommandArgs` fields used by the managed-process tool. Restored those exports and crate-scoped field access.
+- Storage tests then exposed `InvalidMigrationPlan { embedded: 29, expected: 28 }`. Aligned `CURRENT_SCHEMA_VERSION` with the already-present migration 29 ([ADR-0222](docs/adr/0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md)). The legacy-run upgrade fixture now applies the real migrations through version 27 before reopening with the current migrator, instead of modifying current schema markers.
+- Windows release verification: `cargo build --release` passed (4m 01s); both generated executables passed `--version`, and `jarvisd` reports database schema 29. Focused checks: 48 daemon memory tests, five managed-process tests and the corrected legacy-run upgrade test passed; `cargo fmt --check` passed.
+- `cargo test --workspace --no-fail-fast`: **3,084 passed, 6 failed, 4 ignored** across 61 result summaries; all 349 storage tests pass. Five asynchronous coding-task tests fail; one explicitly refuses a saved absolute directory under the current relative-only command-directory policy. The transcript-trimming test still assumes full-file reads although reads now return 1,500-byte pages. These existing working-tree changes were preserved. The local test log is `target/release-repair-20261016-workspace-tests.log` (ignored build output).
+- Strict workspace Clippy currently fails on unused `MemoryService::browse` and `ToolActor::with_read_destination`; their callers were removed in pre-existing working-tree edits. Those product changes are preserved. No feature acceptance slice is marked complete by this build repair.
+
 ## Owner-requested text recovery (2026-10-15)
 
 - [~] `P11-027` **Long input and recoverable results**, selected by the owner after the limit review ([ADR-0221](docs/adr/0221-long-input-and-results-remain-retrievable-outside-model-context.md), [guide](docs/user/files.md)). Implementation: full objectives up to 200,000 characters with an additive schema-28 migration; multiline console and shared CLI admission; session-scoped retained-context and history paging; byte-paged UTF-8 file reads; character-paged stored sub-agent answers; recoverable command-output capture paths. Resource and model bounds remain, not arbitrary silent loss.

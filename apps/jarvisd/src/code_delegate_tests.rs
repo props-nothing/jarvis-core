@@ -117,7 +117,80 @@ fn task(script_free_task: &str) -> Arguments {
         task: script_free_task.to_owned(),
         allow_commands: false,
         minutes: 1,
+        mode: "worktree".to_owned(),
+        allow_network: false,
+        skills: Vec::new(),
+        checks: Vec::new(),
     }
+}
+
+#[tokio::test]
+async fn default_workspace_is_the_first_settings_folder_without_git_or_worktrees() {
+    let world = World::new();
+    let plain_folder = world.granted().join("website");
+    std::fs::create_dir(&plain_folder).unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(plain_folder.join("existing.txt"), "owner changes")
+        .unwrap_or_else(|error| panic!("{error}"));
+    let tool = CodeDelegateTool::new(
+        std::slice::from_ref(&plain_folder),
+        world.trees(),
+        world.tool("chat").agent,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let args = Arguments::parse(&json!({"task":"inspect and preserve files"}))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let answer = tool
+        .run(&args)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(answer["outcome"], "completed", "{answer}");
+    assert_eq!(answer["mode"], "in_place");
+    assert_eq!(answer["directory"], plain_folder.to_string_lossy().as_ref());
+    assert_eq!(answer["verification"]["status"], "not_run");
+    assert!(!plain_folder.join(".git").exists());
+    assert!(!world.trees().exists());
+    assert_eq!(
+        std::fs::read_to_string(plain_folder.join("existing.txt")).unwrap_or_default(),
+        "owner changes"
+    );
+}
+
+#[tokio::test]
+async fn independent_failed_check_is_not_a_verified_delivery() {
+    let world = World::new();
+    let tool = world.tool("say:Everything passed");
+    let check = if cfg!(windows) {
+        json!({"program":"cmd","arguments":["/C","exit 7"]})
+    } else {
+        json!({"program":"sh","arguments":["-c","exit 7"]})
+    };
+    let args =
+        Arguments::parse(&json!({"repository":"repo","task":"build website","checks":[check]}))
+            .unwrap_or_else(|error| panic!("{error}"));
+    let answer = tool
+        .run(&args)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(answer["outcome"], "verification_failed", "{answer}");
+    assert_eq!(answer["verification"]["status"], "failed");
+    assert_eq!(
+        answer["verification"]["checks"][0]["result"]["exit_code"],
+        7
+    );
+}
+
+#[test]
+fn javascript_projects_get_independent_checks_using_their_package_manager() {
+    let world = World::new();
+    std::fs::write(
+        world.repo().join("package.json"),
+        r#"{"packageManager":"pnpm@10.0.0","scripts":{"build":"build","typecheck":"types"}}"#,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let checks = project_checks(&world.repo());
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0]["program"], "pnpm");
+    assert_eq!(checks[0]["arguments"], json!(["run", "build"]));
 }
 
 fn request(kind: &str, paths: &[&str]) -> PermissionRequest {
@@ -146,13 +219,16 @@ fn the_contract_asks_the_owner_at_risk_three_and_takes_no_extra_arguments() {
 fn arguments_are_checked_before_anything_starts() {
     let ok = Arguments::parse(&json!({ "repository": "repo", "task": "do it" }))
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!((ok.minutes, ok.allow_commands), (DEFAULT_MINUTES, false));
+    assert_eq!((ok.minutes, ok.allow_commands), (0, true));
+    assert_eq!(ok.mode, "in_place");
+    assert!(ok.allow_network);
+    assert!(Arguments::parse(&json!({"task":"x", "minutes":1440})).is_ok());
     for bad in [
         json!({}),
         json!({ "repository": "repo" }),
         json!({ "repository": "repo", "task": "  " }),
-        json!({ "repository": "repo", "task": "x", "minutes": 0 }),
-        json!({ "repository": "repo", "task": "x", "minutes": 8 }),
+        json!({ "repository": "repo", "task": "x", "minutes": -1 }),
+        json!({ "repository": "repo", "task": "x", "minutes": "8" }),
         json!({ "repository": "repo", "task": "x".repeat(MAX_TASK_CHARS + 1) }),
     ] {
         assert!(Arguments::parse(&bad).is_err(), "{bad}");
@@ -267,11 +343,20 @@ async fn a_task_is_done_on_its_own_branch_and_nothing_reaches_the_owners_checkou
 
     assert_eq!(answer["outcome"], "completed", "{answer}");
     assert_eq!(answer["files_changed"], 1);
-    assert!(answer["commit"].is_string());
+    assert!(answer["commit"].is_null());
     let branch = answer["branch"].as_str().unwrap_or_default();
     assert!(branch.starts_with("jarvis/add-a-greeting-"), "{branch}");
-    let patch = answer["patch"].to_string();
-    assert!(patch.contains("written by the fake agent"), "{patch}");
+    let file = Path::new(
+        answer["worktree"]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing worktree")),
+    )
+    .join("hello.txt");
+    assert!(
+        std::fs::read_to_string(file)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .contains("written by the fake agent")
+    );
     assert!(
         answer["notes"].as_array().is_some_and(Vec::is_empty),
         "{answer}"
@@ -280,7 +365,7 @@ async fn a_task_is_done_on_its_own_branch_and_nothing_reaches_the_owners_checkou
         answer["next"]
             .as_str()
             .unwrap_or_default()
-            .contains("Nothing was merged or pushed")
+            .contains("No automatic commit")
     );
 
     // The branch exists with the agent's file; the owner's checkout has neither.
@@ -290,7 +375,7 @@ async fn a_task_is_done_on_its_own_branch_and_nothing_reaches_the_owners_checkou
         .args(["ls-tree", "-r", "--name-only", branch])
         .output()
         .unwrap_or_else(|error| panic!("{error}"));
-    assert!(String::from_utf8_lossy(&listing.stdout).contains("hello.txt"));
+    assert!(!String::from_utf8_lossy(&listing.stdout).contains("hello.txt"));
     assert!(!world.repo().join("hello.txt").exists());
     let current = Command::new("git")
         .arg("-C")
@@ -469,9 +554,40 @@ async fn only_a_repository_in_a_granted_folder_and_only_one_task_at_a_time() {
         .slot
         .try_acquire()
         .unwrap_or_else(|error| panic!("{error}"));
-    let busy = tool.run(&task("x")).await;
+    let cancel = Notify::new();
+    cancel.notify_one();
     assert!(
-        matches!(&busy, Err(AdapterError::RefusedBeforeReaching { reason }) if reason.contains("already running")),
-        "{busy:?}"
+        tool.acquire(&cancel)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"))
+            .is_none()
+    );
+}
+
+#[test]
+fn delegated_brief_preserves_workspace_mode_and_explicit_permission_refusals() {
+    let mut arguments = task("Build the requested website");
+    let directory = Path::new("owner-workspace");
+    let worktree_brief = framed_task(directory, &arguments, "No selected skills");
+    assert!(worktree_brief.contains("explicit Git worktree was requested"));
+    assert!(!worktree_brief.contains("not in a profile/cache worktree"));
+    assert!(worktree_brief.contains("commands are not authorized"));
+    assert!(worktree_brief.contains("Network access is not authorized"));
+    assert!(worktree_brief.contains("when authorized, install dependencies"));
+    assert!(worktree_brief.contains("report preview argv and bind/port requirements"));
+
+    arguments.mode = "in_place".to_owned();
+    arguments.allow_commands = true;
+    arguments.allow_network = true;
+    let in_place_brief = framed_task(directory, &arguments, "No selected skills");
+    assert!(in_place_brief.contains("owner's permitted folders in Settings"));
+    assert!(!in_place_brief.contains("explicit Git worktree was requested"));
+    assert!(
+        in_place_brief
+            .contains("Project-local dependencies, setup, builds and tests are authorized")
+    );
+    assert!(
+        in_place_brief
+            .contains("Network access for documentation and task dependencies is authorized")
     );
 }

@@ -380,6 +380,33 @@ fn an_obsolete_claim_is_excluded_and_the_reason_says_which() {
     assert_eq!(early.is_eligible(&expiring), Ok(()));
 }
 
+#[test]
+fn a_claim_becomes_eligible_at_its_valid_from_boundary() {
+    let future = must(MemoryRecord::new(MemoryRecordParts {
+        id: MemoryId::new(),
+        workspace_id: workspace(),
+        memory_type: MemoryType::Semantic,
+        content: "Works in Utrecht starting next week".to_owned(),
+        structured_claim: None,
+        source: user_source(),
+        confidence: MemoryConfidence::Confirmed,
+        importance: 2,
+        sensitivity: Sensitivity::Internal,
+        entities: vec![EntityRef::confirmed(entity())],
+        valid_from: Some(at(100)),
+        valid_until: None,
+        supersedes: None,
+        run_id: None,
+        created_by_actor_id: ACTOR.to_owned(),
+        correlation_id: crate::id::CorrelationId::new(),
+        created_at: at(0),
+    }));
+    let before = MemoryQuery::new(workspace(), at(99));
+    assert_eq!(before.is_eligible(&future), Err(Ineligibility::NotYetValid));
+    assert_eq!(Ineligibility::NotYetValid.as_str(), "not_yet_valid");
+    assert_eq!(query().is_eligible(&future), Ok(()));
+}
+
 /// **The three caller-stated requirements each refuse, and each names its own cause.**
 ///
 /// Type, trust, and confidence. They are the document's last three eligibility rows and the ones a caller

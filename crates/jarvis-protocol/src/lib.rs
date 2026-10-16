@@ -6,6 +6,8 @@ mod digest_api;
 mod entity_api;
 mod frame;
 mod memory_api;
+mod memory_browse_api;
+pub use memory_browse_api::{MemoryBrowseReply, MemoryBrowseRequest, MemoryPreview};
 mod project_api;
 mod rest;
 mod run_api;

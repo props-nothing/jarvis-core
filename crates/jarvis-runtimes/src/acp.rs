@@ -49,7 +49,7 @@ pub struct Limits {
     /// How long `initialize` and `session/new` may take together. An agent started through a package runner may be downloaded
     /// first, so this is generous.
     pub handshake: Duration,
-    /// How long a prompt may run before it is cancelled.
+    /// How long a prompt may run before it is cancelled. Zero means no overall deadline.
     pub turn: Duration,
     /// How long an agent is given to end a cancelled turn before the client reports the end itself.
     pub cancel_grace: Duration,
@@ -65,7 +65,7 @@ impl Default for Limits {
             max_tool_notes: 200,
             max_message_chars: 6_000,
             handshake: Duration::from_mins(3),
-            turn: Duration::from_mins(15),
+            turn: Duration::ZERO,
             cancel_grace: Duration::from_secs(10),
             write: Duration::from_secs(15),
         }
@@ -370,7 +370,7 @@ struct Wait<'a> {
     id: u64,
     policy: Option<&'a dyn PermissionPolicy>,
     cancel: Option<&'a Notify>,
-    deadline: Instant,
+    deadline: Option<Instant>,
 }
 
 impl Connection {
@@ -586,7 +586,7 @@ impl Connection {
                 id,
                 policy: None,
                 cancel: None,
-                deadline,
+                deadline: Some(deadline),
             },
             &mut report,
         )
@@ -618,7 +618,7 @@ impl Connection {
                     return report;
                 }
             };
-            let deadline = Instant::now() + self.limits.turn;
+            let deadline = (!self.limits.turn.is_zero()).then(|| Instant::now() + self.limits.turn);
             let outcome = self
                 .wait(
                     Wait {
@@ -717,7 +717,13 @@ impl Connection {
                     self.begin_cancel(Ended::Cancelled, &mut winding_down, &mut deadline, report).await;
                     continue;
                 }
-                () = tokio::time::sleep_until(deadline) => {
+                () = async {
+                    if let Some(deadline) = deadline {
+                        tokio::time::sleep_until(deadline).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
                     if winding_down.is_none() && wait.cancel.is_some() {
                         self.begin_cancel(Ended::TimedOut, &mut winding_down, &mut deadline, report).await;
                         continue;
@@ -802,12 +808,12 @@ impl Connection {
         &mut self,
         reason: Ended,
         winding_down: &mut Option<Ended>,
-        deadline: &mut Instant,
+        deadline: &mut Option<Instant>,
         report: &mut Report,
     ) {
         *winding_down = Some(reason.clone());
         report.ended = reason;
-        *deadline = Instant::now() + self.limits.cancel_grace;
+        *deadline = Some(Instant::now() + self.limits.cancel_grace);
         let message = json!({
             "jsonrpc": "2.0",
             "method": "session/cancel",

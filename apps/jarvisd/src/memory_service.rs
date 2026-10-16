@@ -305,6 +305,40 @@ impl MemoryService {
         })
     }
 
+    /// Browses current durable claims with bounded previews and live cursor pagination.
+    ///
+    /// # Errors
+    /// Returns validation or storage errors for invalid filters or unreadable data.
+    pub async fn browse(
+        &self,
+        request: &jarvis_protocol::MemoryBrowseRequest,
+    ) -> Result<jarvis_protocol::MemoryBrowseReply, MemoryServiceError> {
+        let query = crate::memory_recall::query_for(
+            self.workspace().await?,
+            UtcTimestamp::now(&SystemClock),
+            Sensitivity::Restricted,
+        );
+        let (stored, next_cursor) = crate::memory_discovery::browse(&self.database, query, request)
+            .await
+            .map_err(|error| match error {
+                DatabaseError::InvalidMemoryRequest { field } => MemoryServiceError::UnknownValue {
+                    field,
+                    value: "invalid browse filter".to_owned(),
+                },
+                other => MemoryServiceError::Storage(other),
+            })?;
+        Ok(jarvis_protocol::MemoryBrowseReply {
+            memories: stored
+                .iter()
+                .map(|memory| jarvis_protocol::MemoryPreview {
+                    reference: reference_of(memory),
+                    preview: memory.record().content().chars().take(240).collect(),
+                })
+                .collect(),
+            next_cursor,
+        })
+    }
+
     /// Reads one claim, with its content.
     ///
     /// # Errors

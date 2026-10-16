@@ -239,3 +239,6 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0218](0218-contact-deletion-removes-the-record-and-its-suppression-under-normal-policy.md) | Contact deletion removes the record and its suppression under normal policy | Accepted |
 | [0219](0219-remote-mcp-tokens-are-named-server-bound-request-credentials.md) | Remote MCP tokens are named server-bound request credentials | Accepted |
 | [0220](0220-generic-mcp-oauth-binds-preregistered-clients-to-resource-and-issuer.md) | Generic MCP OAuth binds pre-registered clients to resource and issuer | Accepted |
+
+| [0222](0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md) | Coding delivery uses owner workspaces and durable evidence | Accepted |
+| [0223](0223-memory-discovery-browses-before-guessing-and-reads-by-id.md) | Memory discovery browses before guessing and reads by ID | Accepted |

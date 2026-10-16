@@ -44,6 +44,7 @@ mod mcp_oauth_service;
 mod mcp_oauth_wire;
 mod mcp_serve;
 mod mcp_tunnel;
+mod memory_discovery;
 mod memory_manage;
 mod memory_propose;
 mod memory_recall;
@@ -56,6 +57,7 @@ mod notify;
 mod ocr;
 mod phone_service;
 mod phone_tool;
+mod process_tools;
 mod project_context;
 mod project_service;
 mod project_tool;
@@ -66,6 +68,7 @@ mod schedule_service;
 mod schedule_tool;
 mod settings_service;
 mod singleton;
+mod skill_bundles;
 mod skill_service;
 mod skill_tool;
 mod speech_service;
@@ -1199,10 +1202,8 @@ fn push_memory_search_tool(
     )>,
 ) -> Result<(), DaemonError> {
     additional.push((
-        vec![
-            crate::memory_search::MemorySearchTool::definition()
-                .map_err(|source| DaemonError::MemorySearchTool { source })?,
-        ],
+        crate::memory_search::MemorySearchTool::definitions()
+            .map_err(|source| DaemonError::MemorySearchTool { source })?,
         Arc::new(crate::memory_search::MemorySearchTool::new(Arc::clone(
             database,
         ))) as Arc<dyn jarvis_tools::ToolExecutor>,
@@ -1446,7 +1447,22 @@ async fn push_command_tool(
             Arc::new(background) as Arc<dyn jarvis_tools::ToolExecutor>,
         ));
     }
+    let process_storage = paths.data().join("managed-processes");
     let paths = paths_of_roots;
+    if let Ok(processes) = crate::process_tools::ProcessTools::new(&paths, process_storage) {
+        additional.push((
+            crate::process_tools::ProcessTools::definitions()
+                .map_err(|source| DaemonError::CommandRunTool { source })?,
+            Arc::new(processes),
+        ));
+    }
+    if let Ok(skills) = crate::skill_bundles::SkillBundles::new(&paths) {
+        additional.push((
+            crate::skill_bundles::SkillBundles::definitions()
+                .map_err(|source| DaemonError::CommandRunTool { source })?,
+            Arc::new(skills),
+        ));
+    }
     match crate::command_run::CommandRunTool::new(&paths) {
         Ok(tool) => {
             additional.push((

@@ -1177,7 +1177,7 @@ mod tests {
         }
     }
 
-    async fn seed_identity(database: &SqliteDatabase) {
+    async fn seed_identity(pool: &sqlx::SqlitePool) {
         for statement in [
             "INSERT INTO users (id, display_name, status, created_at, updated_at, version) \
              VALUES ('0198f000-0000-7000-8000-000000000001', 'Local User', 'active', \
@@ -1191,12 +1191,7 @@ mod tests {
                      '0198f000-0000-7000-8000-000000000001', 'cli', 'active', \
                      '2026-09-21T10:00:00Z', '2026-09-21T10:00:00Z', 1)",
         ] {
-            must(
-                sqlx::query(statement)
-                    .execute(database.pool())
-                    .await
-                    .map(|_| ()),
-            );
+            must(sqlx::query(statement).execute(pool).await.map(|_| ()));
         }
     }
 
@@ -1204,7 +1199,7 @@ mod tests {
         let directory = TestDirectory::new();
         let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
         let database = must(SqliteDatabase::open(&path).await);
-        seed_identity(&database).await;
+        seed_identity(database.pool()).await;
         (directory, database)
     }
 
@@ -1798,41 +1793,44 @@ mod tests {
 
     #[tokio::test]
     async fn upgrading_legacy_runs_preserves_relationships_and_accepts_full_objectives() {
-        let (_directory, database) = seeded_database().await;
-        let original = must(NewRun::new(
-            RUN_A,
-            SESSION,
-            WORKSPACE,
-            USER,
-            "legacy input",
-            CorrelationId::new(),
-            at(0),
-        ));
-        must(create_run(&database, &original).await);
-        let path = database.path().to_owned();
-        must(
-            sqlx::query("ALTER TABLE agent_runs DROP COLUMN full_objective")
-                .execute(database.pool())
+        let directory = TestDirectory::new();
+        let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
+        let pool = must(
+            sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    sqlx::sqlite::SqliteConnectOptions::new()
+                        .filename(&path)
+                        .create_if_missing(true)
+                        .foreign_keys(true),
+                )
                 .await,
         );
-        must(
-            sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 28")
-                .execute(database.pool())
-                .await,
+        let current = sqlx::migrate!("./migrations/sqlite");
+        let legacy = sqlx::migrate::Migrator::with_migrations(
+            current
+                .iter()
+                .filter(|migration| migration.version <= 27)
+                .cloned()
+                .collect(),
         );
+        must(legacy.run(&pool).await);
+        seed_identity(&pool).await;
         must(
             sqlx::query(
-                "UPDATE jarvis_storage_metadata SET schema_version = 27 WHERE singleton = 1",
+                "INSERT INTO agent_runs (id, session_id, workspace_id, user_id, objective, state, started_at, updated_at, correlation_id, version) \
+                 VALUES (?1, ?2, ?3, ?4, 'legacy input', 'received', ?5, ?5, ?6, 1)",
             )
-            .execute(database.pool())
-            .await,
-        );
-        must(
-            sqlx::query("PRAGMA user_version = 27")
-                .execute(database.pool())
+                .bind(RUN_A)
+                .bind(SESSION)
+                .bind(WORKSPACE)
+                .bind(USER)
+                .bind(at(0).to_string())
+                .bind(CorrelationId::new().to_string())
+                .execute(&pool)
                 .await,
         );
-        database.close().await;
+        pool.close().await;
         let database = must(SqliteDatabase::open(&path).await);
         assert!(database.pre_migration_backup().is_some());
         let legacy = must(find_run(&database, RUN_A).await);
@@ -1957,7 +1955,7 @@ mod tests {
 
         let (state, version) = {
             let database = must(SqliteDatabase::open(&path).await);
-            seed_identity(&database).await;
+            seed_identity(database.pool()).await;
             let run = one_run(&database, RUN_A).await;
             let advanced = advance(&database, run, RunState::ContextBuilding).await;
             database.close().await;

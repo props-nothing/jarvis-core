@@ -175,7 +175,9 @@ async fn start_returns_immediately_and_the_result_becomes_durable() {
     let id = started["task_id"].as_str().unwrap();
     let done = wait(&m, id).await;
     assert_eq!(done["status"], "completed");
-    assert!(done["branch"].as_str().unwrap().starts_with("jarvis/"));
+    assert!(done["branch"].is_null());
+    assert_eq!(done["mode"], "in_place");
+    assert_eq!(done["result"]["verification"]["status"], "not_run");
     assert_eq!(m.list(&json!({})).await.unwrap()["count"], 1);
 }
 
@@ -256,6 +258,13 @@ async fn stop_during_initialization_terminates_the_agent_and_its_child() {
     assert!(process_running(child_pid));
     manager.stop(&json!({"task_id":id})).unwrap();
     let done = wait(&manager, id).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while process_running(pid) || process_running(child_pid) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the setup process tree must exit within five seconds of Stop"));
     assert!(!process_running(pid), "the setup process survived Stop");
     assert!(
         !process_running(child_pid),
@@ -263,9 +272,9 @@ async fn stop_during_initialization_terminates_the_agent_and_its_child() {
     );
     assert_eq!(done["status"], "cancelled");
     assert_eq!(done["result"]["outcome"], "cancelled");
-    let worktree = Path::new(done["worktree"].as_str().unwrap());
-    assert!(worktree.exists());
-    assert!(!worktree.join("done.txt").exists());
+    assert!(done["worktree"].is_null());
+    assert!(scratch.0.join("repo").exists());
+    assert!(!scratch.0.join("repo/done.txt").exists());
     assert!(done["activity"].as_array().unwrap().is_empty());
     db.close().await;
 }
@@ -273,7 +282,7 @@ async fn stop_during_initialization_terminates_the_agent_and_its_child() {
 #[test]
 fn definitions_separate_start_read_and_stop() {
     let d = AsyncCodeDelegateTool::definitions().unwrap();
-    assert_eq!(d.len(), 5);
+    assert_eq!(d.len(), 6);
     let start = d.iter().find(|x| x.id().to_string() == START).unwrap();
     assert_eq!(start.approval(), ApprovalPolicy::Ask);
     let status = d.iter().find(|x| x.id().to_string() == STATUS).unwrap();
@@ -283,11 +292,8 @@ fn definitions_separate_start_read_and_stop() {
 #[tokio::test]
 async fn an_interrupted_task_cannot_launch_an_agent() {
     let (scratch, db, manager) = rig("write:{cwd}/done.txt,say:finished").await;
-    let args = Arguments::parse_with_max(
-        &json!({"repository":"repo","task":"add done","minutes":20}),
-        60,
-    )
-    .unwrap();
+    let args =
+        Arguments::parse(&json!({"repository":"repo","task":"add done","minutes":20})).unwrap();
     let stored = jarvis_storage::create_delegated_task(
         &db,
         &NewDelegatedTask {
@@ -323,4 +329,97 @@ async fn an_interrupted_task_cannot_launch_an_agent() {
         "interrupted"
     );
     db.close().await;
+}
+
+#[tokio::test]
+async fn queued_tasks_can_be_cancelled_without_starting_an_agent() {
+    let (scratch, db, manager) = rig("write:{cwd}/must-not-exist.txt").await;
+    let cancel = Notify::new();
+    let held = manager.inner.acquire(&cancel).await.unwrap().unwrap();
+    let first = manager
+        .start(&json!({"repository":"repo","task":"first"}))
+        .await
+        .unwrap();
+    let second = manager
+        .start(&json!({"repository":"repo","task":"second"}))
+        .await
+        .unwrap();
+    let first_id = first["task_id"].as_str().unwrap();
+    let second_id = second["task_id"].as_str().unwrap();
+    assert_eq!(
+        manager.status(&json!({"task_id":second_id})).await.unwrap()["status"],
+        "queued"
+    );
+    manager.stop(&json!({"task_id":second_id})).unwrap();
+    assert_eq!(wait(&manager, second_id).await["status"], "cancelled");
+    assert!(!scratch.0.join("repo/must-not-exist.txt").exists());
+    manager.stop(&json!({"task_id":first_id})).unwrap();
+    assert_eq!(wait(&manager, first_id).await["status"], "cancelled");
+    drop(held);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn continuation_reuses_the_saved_directory_and_capabilities_without_replaying_a_process() {
+    let (_scratch, db, manager) = rig("say:continued").await;
+    let directory = manager
+        .inner
+        .resolve("repo")
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let request = json!({"repository":directory,"task":"finish remaining work","mode":"in_place","allow_commands":false,"allow_network":false,"minutes":0});
+    let previous = jarvis_storage::create_delegated_task_with_request(
+        &db,
+        &NewDelegatedTask {
+            workspace_id: &manager.workspace,
+            repository: &directory,
+            task: "finish remaining work",
+            allow_commands: false,
+            minutes: 0,
+            now: UtcTimestamp::now(&SystemClock),
+        },
+        Some(&request.to_string()),
+    )
+    .await
+    .unwrap();
+    jarvis_storage::interrupt_delegated_tasks(&db, UtcTimestamp::now(&SystemClock))
+        .await
+        .unwrap();
+    let answer = manager
+        .resume(&json!({"task_id":previous.id}))
+        .await
+        .unwrap();
+    assert_eq!(answer["continued_from"], previous.id);
+    let task_id = answer["task_id"].as_str().unwrap();
+    let done = wait(&manager, task_id).await;
+    assert_eq!(done["status"], "completed");
+    let saved = jarvis_storage::find_delegated_task(&db, &manager.workspace, task_id)
+        .await
+        .unwrap();
+    let saved: Value = serde_json::from_str(saved.request_json.as_deref().unwrap()).unwrap();
+    assert_eq!(saved["repository"], directory);
+    assert_eq!(saved["allow_commands"], false);
+    assert_eq!(saved["allow_network"], false);
+    assert_eq!(saved["minutes"], 0);
+    assert!(saved["task"].as_str().unwrap().contains("do not replay"));
+    assert!(manager.resume(&json!({"task_id":task_id})).await.is_err());
+    db.close().await;
+}
+
+#[test]
+fn large_agent_reports_remain_valid_json_without_changing_verification_status() {
+    let value = json!({"outcome":"verification_failed","agent_message":"x".repeat(300_000),
+        "verification":{"status":"failed","checks":[{"passed":false,"command":{"program":"npm"}}]}});
+    let stored = completion(Ok(value));
+    assert_eq!(stored.status, "failed");
+    let stored: Value = serde_json::from_str(stored.result_json.as_deref().unwrap()).unwrap();
+    assert_eq!(stored["verification"]["status"], "failed");
+    assert_eq!(stored["details_omitted"], true);
+    let output = crate::skill_bundles::tool_output(
+        &json!({"task_id":"retained","task":"x".repeat(100_000)}),
+    );
+    assert!(output.is_truncated());
+    let parsed: Value = serde_json::from_str(output.content()).unwrap();
+    assert_eq!(parsed["task_id"], "retained");
 }

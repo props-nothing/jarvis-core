@@ -32,3 +32,9 @@ You can try it: approve a skill, then ask for the same kind of thing in differen
 ## From a terminal
 
 `jarvis skills list` shows every skill and its state; `jarvis skills show ID` shows the text. To approve or dismiss without the console, use `jarvis skills promote` and `jarvis skills disable` (see `jarvis skills --help`).
+
+## Coding-agent bundles are a separate capability
+
+A filesystem Agent Skills bundle has a SKILL.md manifest and may include scripts, references and assets. Use jarvis.skills.discover and jarvis.skills.install for complete project-local bundles, then select their names in a coding task. These tools are not jarvis.skill.propose and do not create or promote learned SQLite procedures.
+
+Bundles do not grant permissions, execute their setup scripts, install runtime dependencies or connect accounts automatically. See [coding-agent setup and blockers](code-agents.md#skills-dependencies-and-integrations-are-different) for local/public-GitHub installation, activation, project package setup and trust boundaries.

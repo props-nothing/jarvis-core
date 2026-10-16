@@ -41,6 +41,7 @@ pub struct StoredDelegatedTask {
     pub worktree: Option<String>,
     pub summary: Option<String>,
     pub result_json: Option<String>,
+    pub request_json: Option<String>,
     pub error: Option<String>,
     pub created_at: UtcTimestamp,
     pub updated_at: UtcTimestamp,
@@ -95,6 +96,9 @@ fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<StoredDelegatedTask, Database
         result_json: row
             .try_get("result_json")
             .map_err(sqlite("read a delegated task"))?,
+        request_json: row
+            .try_get("request_json")
+            .map_err(sqlite("read a delegated task"))?,
         error: row
             .try_get("error")
             .map_err(sqlite("read a delegated task"))?,
@@ -111,7 +115,7 @@ fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<StoredDelegatedTask, Database
 }
 macro_rules! columns {
     () => {
-        "id, repository, task, allow_commands, minutes, status, branch, worktree, summary, result_json, error, created_at, updated_at, finished_at"
+        "id, repository, task, allow_commands, minutes, status, branch, worktree, summary, result_json, request_json, error, created_at, updated_at, finished_at"
     };
 }
 
@@ -119,10 +123,19 @@ pub async fn create_delegated_task(
     db: &SqliteDatabase,
     new: &NewDelegatedTask<'_>,
 ) -> Result<StoredDelegatedTask, DatabaseError> {
+    create_delegated_task_with_request(db, new, None).await
+}
+
+/// Atomically records a queued task together with its approved request before starting effects.
+pub async fn create_delegated_task_with_request(
+    db: &SqliteDatabase,
+    new: &NewDelegatedTask<'_>,
+    request: Option<&str>,
+) -> Result<StoredDelegatedTask, DatabaseError> {
     let id = DelegatedTaskId::new().to_string();
-    sqlx::query("INSERT INTO delegated_tasks (id,workspace_id,repository,task,allow_commands,minutes,status,created_nanos,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'queued',?7,?8,?8)")
+    sqlx::query("INSERT INTO delegated_tasks (id,workspace_id,repository,task,allow_commands,minutes,request_json,status,created_nanos,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'queued',?8,?9,?9)")
         .bind(&id).bind(new.workspace_id).bind(new.repository).bind(new.task).bind(i64::from(new.allow_commands))
-        .bind(i64::try_from(new.minutes).unwrap_or(i64::MAX)).bind(nanos(new.now)).bind(new.now.to_string())
+        .bind(i64::try_from(new.minutes).unwrap_or(i64::MAX)).bind(request).bind(nanos(new.now)).bind(new.now.to_string())
         .execute(db.pool()).await.map_err(sqlite("create a delegated task"))?;
     find_delegated_task(db, new.workspace_id, &id).await
 }

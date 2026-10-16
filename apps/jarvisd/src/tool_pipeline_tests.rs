@@ -168,6 +168,74 @@ async fn pipeline_with_extra(
     (directory, database, pipeline)
 }
 
+#[tokio::test]
+async fn memory_read_context_survives_pipeline_dispatch_and_destination_defaults_remote() {
+    let (_directory, database) = database_with_run().await;
+    let service = crate::memory_service::MemoryService::new(Arc::clone(&database));
+    let remembered = must(
+        service
+            .remember(&jarvis_protocol::RememberRequest {
+                content: "The pipeline remembers tea".to_owned(),
+                memory_type: "preference".to_owned(),
+                source_kind: "user_statement".to_owned(),
+                importance: None,
+                entity_ids: Vec::new(),
+                claim: None,
+                supersedes: None,
+            })
+            .await,
+    );
+    let definitions = must(crate::memory_search::MemorySearchTool::definitions());
+    let actor = ToolActor::for_composed_tools(
+        LOCAL_WORKSPACE_ID,
+        RUN,
+        SessionChannel::Cli,
+        "policy-1",
+        &definitions,
+    );
+    assert_eq!(actor.read_destination(), jarvis_core::Sensitivity::Internal);
+    let pipeline = must(ToolPipeline::with_adapters(
+        Arc::clone(&database),
+        None,
+        WorkspacePolicy::default(),
+        vec![(
+            definitions,
+            Arc::new(crate::memory_search::MemorySearchTool::new(Arc::clone(
+                &database,
+            ))),
+        )],
+    ));
+    for (tool, arguments) in [
+        (crate::memory_search::LIST_TOOL, json!({})),
+        (crate::memory_search::SEARCH_TOOL, json!({"query":"tea"})),
+        (
+            crate::memory_search::READ_TOOL,
+            json!({"memory_id":remembered.memory_id}),
+        ),
+    ] {
+        let correlation = CorrelationId::new();
+        let outcome = must(
+            pipeline
+                .call_tool(tool, arguments, &actor, correlation)
+                .await,
+        );
+        let ToolPipelineOutcome::Executed(result) = outcome else {
+            panic!("memory must execute: {outcome:?}");
+        };
+        assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+        assert!(
+            result
+                .output()
+                .is_some_and(|output| output.content().contains("tea"))
+        );
+        assert_eq!(
+            must(pipeline.call(&correlation.to_string()).await).outcome(),
+            ToolOutcome::Confirmed
+        );
+    }
+    database.close().await;
+}
+
 /// An adapter that records what it was asked to run and answers with a fixed confirmation.
 ///
 /// A **recording** adapter rather than a scripted one, because the property under test is *routing*: which
@@ -653,7 +721,11 @@ async fn a_read_through_the_pipeline_returns_content_and_is_recorded() {
     let output = result
         .output()
         .unwrap_or_else(|| panic!("a read must return output"));
-    assert_eq!(output.content(), "buy milk");
+    let page: serde_json::Value = must(serde_json::from_str(output.content()));
+    assert_eq!(
+        page,
+        json!({"content":"buy milk", "offset":0, "next_offset":null, "truncated":false})
+    );
 
     // The durable row is what an audit reads, so the row and the returned result must agree. This is
     // the assertion that the pipeline *recorded* rather than only returned.
@@ -661,7 +733,7 @@ async fn a_read_through_the_pipeline_returns_content_and_is_recorded() {
     assert_eq!(stored.outcome(), ToolOutcome::Confirmed);
     assert_eq!(
         stored.output(),
-        Some("buy milk"),
+        Some(output.content()),
         "the stored row must carry the adapter's output"
     );
     assert_eq!(

@@ -49,6 +49,9 @@ use crate::database::{DatabaseError, SqliteDatabase};
 #[path = "memory_recall_repository.rs"]
 mod recall;
 pub use recall::{MAX_RECALL_CANDIDATES, read_task_memory_candidates};
+#[path = "memory_browse_repository.rs"]
+mod browse;
+pub use browse::read_memory_discovery_page;
 
 /// The kinds of thing an entity can be.
 ///

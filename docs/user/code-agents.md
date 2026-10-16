@@ -1,68 +1,64 @@
-# Coding agents: hand JARVIS a coding task
+# Coding agents: build in the folders you permit
 
-[Documentation](../README.md) / [Quick start](quick-start.md) / [Settings](settings.md) / [Security](../../SECURITY.md)
+[Documentation](../README.md) / [Settings](settings.md) / [Skills](skills.md) / [Security](../../SECURITY.md)
 
-> **Experimental first slice.** Scripted-agent tests, the real Codex adapter handshake and ordinary/background Codex tasks have recorded verification; the console sign-in flow on a real account remains unverified. Worktrees separate checkouts, not operating-system permissions. JARVIS does not automatically merge or push the result.
+JARVIS hands substantial coding work to your selected ACP agent. The default working directory is **the first folder permitted in Settings, Folders & code**. It is not the daemon source directory, profile directory or a generated checkout. Reorder/change your permitted folders to change that default.
 
-For a change bigger than a few edits, JARVIS can hand the task to a coding agent of your own (ChatGPT/Codex, Claude, GitHub Copilot, Gemini, OpenCode, goose, Cursor, Qwen Code, Kimi, Cline, or any other that speaks the Agent Client Protocol) instead of writing it all itself. Ask in plain words: "have the coding agent add a dark mode toggle to the `webshop` repository". JARVIS asks you first, then waits for the agent and brings back a summary, the diff and the name of a branch.
+## Workspace and Git
 
-**Nothing is merged, pushed or deleted.** The agent works in a *new worktree on a new branch* (`jarvis/<task>-<id>`), a separate checkout of your repository under JARVIS's own folder, so your own checkout is not where it works. You read the branch and decide.
+- Omit the task's repository field, or use a dot, to select the first permitted folder.
+- An existing absolute path selects a folder inside any permitted root. Relative paths resolve within those roots; an ambiguous match is refused instead of guessed.
+- The default mode is in_place. Existing and uncommitted files are visible. A non-Git folder is valid. JARVIS does not initialize Git, stage files, create a branch or commit the result in this mode.
+- Explicit mode worktree opts into a separate Git checkout and branch under the profile. That requires Git and a committed repository. JARVIS reviews tracked changes and lists untracked paths, but does not automatically stage, commit, merge or push. New untracked file contents are not included in the tracked diff.
+- An agent's own native tools can still invoke Git. The task brief instructs it not to do so unless requested; this is not an OS-enforced prohibition.
 
-## Set it up (in the console)
+## Set up your agent
 
-Open **Settings, Folders & code**. The **Coding agent** card walks you through it:
+1. Grant your project folder in **Settings, Folders & code**. Git is optional for normal in-place work.
+2. Pick an installed agent or a pinned downloaded ACP adapter, or enter your own ACP command. Downloaded Node adapters need Node and registry access.
+3. Press **Test** for an empty-directory handshake. This does not run your coding task.
+4. Use **Sign in** if the agent exposes a method, or sign in with its CLI. Agent authentication remains with that agent. JARVIS does not copy editor credentials or account tokens into it.
 
-1. **A folder** that holds your repository must be granted (the Folders card above it). The repository must be a git repository with at least one commit, and you name its own folder, not a folder inside it. **git** must be installed; the card ticks both off.
-2. **Pick an agent** with **Use**. Each row says whether it is installed on this computer, or will be downloaded with `npx` the first time (this needs Node), or is not found. The `npx` versions are pinned to the ones in the ACP registry. Anything else that speaks ACP: open **Another agent (a command)** and type the command that starts it in ACP mode.
-3. **Press Test.** JARVIS starts the agent in an empty folder, shakes hands with it and tells you who answered. It runs no task and touches none of your files. The first start through `npx` downloads the agent, which can take a minute.
-4. **Sign in, if the agent offers it.** Agents keep their own sign-in. If the Test lists methods (for ChatGPT/Codex: **ChatGPT** or **API Key**), press the one you want: the agent runs its own sign-in, which may open a page in your browser (JARVIS waits up to 5 minutes), and JARVIS remembers the method so it can sign in again if the agent asks later. JARVIS never sees or stores your password or key. Or sign in once in a terminal with the agent's own command (the card says which).
+Agent selection applies without restarting JARVIS. Tool availability and permitted-folder changes follow the existing Settings lifecycle; restart if the console says one is required.
 
-Changes apply **at once**, with no restart. **Choose automatically** forgets your choice; JARVIS then uses an installed `copilot` or `gemini` if it finds one, and never starts a downloaded adapter you did not pick. The command and sign-in settings are `code_agent` and `code_agent_auth` for `jarvis config`.
+## Durable jobs, not a seven-minute call
 
-The console uses the agent's normal sign-in, not an environment-variable editor. Advanced CLI configurations can still use `code_agent_env` to name existing environment variables the agent may inherit; saved configurations are preserved.
+Both jarvis.code.delegate and jarvis.code.delegate_start return a durable task ID immediately. Jobs queue behind the active coding job rather than being refused as busy. Execution is serialized to avoid concurrent edits to the same files.
 
-## What you are asked, and what the agent may do
+**There is no overall job deadline by default.** Omit minutes or use zero. An explicit positive value is an owner-selected deadline, not a product-imposed maximum. Protocol handshakes, cancellation grace, individual HTTP requests and independent verification commands remain bounded so a broken operation can fail instead of hanging forever.
 
-JARVIS asks before every task and shows the repository, the task, whether commands are allowed and the time limit. Your yes covers that task and nothing else. (In Settings, Permissions you can mark the tool "run without asking" for a repository you trust.)
+Use jarvis.code.delegate_status, delegate_list and delegate_stop. A queued Stop starts no agent. Startup Stop terminates the agent and its child tree; active prompts receive cancellation and termination. Files remain available for review.
 
-While it works, the agent asks leave for things, and JARVIS answers by fixed rules, never by a model:
+After daemon restart, unfinished jobs become interrupted, not silently replayed. jarvis.code.delegate_resume asks for approval and starts a **new** in-place agent using the saved directory, brief, capabilities and checks. It first inspects existing files and avoids replaying completed effects. It does not restore an ACP conversation, rerun a previous process automatically or resume legacy worktree tasks blindly. Provider limits and sign-in can still interrupt a job.
 
-| The agent asks to | JARVIS answers |
-| --- | --- |
-| read or search files | yes, inside the worktree only |
-| edit, delete or move files | yes, inside the worktree only (a link that points out does not count; a request that names no path is refused) |
-| run a command (a build, the tests) | only if the task was started with commands allowed |
-| fetch from the network, or anything else | no |
+## Skills, dependencies and integrations are different
 
-JARVIS only ever says "yes, this once", never "always". Everything the agent asked, and the answer, is in the result.
+Use jarvis.skills.discover to list project bundles from .agents/skills, .github/skills and .claude/skills. Optional public GitHub discovery resolves a branch/tag to an immutable commit and lists manifest paths. Installation uses that full commit SHA and selected bundle path, not a moving branch.
 
-## What comes back
+jarvis.skills.install copies the complete bundle, including references, scripts and assets, into the selected project's .agents/skills/name. Local sources must also be in permitted folders. Existing bundles are not overwritten. Traversal, links/reparse points, unsafe Windows names, collisions and excessive resource trees fail closed. Provenance is saved with the bundle. Installation executes **no scripts** and grants **no permissions**.
 
-The outcome (`completed`, `stopped`, `cancelled`, `timed_out`, `agent_exited` or `failed`), the branch name, the commit, the files changed, a diffstat, the start of the diff, what the agent said, the tools it used and the requests it made. The agent's words and the diff are data from another program, and JARVIS treats them as data, never as instructions.
+Select installed skill names in the coding task's skills array. The agent receives available metadata and the full manifests of selected skills with their resource directories. A missing or ambiguous selected skill prevents the agent from starting. Native jarvis.skill learned procedures are a separate feature, not filesystem bundles.
 
-To review: `git diff <base>..<branch>` in the repository (JARVIS gives the exact line). To keep the work, merge the branch yourself or ask JARVIS to ask the agent for changes. To throw it away: `git worktree remove <folder>` and `git branch -D <branch>`. Worktrees are kept until you remove them.
+A bundle cannot install its own runtime, obtain credentials or connect a service merely by declaring them. Task-authorized project-local dependency setup is host execution. Preserve lockfiles, use the project's package manager and environment, and do not install globally or deploy without authorization. npm lifecycle scripts and downloaded executables are code, not harmless configuration.
 
-For background tasks, open **Settings, Folders & code, Background coding tasks** and expand a task. The review shows its recorded branch, worktree, commits, changed files, agent report, activity, permission decisions and diff preview. A truncated preview is labelled. **Refresh coding tasks** reloads status without running an agent or command, and keeps expanded tasks open. Failed refreshes keep the last loaded review visible and show an error.
+Public GitHub installation uses anonymous HTTPS without redirects or forwarded credentials. Private repositories, rate limits, unavailable runtimes and registry/network errors remain explicit blockers. Use a permitted local source for a private bundle obtained through your own authorized workflow. Global skill catalogs, automatic plugin installation and an agent-scoped JARVIS integration bridge are not implemented by this path.
 
-### While a background task works
+## Independent checks and website delivery
 
-The review shows **Agent-reported activity** as tool updates arrive: the tool's title, kind, status and any reported file paths. While a task is queued or running and this Settings card is open, it checks for updates every two seconds. Updates preserve open reviews, keyboard focus and an unsaved custom-agent command. Closing Settings or leaving Folders & code stops the automatic checks; completion stops them too.
+Give the agent the complete brief, design direction, functionality, preservation requirements and acceptance checks. A queued job or a confident agent summary is **not** a delivered website.
 
-Activity is recorded separately from the final result, so reopening the console can show what was retained even if the task was interrupted. The database retains at most the latest 128 sequence positions and the console shows the latest 32 entries; **Some activity was not retained** warns about omitted or dropped updates. A failed refresh keeps the last loaded history visible and reports the error.
+JARVIS runs the task's independent checks after the agent finishes. Without explicit checks, an allowed-command task detects package.json build and typecheck scripts and selects npm, pnpm, yarn or bun from packageManager/lockfiles. A failed check makes the task failed with verification_failed. No applicable checks means not_run, never passed. Passing a build does not establish visual or behavioral correctness.
 
-These are the agent's reports, not proof that its tools succeeded. Some agents report fewer actions than others, and silence does not prove that an agent is idle. This progress view excludes internal reasoning, thinking-tool metadata, raw tool input/output, tool content and message chunks. The synchronous `jarvis.code.delegate` path still returns its activity in its final result; this live view is for background tasks. No new live-provider verification is claimed for progress delivery.
+For a dev server use jarvis.process.start with argv, directory and optional port. Configure the actual server to bind **127.0.0.1**. It returns a managed process ID without a lifetime deadline. jarvis.process.status exposes bounded, untrusted log tails and loopback reachability; jarvis.process.list and jarvis.process.stop manage its lifecycle. A port already in use is refused so an existing unrelated service is not presented as this preview.
 
-**Completed means the agent ended its turn, not that tests passed.** Reviews say **Not independently verified**, even when the agent's own report says tests passed. Interrupted tasks explicitly report a missing final result; an early interruption may leave no recorded worktree path. This view does not resume, merge, push or independently test the work.
+The status explicitly says browser_verified: false. JARVIS must use its browser tools to inspect the real page at desktop/mobile sizes, exercise important interactions and fix failures before claiming website delivery. Browser verification is not automatically performed by the delegation adapter, and it cannot be inferred from a TCP port or build exit code.
 
-## Stopping during startup
+Processes are not automatically restarted. Completed state/logs survive a daemon restart; a stale unfinished record is interrupted and never killed using a reused PID. Logs are capped at 16 MiB per stream and tails are bounded; capture loss is disclosed. Stop a preview when it is no longer needed.
 
-Ask JARVIS to stop a background coding task even while its agent is starting. A Stop received before the worker begins records cancellation without starting an agent or creating a worktree. During ACP connection setup, JARVIS terminates the agent's process tree and keeps any worktree already created for review; it does not send the task prompt. During an active prompt, the existing ACP cancellation and termination path applies. A stopped task remains available in the task list.
+## Review and trust boundaries
 
-Startup cancellation is tested on Windows with a scripted agent and a real child process. Cancellation during a real agent's sign-in flow and native cleanup on macOS/Linux still need separate verification. This does not add a sandbox, parent-linked cancellation or crash resumption.
+**Settings, Folders & code, Background coding tasks** shows the actual working folder, mode, deadline, agent activity and independent check evidence. Activity is agent-reported, bounded and separate from results. Refresh is read-only and preserves open reviews.
 
-## Limits, said plainly
+Approvals still apply to host coding jobs, dependency installation through approved commands, remote bundle installation and managed process starts. An approval authorizes the displayed task, not unrelated installs, deployment or account access. Full coding briefs are retained for approval and recovery; oversized reports remain explicitly incomplete, valid JSON.
 
-- **This is not a sandbox.** The agent's own tools run on your computer with your privileges and JARVIS does not see them. The worktree and the rules above contain a well-behaved agent and make a misbehaving one visible; they do not stop it. JARVIS compares your own checkout before and after, and says so if the agent wrote there.
-- One task at a time. The ordinary `jarvis.code.delegate` waits for at most **7 minutes** (5 unless you ask for more). For longer work JARVIS uses `jarvis.code.delegate_start`: it asks once, returns a task id immediately, works for up to 60 minutes, notifies you when it ends, and keeps durable status. Ask it to check, list or stop a background coding task; the Coding agent card also lists recent tasks. A daemon restart marks unfinished work **interrupted** and never silently repeats it; its worktree is kept.
-- The worktree starts from the last commit: uncommitted changes in your checkout are not in it (the result says when you have some).
-- Tasks are tested against a scripted agent, and **two tasks were run live against the real Codex adapter** using the owner's existing ChatGPT/Codex sign-in (one ordinary, one background). Both made the requested two-file change on their own branch while `main` stayed clean. The console's explicit Sign in click has not been run on a real account because Codex already found that existing sign-in.
+These are **host processes, not a sandbox**. Directory checks set the initial cwd and cooperative ACP permissions. Agents and approved packages can access the host according to the OS privileges of the owner. JARVIS does not claim to intercept every native agent tool, enforce network isolation or prevent all filesystem races. Missing credentials, external quotas and provider capabilities cannot be bypassed. A scoped bridge for JARVIS-owned MCP/browser tools and native macOS/Linux acceptance remain separate work.

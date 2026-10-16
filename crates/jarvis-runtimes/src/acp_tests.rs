@@ -35,6 +35,33 @@ fn spawn(script: &str) -> Child {
         .unwrap_or_else(|error| panic!("the fake agent could not be started: {error}"))
 }
 
+#[tokio::test]
+async fn zero_total_deadline_waits_for_explicit_cancellation() {
+    let mut connection = open(
+        "wait",
+        Limits {
+            turn: Duration::ZERO,
+            ..quick()
+        },
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert!(Limits::default().turn.is_zero());
+    let cancel = Arc::new(Notify::new());
+    let trigger = Arc::clone(&cancel);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        trigger.notify_one();
+    });
+    let started = Instant::now();
+    let report = connection
+        .prompt("wait for owner stop", &Fixed(false), &cancel)
+        .await;
+    assert_eq!(report.ended, Ended::Cancelled);
+    assert!(started.elapsed() >= Duration::from_millis(500));
+    connection.close().await;
+}
+
 fn quick() -> Limits {
     Limits {
         handshake: Duration::from_secs(20),

@@ -6,6 +6,10 @@
 
 This roadmap is ordered by risk. Each phase must leave a runnable vertical slice. A later phase may start only when the previous phase's exit gate passes or an ADR explains the exception.
 
+## Owner-workspace coding delivery
+
+The owner reprioritized coding delivery on 2026-10-15 ([ADR-0222](docs/adr/0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md)). The first Settings-permitted folder is the in-place default; Git/worktrees are explicit and no total job deadline is imposed unless requested. Complete skill resources, independently reported checks and managed previews replace self-reported completion as the delivery path. Local validation and remaining real-agent/browser/platform gates are tracked in [the acceptance ledger](TODO.md#owner-requested-coding-delivery-2026-10-15); this does not close the scoped integration bridge or sandbox backlog.
+
 ## At A Glance
 
 Documentation snapshot: **2026-10-15**. This summarizes recorded delivery evidence, not a fresh run of every provider or platform gate. The platform and separate website now use Apache-2.0 for original code and docs; third-party and prototype terms remain separate.
@@ -14,7 +18,7 @@ Documentation snapshot: **2026-10-15**. This summarizes recorded delivery eviden
 | --- | --- | --- |
 | Personal assistant | Browser/CLI, memory, files, documents, Google, projects and oversight are delivered slices. | Close the remaining owner-account checks recorded in the backlog. |
 | Reach and initiative | Telegram, approved skills, schedules, triggers and model routing are built. | Measure quality and cost; finish setup polish and remote/MCP credential gaps. |
-| Coding delegation | ACP tools, background task records and console configuration exist; real ordinary/background Codex tasks have recorded verification. | Verify console sign-in and cancellation against a real agent. |
+| Coding delegation | Settings-first in-place jobs, opt-in worktrees, no automatic commits or overall deadline, full skill bundles and managed previews are implemented (ADR-0222). Earlier ordinary/background Codex runs have recorded verification. | Verify the new path against the owner's real agent: dependency setup, cancellation, desktop/mobile website behavior and scoped integration access. |
 | Voice and calls | Browser voice and optional synthesis; owner outbound calls reported working live. | Browser-independent local voice and broader call-path evidence. |
 | Distribution | Apache-2.0 selected; user-level install/service paths and CI archives exist. | Dependency notices, public signed distribution and clean-machine evidence. |
 | Scale | Local SQLite is the default. | Server/multi-device work only with a named requirement and proven ownership semantics. |
