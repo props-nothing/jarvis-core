@@ -6,7 +6,7 @@
 
 ## At a glance
 
-Reviewed 2026-10-16. The [active backlog](TODO.md) controls current acceptance order. Earlier test transcripts and original phase wording remain in dated history; they do not override later accepted ADRs or represent current test failures.
+Reviewed 2026-10-17. The [active backlog](TODO.md) controls current acceptance order. Earlier test transcripts and original phase wording remain in dated history; they do not override later accepted ADRs or represent current test failures.
 
 | Area | Built now | Remaining acceptance or capability |
 | --- | --- | --- |
@@ -20,9 +20,13 @@ Reviewed 2026-10-16. The [active backlog](TODO.md) controls current acceptance o
 | Distribution | Apache-2.0, user installation/services, verified automatic public unsigned prereleases and source-building website scripts | Complete notices/SBOM, signed public packages, update/rollback and clean-machine verification |
 | Scale | Local SQLite profile | Server, PostgreSQL parity, multiple devices and roles only for a named requirement |
 
-## Current acceptance slice
+<a id="current-acceptance-slice"></a>
 
-The owner-selected [release verification and coding lifecycle](TODO.md#current-acceptance-slice-release-verification-and-coding-lifecycle-2026-10-16) has verified `c48da888` through native CI, five-platform packaging, public publication and ten matching asset downloads. [ADR-0233](docs/adr/0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) makes cancellation final across agent errors/sign-in and retains descendant ownership after root exit. Focused regressions and a real Windows Codex cancellation passed; full workspace and daemon/native lifecycle gate results are tracked in TODO. Structured parent/child delegation and whole-website delivery remain separate.
+## Latest acceptance and next work
+
+The owner-selected [release verification and coding lifecycle](TODO.md#current-acceptance-slice-release-verification-and-coding-lifecycle-2026-10-16) is implemented and verified. Both `c48da888` and the lifecycle revision `dd65479` passed native CI, five-platform packaging, public publication and ten matching asset downloads. [ADR-0233](docs/adr/0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) preserves cancellation across agent errors/sign-in and retains descendant ownership after root exit, with cleanup failures reported explicitly. Both final local workspace configurations passed 3,170 tests each; all ten native jobs and the Windows/macOS/Linux lifecycle gates passed. Real Windows Codex cancellation is separately recorded. Original failures, falsification controls and archive hashes remain in TODO's evidence.
+
+Next coding acceptance is a complete disposable website task: independent checks, a managed preview, desktop/mobile browser interactions, explicit cleanup and unrelated-file preservation. Fresh sign-in and notification checks retain their own evidence. Structured parent/child identity, restart and parent-stop semantics (`P7-009`) are the next architecture slice; coordinated shutdown admission/draining remains `P7-011`.
 
 The owner-selected [runtime and guide follow-up](TODO.md#current-acceptance-slice-runtime-and-guide-follow-up-2026-10-16) is implemented and validated locally and in native CI: atomic webhook capacity admission, stop/restart checks covering native runs, coding jobs and live managed processes, refusal on unreadable state, and all confirmed documentation corrections. Concurrency and unavailable-storage falsification, narrow regressions, both workspace test configurations and all three process gates passed on Windows; `c48da888` then passed the full native CI and release matrix. Provider-specific acceptance remains separate.
 

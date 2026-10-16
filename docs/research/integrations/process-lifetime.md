@@ -1,7 +1,7 @@
 ---
 integration: process-lifetime
-status: implementation-in-progress
-last_verified: 2026-10-16
+status: implemented
+last_verified: 2026-10-17
 owners: [jarvis]
 selected_spec_version: Windows Job Objects; POSIX process groups
 selected_sdk: process-wrap 10.0.0; Tokio 1.53.1
@@ -78,7 +78,7 @@ Use a real local root process that starts a child, records both PIDs and waits f
 
 ## Unresolved Questions
 
-- Native Windows, Linux and macOS runs are required before claiming all-platform acceptance.
+- Scripted native Windows, Linux and macOS lifecycle acceptance passed at `dd65479`; real-provider coverage remains limited to the recorded Windows Codex check.
 - Arbitrary Unix daemon crashes require a stronger supervisor/cgroup design; this slice does not claim that guarantee.
 - Actual Codex/Claude jobs may create nested jobs; the live-agent test must check compatibility, not infer it from the fixture.
 
@@ -104,3 +104,4 @@ Controlled local Windows PowerShell 5.1 runs are retained under `artifacts/revie
 | 2026-10-16 | failed ACP setup and Settings probes, Windows | The first full workspace run reproduced two scratch folders left behind after failed setup. Checked shutdown plus explicit authentication-error close repairs the race; all 11 agent-settings tests and 46 runtime tests pass. The scratch regression checks seven success/setup/authentication/deadline paths and requires an empty directory immediately after each returned result. Original failing evidence is retained as `probe-cleanup-before.log`; the full workspace rerun is tracked in TODO. | JARVIS agent |
 | 2026-10-17 | probe folder allocation | Native macOS CI at `18b8585` found one creation failure; its original diagnostic erased the I/O error kind, so collision is an inference. Deterministic tests now force occupied file/directory names and simultaneous allocation while retaining exclusive ownership and existing sentinel bytes. Restoring single-attempt behavior fails on `AlreadyExists`; unique-ID allocation with bounded collision retry passes the 15-test agent-settings group. Final workspace/native reruns are tracked in TODO. | JARVIS agent |
 | 2026-10-17 | Windows PowerShell 5.1 process fixture | Module-autoload and process-policy controls above discriminate the old and new scripts. After the fixture repair, 24 command tests and 10 managed-process tests pass, including all five descendant cases and two bounded early-error diagnostics; strict daemon Clippy and workspace formatting pass. The first managed diagnostic expectation omitted the existing untrusted-data fence; its preserved failed log led to an exact fenced-stderr expectation, not a weakened assertion. Logs and command metadata are recorded in `windows-fixture-verification.json` under the local review artifacts. Full workspace and fresh native CI remain separate. | JARVIS agent |
+| 2026-10-17 | final code revision `dd65479` | Both local workspace configurations passed 3,170 tests each, with zero failures and six opt-in checks ignored; formatting, strict workspace Clippy, fresh builds and four local process gates passed. All ten [native CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38976054653) passed, including the three dedicated coding lifecycle gates and all five previously failing Windows fixture cases. This supersedes earlier pending workspace/native statements without establishing the original hosted timeout's cause. The real Windows Codex check remains separately scoped above; abrupt Unix death and escaped process groups remain excluded. | JARVIS agent |

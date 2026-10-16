@@ -1,13 +1,15 @@
 ---
 integration: github-actions-rust-ci
 status: implemented
-last_verified: 2026-10-16
+last_verified: 2026-10-17
 selected_sdk: Swatinem/rust-cache v2.9.2; ZIP 9.0.4; SQLx 0.9.0; Tokio 1.53.1
 ---
 
 # Rust CI, dependency repair and test fixtures
 
 ## Automatic prerelease publication (2026-10-16)
+
+Follow-up verification (2026-10-17): lifecycle revision `dd65479d988ebf7caa9bddfb803c13cae1b0ddbf` passed all ten [native CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38976054653), including the three coding lifecycle gates, and all five packages plus [automatic publication](https://github.com/props-nothing/jarvis-core/actions/runs/38977383098). The [public unsigned prerelease](https://github.com/props-nothing/jarvis-core/releases/tag/ci-dd65479d988ebf7caa9bddfb803c13cae1b0ddbf) was verified against its exact source/tag, five Actions artifacts, contained checksums and ten anonymous public downloads. All hashes and lengths match. Four native package smokes passed; Intel macOS remains cross-built without runtime smoke. Existing releases and the older draft remain unchanged. Evidence: `artifacts/reviews/release-dd65479d988ebf7caa9bddfb803c13cae1b0ddbf/verification.json`.
 
 Hosted verification completed 2026-10-16 for `c48da8880e20304da4b13e4016d896ad22fc2e04`: all ten [CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38964612120), all five package jobs and the [automatic publication job](https://github.com/props-nothing/jarvis-core/actions/runs/38966399553) passed. The [public prerelease](https://github.com/props-nothing/jarvis-core/releases/tag/ci-c48da8880e20304da4b13e4016d896ad22fc2e04) has the exact target/tag commit and ten assets. All five downloaded Actions ZIP digests, contained archive checksums, release asset digests/sizes and ten anonymous public downloads match. Four native archive smokes passed; Intel macOS is cross-built with its runtime smoke skipped. The `041b250` draft was left unchanged. This closes the pending hosted publication gate in the dated local evidence below; unsigned distribution and clean-machine limits remain. Evidence: `artifacts/reviews/release-c48da8880e20304da4b13e4016d896ad22fc2e04/verification.json`.
 
