@@ -3,7 +3,7 @@ name: Release (private artifacts)
 # Packages the single jarvis program only after CI passes for its exact commit.
 # Main pushes reuse completed CI; manual/tag runs call the same CI workflow first.
 # Artifacts are kept 14 days and downloadable by signed-in users of this public repository.
-# Tags attach all five platforms to a draft only after the complete package matrix succeeds.
+# Every eligible run attaches all five platforms to a draft after the complete package matrix succeeds.
 #
 # JARVIS is Apache-2.0 licensed. This workflow still creates drafts only: dependency-license inventories,
 # signing/notarization and clean-machine verification remain public-release gates (TODO.md, P9-017b).
@@ -137,7 +137,8 @@ jobs:
   draft:
     name: Attach complete draft release
     needs: [source, package]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # quality is intentionally skipped after successful main CI; require the entire package matrix.
+    if: ${{ !cancelled() && needs.source.outputs.ready == 'true' && needs.package.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -145,6 +146,7 @@ jobs:
       actions: read
     env:
       GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ needs.source.outputs.sha }}
     steps:
       - name: Download this run's verified packages
         run: |
@@ -153,19 +155,45 @@ jobs:
       - name: Verify checksums and attach to a draft only
         shell: bash
         run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Missing exact tested commit"; exit 1; }
           shopt -s nullglob
           archives=(dist/jarvis-*/*.tar.gz dist/jarvis-*/*.zip)
           checksums=(dist/jarvis-*/*.sha256)
           [ "${#archives[@]}" -eq 5 ] && [ "${#checksums[@]}" -eq 5 ] \
             || { echo "::error::Expected all five platform archives and checksums"; exit 1; }
+          for label in linux-x86_64 linux-aarch64 macos-aarch64 macos-x86_64 windows-x86_64; do
+            extension=tar.gz; [ "$label" != windows-x86_64 ] || extension=zip
+            platform_archives=(dist/"jarvis-$label"/jarvis-*-"$label.$extension")
+            [ "${#platform_archives[@]}" -eq 1 ] && [ -f "${platform_archives[0]}.sha256" ] \
+              || { echo "::error::Missing unique archive/checksum for $label"; exit 1; }
+          done
           for checksum in "${checksums[@]}"; do
             (cd "$(dirname "$checksum")" && sha256sum -c "$(basename "$checksum")")
           done
-          if is_draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"; then
-            [ "$is_draft" = true ] || { echo "::error::Refusing to modify a published release"; exit 1; }
+
+          tag="ci-$RELEASE_SHA"
+          tag_options=()
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+            tag_options=(--verify-tag)
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --prerelease --verify-tag \
-              --title "JARVIS $GITHUB_REF_NAME" \
-              --notes "Unsigned build. Unpack and run jarvis (one program). See docs/user/quick-start.md."
+            # Drafts use a pending tag name. Never create/move a Git ref or let an existing tag override --target.
+            existing_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" \
+              --jq ".[] | select(.ref == \"refs/tags/$tag\") | .ref")"
+            [ -z "$existing_ref" ] || { echo "::error::Automatic draft tag already exists; refusing to reuse it"; exit 1; }
           fi
-          gh release upload "$GITHUB_REF_NAME" "${archives[@]}" "${checksums[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          if release="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,targetCommitish \
+              --jq '[.isDraft, .targetCommitish] | @tsv')"; then
+            IFS=$'\t' read -r is_draft target <<< "$release"
+            [ "$is_draft" = true ] || { echo "::error::Refusing to modify a published release"; exit 1; }
+            if [ "${#tag_options[@]}" -eq 0 ] && [ "$target" != "$RELEASE_SHA" ]; then
+              echo "::error::Draft target differs from the tested commit"; exit 1
+            fi
+            gh release upload "$tag" "${archives[@]}" "${checksums[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            # Upload during creation; a newly created draft may not be immediately discoverable by another CLI lookup.
+            gh release create "$tag" "${archives[@]}" "${checksums[@]}" --repo "$GITHUB_REPOSITORY" \
+              --draft --prerelease --target "$RELEASE_SHA" "${tag_options[@]}" \
+              --title "JARVIS $tag" \
+              --notes "Unsigned build of $RELEASE_SHA. Unpack and run jarvis (one program). See docs/user/quick-start.md. Intel macOS is cross-built; its runtime smoke test is not run. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi

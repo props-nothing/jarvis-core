@@ -88,6 +88,7 @@ test('workflow wiring gates all packaging paths and keeps builds read-only', () 
   assert.match(job('package'), /overwrite: true/);
   assert.doesNotMatch(job('package'), /contents: write|gh release/);
   assert.match(job('draft'), /needs: \[source, package\]/);
+  assert.match(job('draft'), /RELEASE_SHA: \$\{\{ needs\.source\.outputs\.sha \}\}/);
   assert.match(job('draft'), /gh run download "\$GITHUB_RUN_ID"/);
   for (const line of (workflow + ci).split('\n').filter(line => /uses:/.test(line) && !line.includes('./'))) {
     assert.match(line, /@[0-9a-f]{40}(?:\s|$)/);
@@ -210,40 +211,65 @@ for (const [name, kind, lines] of [
   });
 }
 
+test('draft attachment requires a ready source, a successful complete matrix and no cancellation', () => {
+  const condition = job('draft').match(/^    if: \$\{\{ (.*) \}\}$/m)?.[1];
+  assert.ok(condition);
+  // Exercise the production expression with failed/skipped/cancelled dependencies.
+  const eligible = new Function('cancelled', 'needs', 'return ' + condition + ';');
+  for (const ready of ['true', 'false', '']) {
+    for (const result of ['success', 'failure', 'cancelled', 'skipped']) {
+      for (const cancelled of [true, false]) {
+        assert.equal(eligible(() => cancelled, { source: { outputs: { ready } }, package: { result } }),
+          !cancelled && ready === 'true' && result === 'success', [ready, result, cancelled].join('/'));
+      }
+    }
+  }
+});
+
 const draftScript = job('draft').split('      - name: Verify checksums and attach to a draft only\n')[1]
   .split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
 
-function attachDraft(state, damage) {
+function attachDraft(state, damage, overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-release-draft-'));
   try {
     fs.mkdirSync(path.join(dir, 'bin'));
-    fs.writeFileSync(path.join(dir, 'bin', 'gh'), `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$CALL_LOG"
-case "$1 $2" in
-  'release view')
-    [ "$FIXTURE_STATE" != missing ] || exit 1
-    [ "$FIXTURE_STATE" != error ] || exit 2
-    [ "$FIXTURE_STATE" != published ] || { echo false; exit 0; }
-    echo true ;;
-  'release create') [ "$FIXTURE_STATE" != error ] ;;
-  'release upload') exit 0 ;;
-  *) exit 1 ;;
-esac
-`, { mode: 0o755 });
-    for (let i = 0; i < 5; i++) {
+    fs.writeFileSync(path.join(dir, 'bin', 'gh'), [
+      '#!/usr/bin/env bash',
+      'printf \'%s\\n\' "$*" >> "$CALL_LOG"',
+      'case "$1 $2" in',
+      '  \'api \'*)',
+      '    [ "$FIXTURE_STATE" != "ref error" ] || exit 2',
+      '    [ "$FIXTURE_STATE" != "existing tag" ] || echo "refs/tags/ci-$RELEASE_SHA"',
+      '    exit 0 ;;',
+      '  \'release view\')',
+      '    [ "$FIXTURE_STATE" != missing ] || exit 1',
+      '    [ "$FIXTURE_STATE" != error ] || exit 2',
+      '    [ "$FIXTURE_STATE" != published ] || { printf \'false\\t%s\\n\' "$RELEASE_SHA"; exit 0; }',
+      '    [ "$FIXTURE_STATE" != "wrong target" ] || { printf \'true\\tmain\\n\'; exit 0; }',
+      '    printf \'true\\t%s\\n\' "$RELEASE_SHA" ;;',
+      '  \'release create\') [ "$FIXTURE_STATE" != error ] ;;',
+      '  \'release upload\') [ "$FIXTURE_STATE" != "upload error" ] ;;',
+      '  *) exit 1 ;;',
+      'esac', '',
+    ].join('\n'), { mode: 0o755 });
+    const labels = ['linux-x86_64', 'linux-aarch64', 'macos-aarch64', 'macos-x86_64', 'windows-x86_64'];
+    for (let i = 0; i < labels.length; i++) {
       if (damage === 'missing platform' && i === 0) continue;
-      const target = path.join(dir, 'dist', `jarvis-platform-${i}`);
+      const label = damage === 'substituted platform' && i === 0 ? 'linux-unknown' : labels[i];
+      const target = path.join(dir, 'dist', 'jarvis-' + label);
       fs.mkdirSync(target, { recursive: true });
-      const name = `jarvis-platform-${i}.${i === 4 ? 'zip' : 'tar.gz'}`;
+      const name = 'jarvis-0.1.0-' + label + (i === 4 ? '.zip' : '.tar.gz');
       fs.writeFileSync(path.join(target, name), 'fixture archive');
       if (!(damage === 'missing' && i === 0)) {
         const digest = createHash('sha256').update(damage === 'corrupt' && i === 0 ? 'different' : 'fixture archive').digest('hex');
-        fs.writeFileSync(path.join(target, `${name}.sha256`), `${digest}  ${name}\n`);
+        fs.writeFileSync(path.join(target, name + '.sha256'), digest + '  ' + name + '\n');
       }
     }
     const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', 'export PATH="$PWD/bin:$PATH"\n' + draftScript], {
       cwd: dir, encoding: 'utf8', env: { ...process.env, FIXTURE_STATE: state, CALL_LOG: 'calls.log',
-        GITHUB_REF_NAME: 'v0.1.0', GITHUB_REPOSITORY: context.repository },
+        GITHUB_REF: 'refs/heads/main', GITHUB_REF_NAME: 'main', GITHUB_REPOSITORY: context.repository,
+        GITHUB_SHA: context.sha, RELEASE_SHA: testedSha, GITHUB_RUN_ID: '123',
+        GITHUB_SERVER_URL: 'https://github.com', ...overrides },
     });
     assert.ifError(result.error);
     return { ...result, calls: fs.existsSync(path.join(dir, 'calls.log')) ? fs.readFileSync(path.join(dir, 'calls.log'), 'utf8') : '' };
@@ -251,28 +277,73 @@ esac
 }
 
 for (const state of ['missing', 'draft']) {
-  test(`verified packages attach to a ${state} draft`, () => {
+  test('verified packages attach to a ' + state + ' commit-specific draft', () => {
     const result = attachDraft(state);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.calls, /release upload v0.1.0/);
-    if (state === 'missing') assert.match(result.calls, /release create .*--draft --prerelease --verify-tag/);
-    else assert.doesNotMatch(result.calls, /release create/);
+    const verb = state === 'missing' ? 'create' : 'upload';
+    const mutation = result.calls.split('\n').find(line => line.startsWith('release ' + verb + ' '));
+    assert.ok(mutation?.startsWith('release ' + verb + ' ci-' + testedSha + ' '), result.calls);
+    assert.equal(mutation.match(/dist\/jarvis-/g).length, 10, 'all five archives and five checksums attach together');
+    assert.ok(!result.calls.includes(context.sha), 'the newer default-branch SHA must not select the draft');
+    if (state === 'missing') {
+      assert.ok(mutation.includes('--draft --prerelease --target ' + testedSha));
+      assert.ok(mutation.includes('https://github.com/' + context.repository + '/actions/runs/123'));
+      assert.doesNotMatch(result.calls, /release upload|--verify-tag/);
+    } else {
+      assert.match(mutation, /--clobber/);
+      assert.doesNotMatch(result.calls, /release create/);
+    }
+  });
+  test('version-tag packages attach to a ' + state + ' draft without changing tag policy', () => {
+    const result = attachDraft(state, undefined, { GITHUB_REF: 'refs/tags/v0.1.0', GITHUB_REF_NAME: 'v0.1.0' });
+    assert.equal(result.status, 0, result.stderr);
+    if (state === 'missing') assert.match(result.calls, /release create v0\.1\.0 .*--draft --prerelease --target [0-9a-f]{40} --verify-tag/);
+    else assert.match(result.calls, /release upload v0\.1\.0/);
+    assert.doesNotMatch(result.calls, /ci-[0-9a-f]{40}|^api /m);
   });
 }
-test('published releases are never modified', () => {
-  const result = attachDraft('published');
+
+test('manual branch packages use the tested commit, not the branch name', () => {
+  const result = attachDraft('missing', undefined, { GITHUB_REF: 'refs/heads/release-candidate', GITHUB_REF_NAME: 'release-candidate' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.calls.includes('release create ci-' + testedSha + ' '));
+  assert.doesNotMatch(result.calls, /release-candidate/);
+});
+for (const state of ['published', 'wrong target', 'existing tag', 'ref error']) {
+  test(state + ' prevents draft mutation', () => {
+    const result = attachDraft(state);
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.calls, /release create|release upload/);
+  });
+}
+test('published version-tag releases are never modified', () => {
+  const result = attachDraft('published', undefined, { GITHUB_REF: 'refs/tags/v0.1.0', GITHUB_REF_NAME: 'v0.1.0' });
   assert.notEqual(result.status, 0);
   assert.doesNotMatch(result.calls, /release create|release upload/);
 });
-for (const damage of ['missing', 'corrupt', 'missing platform']) {
-  test(`${damage} package/checksum data prevent any release operation`, () => {
+for (const damage of ['missing', 'corrupt', 'missing platform', 'substituted platform']) {
+  test(damage + ' package/checksum data prevent any release operation', () => {
     const result = attachDraft('missing', damage);
     assert.notEqual(result.status, 0);
     assert.equal(result.calls, '');
   });
 }
+
 test('release lookup or creation failure cannot reach upload', () => {
   const result = attachDraft('error');
   assert.notEqual(result.status, 0);
   assert.doesNotMatch(result.calls, /release upload/);
+});
+
+test('a failed upload remains a failed draft job', () => {
+  const result = attachDraft('upload error');
+  assert.notEqual(result.status, 0);
+  assert.match(result.calls, /release upload/);
+  assert.doesNotMatch(result.calls, /release create|release edit/);
+});
+
+test('invalid tested SHA prevents all GitHub operations', () => {
+  const result = attachDraft('missing', undefined, { RELEASE_SHA: 'main' });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.calls, '');
 });
