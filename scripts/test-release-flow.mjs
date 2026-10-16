@@ -88,6 +88,7 @@ test('workflow wiring gates all packaging paths and keeps builds read-only', () 
   assert.match(job('package'), /overwrite: true/);
   assert.doesNotMatch(job('package'), /contents: write|gh release/);
   assert.match(job('draft'), /needs: \[source, package\]/);
+  assert.match(job('draft'), /group: release-publish-\$\{\{ needs\.source\.outputs\.sha \}\}\n      cancel-in-progress: false/);
   assert.match(job('draft'), /RELEASE_SHA: \$\{\{ needs\.source\.outputs\.sha \}\}/);
   assert.match(job('draft'), /gh run download "\$GITHUB_RUN_ID"/);
   for (const line of (workflow + ci).split('\n').filter(line => /uses:/.test(line) && !line.includes('./'))) {
@@ -226,7 +227,7 @@ test('draft attachment requires a ready source, a successful complete matrix and
   }
 });
 
-const draftScript = job('draft').split('      - name: Verify checksums and attach to a draft only\n')[1]
+const draftScript = job('draft').split('      - name: Verify packages, upload and publish\n')[1]
   .split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
 
 function attachDraft(state, damage, overrides = {}) {
@@ -239,9 +240,20 @@ function attachDraft(state, damage, overrides = {}) {
       'case "$1 $2" in',
       '  \'api \'*)',
       '    [ "$FIXTURE_STATE" != "ref error" ] || exit 2',
-      '    [ "$FIXTURE_STATE" != "existing tag" ] || echo "refs/tags/ci-$RELEASE_SHA"',
+      '    if [[ "$2" == */releases/* ]]; then',
+      '      [ "$FIXTURE_STATE" != "metadata error" ] || exit 2',
+      '      if [[ "$*" == *--jq* ]]; then',
+      '        draft=false; [ "$FIXTURE_STATE" != "still draft" ] || draft=true',
+      '        printf \'%s\\ttrue\\t%s\\t%s\\n\' "$draft" "$RELEASE_SHA" "$FIXTURE_TAG"',
+      '      else cat metadata.json; touch metadata-read; fi',
+      '    elif [[ "$2" == */commits/* ]]; then',
+      '      if [ "$FIXTURE_STATE" = "wrong tag commit" ]; then echo "wrong"; else echo "$RELEASE_SHA"; fi',
+      '    elif [ "$FIXTURE_STATE" = "existing tag" ] || { [ "$FIXTURE_STATE" = "tag race" ] && [ -f metadata-read ]; }; then',
+      '      echo "refs/tags/ci-$RELEASE_SHA"',
+      '    fi',
       '    exit 0 ;;',
       '  \'release view\')',
+      '    if [[ "$*" == *databaseId* ]]; then echo 42; exit 0; fi',
       '    [ "$FIXTURE_STATE" != missing ] || exit 1',
       '    [ "$FIXTURE_STATE" != error ] || exit 2',
       '    [ "$FIXTURE_STATE" != published ] || { printf \'false\\t%s\\n\' "$RELEASE_SHA"; exit 0; }',
@@ -249,10 +261,12 @@ function attachDraft(state, damage, overrides = {}) {
       '    printf \'true\\t%s\\n\' "$RELEASE_SHA" ;;',
       '  \'release create\') [ "$FIXTURE_STATE" != error ] ;;',
       '  \'release upload\') [ "$FIXTURE_STATE" != "upload error" ] ;;',
+      '  \'release edit\') [ "$FIXTURE_STATE" != "publish error" ] ;;',
       '  *) exit 1 ;;',
       'esac', '',
     ].join('\n'), { mode: 0o755 });
     const labels = ['linux-x86_64', 'linux-aarch64', 'macos-aarch64', 'macos-x86_64', 'windows-x86_64'];
+    const assets = [];
     for (let i = 0; i < labels.length; i++) {
       if (damage === 'missing platform' && i === 0) continue;
       const label = damage === 'substituted platform' && i === 0 ? 'linux-unknown' : labels[i];
@@ -264,9 +278,27 @@ function attachDraft(state, damage, overrides = {}) {
         const digest = createHash('sha256').update(damage === 'corrupt' && i === 0 ? 'different' : 'fixture archive').digest('hex');
         fs.writeFileSync(path.join(target, name + '.sha256'), digest + '  ' + name + '\n');
       }
+      for (const file of fs.readdirSync(target)) {
+        const bytes = fs.readFileSync(path.join(target, file));
+        assets.push({ name: file, state: 'uploaded', size: bytes.length, digest: 'sha256:' + createHash('sha256').update(bytes).digest('hex') });
+      }
     }
+    const tag = overrides.GITHUB_REF?.startsWith('refs/tags/v') ? overrides.GITHUB_REF_NAME : 'ci-' + testedSha;
+    const metadata = { draft: true, prerelease: true, target_commitish: testedSha, tag_name: tag, assets };
+    if (state === 'remote missing asset') assets.pop();
+    if (state === 'remote extra asset') assets.push({ ...assets[0], name: 'unexpected' });
+    if (state === 'remote duplicate asset') assets[0] = { ...assets[1] };
+    if (state === 'remote digest mismatch') assets[0].digest = 'sha256:' + '0'.repeat(64);
+    if (state === 'remote absent digest') delete assets[0].digest;
+    if (state === 'remote size mismatch') assets[0].size++;
+    if (state === 'remote incomplete asset') assets[0].state = 'starter';
+    if (state === 'remote published') metadata.draft = false;
+    if (state === 'remote stable') metadata.prerelease = false;
+    if (state === 'remote wrong target') metadata.target_commitish = context.sha;
+    if (state === 'remote wrong tag') metadata.tag_name = 'ci-' + context.sha;
+    fs.writeFileSync(path.join(dir, 'metadata.json'), state === 'malformed metadata' ? '{' : JSON.stringify(metadata));
     const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', 'export PATH="$PWD/bin:$PATH"\n' + draftScript], {
-      cwd: dir, encoding: 'utf8', env: { ...process.env, FIXTURE_STATE: state, CALL_LOG: 'calls.log',
+      cwd: dir, encoding: 'utf8', env: { ...process.env, FIXTURE_STATE: state, FIXTURE_TAG: tag, CALL_LOG: 'calls.log',
         GITHUB_REF: 'refs/heads/main', GITHUB_REF_NAME: 'main', GITHUB_REPOSITORY: context.repository,
         GITHUB_SHA: context.sha, RELEASE_SHA: testedSha, GITHUB_RUN_ID: '123',
         GITHUB_SERVER_URL: 'https://github.com', ...overrides },
@@ -277,7 +309,7 @@ function attachDraft(state, damage, overrides = {}) {
 }
 
 for (const state of ['missing', 'draft']) {
-  test('verified packages attach to a ' + state + ' commit-specific draft', () => {
+  test('verified packages attach to a ' + state + ' draft before automatic publication', () => {
     const result = attachDraft(state);
     assert.equal(result.status, 0, result.stderr);
     const verb = state === 'missing' ? 'create' : 'upload';
@@ -293,13 +325,21 @@ for (const state of ['missing', 'draft']) {
       assert.match(mutation, /--clobber/);
       assert.doesNotMatch(result.calls, /release create/);
     }
+    const calls = result.calls.trim().split('\n');
+    const publishIndex = calls.findIndex(line => line.startsWith('release edit '));
+    assert.ok(publishIndex > calls.indexOf(mutation));
+    assert.ok(calls.slice(0, publishIndex).includes('api repos/owner/repository/releases/42'), 'read uploaded asset metadata before publication');
+    assert.ok(calls[publishIndex].includes('--draft=false --prerelease --latest=false --target ' + testedSha));
+    assert.ok(calls.at(-1).includes('/commits/ci-' + testedSha), 'verify published tag target');
   });
-  test('version-tag packages attach to a ' + state + ' draft without changing tag policy', () => {
+  test('version-tag packages publish from a ' + state + ' draft after verifying the existing tag', () => {
     const result = attachDraft(state, undefined, { GITHUB_REF: 'refs/tags/v0.1.0', GITHUB_REF_NAME: 'v0.1.0' });
     assert.equal(result.status, 0, result.stderr);
     if (state === 'missing') assert.match(result.calls, /release create v0\.1\.0 .*--draft --prerelease --target [0-9a-f]{40} --verify-tag/);
     else assert.match(result.calls, /release upload v0\.1\.0/);
-    assert.doesNotMatch(result.calls, /ci-[0-9a-f]{40}|^api /m);
+    assert.doesNotMatch(result.calls, /ci-[0-9a-f]{40}|matching-refs/m);
+    assert.match(result.calls, /release edit v0\.1\.0 .*--verify-tag/);
+    assert.ok(result.calls.indexOf('/commits/v0.1.0') < result.calls.indexOf('release edit '));
   });
 }
 
@@ -347,3 +387,29 @@ test('invalid tested SHA prevents all GitHub operations', () => {
   assert.notEqual(result.status, 0);
   assert.equal(result.calls, '');
 });
+
+for (const state of ['remote missing asset', 'remote extra asset', 'remote duplicate asset',
+  'remote digest mismatch', 'remote absent digest', 'remote size mismatch', 'remote incomplete asset',
+  'remote published', 'remote stable', 'remote wrong target', 'remote wrong tag',
+  'malformed metadata', 'metadata error', 'tag race']) {
+  test(state + ' prevents publication after upload', () => {
+    const result = attachDraft(state);
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.calls, /release upload/);
+    assert.doesNotMatch(result.calls, /release edit/);
+  });
+}
+
+test('a moved version tag prevents publication', () => {
+  const result = attachDraft('wrong tag commit', undefined, { GITHUB_REF: 'refs/tags/v0.1.0', GITHUB_REF_NAME: 'v0.1.0' });
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.calls, /release edit/);
+});
+
+for (const state of ['publish error', 'still draft', 'wrong tag commit']) {
+  test(state + ' fails the publication job', () => {
+    const result = attachDraft(state);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.calls.match(/release edit/g)?.length, 1, 'never retry an uncertain publish mutation');
+  });
+}

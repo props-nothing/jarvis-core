@@ -7,7 +7,26 @@ selected_sdk: Swatinem/rust-cache v2.9.2; ZIP 9.0.4; SQLx 0.9.0; Tokio 1.53.1
 
 # Rust CI, dependency repair and test fixtures
 
-## Scope
+## Automatic prerelease publication (2026-10-16)
+
+Owner request after verified draft 415227765: publish automatically. This supersedes the earlier draft-only delivery policy for CI prereleases; native tests, strict dependency policy, five-platform packaging and checksum checks remain mandatory. Signed stable distribution, SBOM/notices completion and clean-machine acceptance remain separate unfinished work.
+
+Live official sources rechecked on 2026-10-16: [GitHub index](https://docs.github.com/llms.txt) (read with HTTP after the web reader rejected Markdown), [release edit](https://cli.github.com/manual/gh_release_edit), [release view fields](https://cli.github.com/manual/gh_release_view), [release REST contract](https://docs.github.com/en/rest/releases/releases), [commit resolution](https://docs.github.com/en/rest/commits/commits#get-a-commit), [CLI 2.102.0 edit source](https://raw.githubusercontent.com/cli/cli/v2.102.0/pkg/cmd/release/edit/edit.go), and [CLI 2.102.0 release notes](https://github.com/cli/cli/releases/tag/v2.102.0). No relevant contract change observed. CLI 2.102.0 includes download-path security fixes and was reported by the successful hosted job. API documentation uses version 2026-03-10.
+
+The CLI edit command publishes an existing draft using draft=false; prerelease=true keeps development status and latest=false avoids claiming the stable channel. GitHub creates an absent tag at target_commitish during publication; an existing tag takes precedence. Version-tag runs must resolve the tag to the tested SHA before publication. Automatic ci-<SHA> runs refuse a pre-existing tag, including a second check immediately before publication. No tag is moved or force-pushed. Final tag resolution must equal the tested SHA.
+
+Continue using only the job GITHUB_TOKEN with contents-write/actions-read. Upload the complete package set into a draft, read the release by numeric ID, then verify draft/prerelease state, exact tag/target, exactly ten uploaded assets, and each asset's name, nonzero size and SHA-256 digest against local verified bytes. Only then publish. A partial upload, unreadable or mismatched metadata, wrong target/tag or published release must stop publication. Verify the published state and tag target afterward. Existing published releases are never overwritten; a successful rerun cannot replace their bytes. Failures leave a draft when publication has not happened; ambiguous publication outcomes require inspection before retry.
+
+No new SDK/action dependency, provider runtime mapping or secret is introduced. Assets are public after publication and persist with the release; Actions artifacts expire after 14 days. The documented per-file limit remains 2 GiB, with ten assets and a ten-minute job bound. The existing permission limitation for older workflow-modifying targets remains: the Actions token cannot obtain workflow-write permission, and must fail rather than substitute a newer SHA. Package executables remain unsigned; Intel macOS remains cross-built without runtime smoke. The public release notes must state these actual limits.
+
+Discriminating verification: execute the real publication script with a controlled CLI and real file hashes; corrupt/missing/extra/duplicate assets, wrong state/tag/SHA, absent digest, incomplete upload, tag collision/move, API/upload/publish failures must prevent publication or fail post-publication verification. Positive controls require all ten assets uploaded and verified before the edit call. Preserve event/dependency/native-matrix/acceptance regressions. The first real hosted publication, public metadata and tag target are required for completion; fixtures alone are not publication evidence.
+
+
+Publication concurrency follows the live [job concurrency contract](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idconcurrency), rechecked 2026-10-16: a group may use needs outputs. Serialize the publication job by tested SHA, without cancelling an active publisher, so manual and main-CI runs cannot race asset replacement and publication.
+
+Local publication validation (2026-10-16): all 61 release-flow regressions and six documentation regressions passed, along with the 361-file documentation check, archive/license/checksum refusal tests, actionlint 1.7.12, formatting and strict all-target/all-feature Clippy. A first workspace test build hit a Windows linker lock in the primary checkout's shared target directory; no process was stopped or user source changed. A fresh isolated worktree target, with an explicitly built and required MCP peer, passed all 3,129 locked workspace tests (zero failures, five existing ignored). Evidence is retained outside the worktree in `artifacts/ci-review/auto-publish/`. Native hosted CI, all five packages and actual automatic publication remain required.
+
+## Original CI repair scope
 
 Owner-requested repair of native CI timeouts and failures, with the exact-commit release gates preserved. This does not enable publishing or alter production SQLite durability, permissions or migrations.
 
