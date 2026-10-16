@@ -92,6 +92,8 @@ These dependency-free fixtures exercise eligible CI events, exact commit selecti
 
 The workflow regressions also compare the native test matrix against workspace membership: every package must run exactly once per OS, with exactly one acceptance lane per OS. They retain all three acceptance gates, both missing-binary guards and the single preceding workspace build. Release/archive shell regressions continue to run on each native OS.
 
+The isolated daemon job explicitly builds `jarvis-mcp-transport`'s `fixture-peer` binary before testing. `cargo test -p jarvisd --all-features` enables the selected package's features; it does not build another package's executable. Keep `ACCEPTANCE_REQUIRE_FIXTURE_PEER=1` and the build step together, including their ordering regression. A developer's existing `target/debug/fixture-peer` must not hide a missing CI prerequisite.
+
 The background coding-activity test waits for both public snapshots before requesting Stop. Cancelling after just the first snapshot can prevent the second from arriving, contradicting its later two-update assertion. Bounded 30-second readiness/completion waits allow loaded native runners without changing production deadlines or retrying a failing assertion. Its scratch path includes `private` on every OS, matching macOS canonical temporary paths: secrecy assertions reject the exact fixture thought/input/output markers, never a legitimate path component.
 
 CI annotates stack overflows, fatal runtime errors and aborted harness exits separately from ordinary panics. An abort can prevent libtest from printing its accumulated failure details. The annotation fixtures place crash evidence before the final log tail and include a successful test named with `assertion`; neither the fatal error nor the distinction between success and panic may be lost.
@@ -147,6 +149,8 @@ Keep malformed, failed, paginated, rate-limited, empty, duplicated, out-of-order
 Ordinary storage and daemon behavior fixtures use `SqliteDatabase::test_fixture`, available only to storage tests or through the opt-in `test-support` feature (a daemon dev-dependency). The first call runs the production migrations and closes the pool before caching the database bytes. Each fixture copies those bytes into its own new file and reopens through production validation, ACLs and connection settings. No live pool or mutable database is shared across test runtimes. `synchronous=FULL`, WAL, foreign keys and the production trust settings remain in force.
 
 Migration, startup and permission tests must continue to call `SqliteDatabase::open` on fresh databases. Fixture regressions check current schema/identity, independent writes, persistence after reopen, production pragmas and refusal to overwrite an existing file. On local Windows, the same 21 approval tests with four threads fell from 5.45s to 1.71s; this is a fixture measurement, not a hosted-run estimate.
+
+Credential fixtures must canonicalize their own newly created temporary root before constructing `AppPaths`. macOS's temporary path can contain a symlinked ancestor; the production credential store deliberately rejects such ancestors, even above `config`. Do not relax that guard to accommodate a fixture. Native symlink/junction tests explicitly cover an aliased portable root as well as managed directories and key files.
 
 A fixture's scratch directory **must** be removed through `jarvis_core::remove_scratch_dir`, and its name **must**
 contain `jarvis_core::scratch_tag()`. Both rules exist because violating either is invisible at runtime: a

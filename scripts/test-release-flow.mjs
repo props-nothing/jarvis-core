@@ -129,6 +129,11 @@ test('job separation retains native gates, cold-build validation and timeout hea
     assert.match(body, /name: Retain diagnostics\n        if: always\(\)/);
   }
   const tests = job('rust-tests', ci);
+  const peer = tests.split('      - name: Build daemon test peer\n')[1].split('      - name: ')[0];
+  assert.match(peer, /if: matrix.suite == 'daemon'/);
+  assert.match(peer, /cargo build -p jarvis-mcp-transport --features fixture-peer --bin fixture-peer --locked/);
+  assert.ok(tests.indexOf('name: Build daemon test peer') < tests.indexOf('name: Test workspace'));
+  assert.match(tests.split('      - name: Test workspace\n')[1].split('      - name: ')[0], /ACCEPTANCE_REQUIRE_FIXTURE_PEER: "1"/);
   assert.match(tests, /cargo test .*--all-features --locked --no-fail-fast/);
   assert.equal([...tests.matchAll(/cargo build --workspace --all-features --locked/g)].length, 1);
   for (const phase of [1, 2, 3]) {

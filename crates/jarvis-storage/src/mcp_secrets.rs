@@ -381,11 +381,12 @@ mod tests {
     #[test]
     fn symbolic_and_hard_linked_files_and_directory_components_fail_closed() {
         use std::os::unix::fs::symlink;
-        for component in ["config", "mcp-keys", "github", "canary_locator.key"] {
-            let profile = Profile::new();
+        for component in ["root", "config", "mcp-keys", "github", "canary_locator.key"] {
+            let mut profile = Profile::new();
             let outside = profile.root.join("outside");
             fs::create_dir(&outside).unwrap_or_else(|error| panic!("fixture: {error}"));
             let path = match component {
+                "root" => profile.root.join("alias"),
                 "config" => profile.paths.config().to_path_buf(),
                 "mcp-keys" => profile.paths.config().join(component),
                 "github" => profile.paths.config().join("mcp-keys").join(component),
@@ -393,7 +394,11 @@ mod tests {
             };
             fs::create_dir_all(path.parent().unwrap_or_else(|| panic!("parent")))
                 .unwrap_or_else(|error| panic!("fixture: {error}"));
-            symlink(&outside, path).unwrap_or_else(|error| panic!("fixture link: {error}"));
+            symlink(&outside, &path).unwrap_or_else(|error| panic!("fixture link: {error}"));
+            if component == "root" {
+                profile.paths = AppPaths::from_root(&path)
+                    .unwrap_or_else(|error| panic!("aliased profile: {error}"));
+            }
             profile.rejects_all_operations();
             assert!(
                 fs::read_dir(outside)
@@ -414,11 +419,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_directory_junctions_fail_closed_without_touching_the_target() {
-        for component in ["config", "mcp-keys", "github"] {
-            let profile = Profile::new();
+        for component in ["root", "config", "mcp-keys", "github"] {
+            let mut profile = Profile::new();
             let outside = profile.root.join("outside");
             fs::create_dir(&outside).unwrap_or_else(|error| panic!("fixture: {error}"));
             let path = match component {
+                "root" => profile.root.join("alias"),
                 "config" => profile.paths.config().to_path_buf(),
                 "mcp-keys" => profile.paths.config().join(component),
                 _ => profile.paths.config().join("mcp-keys").join(component),
@@ -432,6 +438,10 @@ mod tests {
                 .output()
                 .unwrap_or_else(|error| panic!("junction fixture: {error}"));
             assert!(output.status.success(), "could not create fixture junction");
+            if component == "root" {
+                profile.paths = AppPaths::from_root(&path)
+                    .unwrap_or_else(|error| panic!("aliased profile: {error}"));
+            }
             profile.rejects_all_operations();
             assert!(
                 fs::read_dir(outside)

@@ -2400,6 +2400,10 @@ mod tests {
                 std::env::temp_dir().join(format!("jarvis-gateway-{}", jarvis_core::scratch_tag()));
             std::fs::create_dir_all(&path)
                 .unwrap_or_else(|error| panic!("create temp profile: {error}"));
+            // macOS temp paths can contain an OS symlink; credential fixtures
+            // must supply physical paths to the unchanged ancestor-link guard.
+            let path = std::fs::canonicalize(path)
+                .unwrap_or_else(|error| panic!("canonical temp profile: {error}"));
             Self(path)
         }
 

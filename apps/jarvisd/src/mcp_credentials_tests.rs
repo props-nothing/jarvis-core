@@ -20,6 +20,8 @@ async fn live_github_v2_0_2_get_me_with_a_profile_owned_pat() {
     );
     let root = std::env::temp_dir().join(format!("jmcp-live-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(&root).unwrap_or_else(|_| panic!("cannot create throwaway profile"));
+    let root = std::fs::canonicalize(root)
+        .unwrap_or_else(|error| panic!("canonical throwaway profile: {error}"));
     let _scratch = Scratch(root.clone());
     let paths = jarvis_storage::portable_layout(&root).unwrap_or_else(|| panic!("layout"));
     let reference = McpSecretRef::parse("mcp:github:token").unwrap_or_else(|_| panic!("reference"));
@@ -100,6 +102,8 @@ async fn profile_keys_reach_host_and_test_connection_without_entering_status_or_
     }
     let root = std::env::temp_dir().join(format!("jmcp-key-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(&root).unwrap_or_else(|error| panic!("scratch: {error}"));
+    let root =
+        std::fs::canonicalize(root).unwrap_or_else(|error| panic!("canonical scratch: {error}"));
     let _scratch = Scratch(root.clone());
     let paths = jarvis_storage::portable_layout(&root).unwrap_or_else(|| panic!("layout"));
     let reference = McpSecretRef::parse("mcp:github:token")

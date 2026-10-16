@@ -111,6 +111,8 @@ impl Drop for ProfileScratch {
 fn profile() -> (ProfileScratch, AppPaths) {
     let root = std::env::temp_dir().join(format!("jmcp-http-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(&root).unwrap_or_else(|error| panic!("scratch: {error}"));
+    let root =
+        std::fs::canonicalize(root).unwrap_or_else(|error| panic!("canonical scratch: {error}"));
     let paths = jarvis_storage::portable_layout(&root).unwrap_or_else(|| panic!("layout"));
     (ProfileScratch(root), paths)
 }

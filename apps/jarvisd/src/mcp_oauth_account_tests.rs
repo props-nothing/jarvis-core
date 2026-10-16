@@ -18,6 +18,8 @@ impl Profile {
     fn new() -> (Self, AppPaths) {
         let root = std::env::temp_dir().join(format!("jmcp-oauth-{}", jarvis_core::scratch_tag()));
         std::fs::create_dir_all(&root).unwrap_or_else(|error| panic!("profile: {error}"));
+        let root = std::fs::canonicalize(root)
+            .unwrap_or_else(|error| panic!("canonical profile: {error}"));
         let paths = jarvis_storage::portable_layout(&root).unwrap_or_else(|| panic!("layout"));
         (Self(root), paths)
     }

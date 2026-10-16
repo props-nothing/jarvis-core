@@ -157,6 +157,10 @@ jobs:
         if: matrix.suite == 'all' || matrix.suite == 'remaining'
         shell: bash
         run: bash scripts/test-package-release.sh
+      - name: Build daemon test peer
+        # Selecting jarvisd alone does not build another package's fixture binary.
+        if: matrix.suite == 'daemon'
+        run: cargo build -p jarvis-mcp-transport --features fixture-peer --bin fixture-peer --locked --timings
       - name: Test workspace
         id: tests
         # Leave time for diagnostics/cache saving before the enclosing job limit.

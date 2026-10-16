@@ -16,6 +16,10 @@ Owner-selected next slice: repair the reviewed failures and timeouts while retai
 - [x] Windows verification: default-feature and all-feature locked workspace runs each passed **3,110 tests**, zero failures, five existing ignored. Formatting, strict workspace Clippy, all four dependency-policy checks, **179 JavaScript tests**, deterministic typed-HUD rebuild, archive/license regressions and actionlint passed. Freshly built binaries passed all three acceptance gates with both skip guards enabled. Evidence: `artifacts/ci-review/`; [testing notes](docs/development/testing.md) and [research/limits](docs/research/integrations/github-actions-rust-ci.md).
 - [ ] After pushing, verify native Linux/macOS/Windows CI, cold/warm cache behavior and all five release packages on GitHub. Check any required-status rules against the new job names. Local evidence does not prove hosted performance, Unix-only execution or draft uploads.
 
+Hosted follow-up: `8fcd458` / CI `38920832954` passed all native Clippy jobs, dependency policy, Linux tests/gates and Windows storage (354 unit tests in 89.98s). macOS found 18 credential/OAuth fixture failures due to symlinked temporary ancestors. The repair canonicalizes only fixture roots and extends the unchanged store's symlink/junction refusal tests to the portable root. Final native/package verification remains open. Repository metadata reports no required checks/rulesets needing migration.
+
+The isolated daemon job now explicitly builds its sibling MCP peer executable. With the old executable moved aside, the missing-peer guard failed as expected; the exact new build command then made the same test pass. The repair passed 138 MCP tests, four GitHub settings tests, four storage credential tests, all 3,110 default workspace tests (five existing ignored), formatting, strict Clippy, all 32 release-flow regressions and workflow lint locally. No production credential guard or CI assertion was relaxed.
+
 ## Owner-requested settings consistency (2026-10-16)
 
 Follow-up under [ADR-0225](docs/adr/0225-hud-controls-use-explicit-state-and-task-navigation.md).

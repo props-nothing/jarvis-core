@@ -18,6 +18,8 @@ impl Drop for Scratch {
 async fn fixture() -> (Scratch, GatewayState, jarvis_storage::AppPaths, String) {
     let root = std::env::temp_dir().join(format!("jgh-settings-{}", jarvis_core::scratch_tag()));
     std::fs::create_dir_all(&root).unwrap_or_else(|error| panic!("scratch: {error}"));
+    let root =
+        std::fs::canonicalize(root).unwrap_or_else(|error| panic!("canonical scratch: {error}"));
     let paths = jarvis_storage::portable_layout(&root).unwrap_or_else(|| panic!("layout"));
     std::fs::create_dir_all(paths.config()).unwrap_or_else(|error| panic!("config: {error}"));
     let database = Arc::new(
