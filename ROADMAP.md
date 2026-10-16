@@ -10,11 +10,11 @@ Reviewed 2026-10-16. The [active backlog](TODO.md) controls current acceptance o
 
 | Area | Built now | Remaining acceptance or capability |
 | --- | --- | --- |
-| Core and control | Local Rust daemon/CLI, SQLite, durable approvals, audit, cancellation, a browser console and bounded/redacted logs | Native lifecycle and release evidence |
+| Core and control | Local Rust daemon/CLI, SQLite, durable approvals, audit, cancellation, a browser console, bounded/redacted logs and stop/restart checks for active background work | Coordinated shutdown draining, native lifecycle and release evidence |
 | Everyday work | Google mail/calendar, files/documents/XLSX edits, contacts, browser/search, projects and Telegram | Selected owner-account failure paths, OCR, provider fallback, image generation, PowerPoint/charts |
-| Automation | Time-zone schedules, mail/file/webhook triggers, quiet hours, atomic sub-agent admission, routing and spend guards | Structured parent/child lifecycle, cancellation propagation and notification budgets |
+| Automation | Time-zone schedules, mail/file/webhook triggers, atomic webhook capacity reservations, quiet hours, atomic sub-agent admission, routing and spend guards | Restart-safe event-to-run handoff, structured parent/child lifecycle, cancellation propagation and notification budgets |
 | Memory | Owner-controlled admission, inspect/atomic correction/forget, task-aware lexical recall and granted-file full-text search | Owner-corpus answer/latency evaluation, automatic file/entity context and measured semantic retrieval |
-| MCP accounts | Named stdio/HTTP secrets, persistent GitHub OAuth and generic pre-registered OAuth | Real provider/browser acceptance, automatic client registration, per-client credentials and hot registration |
+| MCP accounts | Named stdio/HTTP secrets, persistent GitHub OAuth and generic pre-registered OAuth | Real provider/browser acceptance, durable direct-call history, automatic client registration, per-client credentials and hot registration |
 | Coding | Settings-first in-place queued jobs, opt-in worktrees, full skill bundles, independent checks and managed previews | Complete real-agent website/cancellation/sign-in acceptance, scoped integration bridge and optional enforceable sandbox |
 | Voice | Browser voice/optional runtime synthesis; owner-reported working outbound calls | New setup requires ElevenLabs per owner choice; browser-independent local speech and broader telephony remain |
 | Distribution | Apache-2.0, user installation/services, CI archives and source-building website scripts | Complete notices/SBOM, signed public packages, update/rollback and clean-machine verification |
@@ -22,7 +22,9 @@ Reviewed 2026-10-16. The [active backlog](TODO.md) controls current acceptance o
 
 ## Current acceptance slice
 
-The 2026-10-16 review corrections are implemented and validated locally on Windows: atomic memory correction and sub-agent admission, bounded/redacted logging with singleton-safe startup, current documentation/website claims, preserved historical evidence and a documentation CI guard. The [completed slice](TODO.md#current-acceptance-slice-review-corrections-2026-10-16) records exact checks and limitations. Existing macOS credential-fixture and CI/release follow-up remains in the active ledger; fresh hosted native acceptance is still required.
+The owner-selected [runtime and guide follow-up](TODO.md#current-acceptance-slice-runtime-and-guide-follow-up-2026-10-16) is implemented and locally validated: atomic webhook capacity admission, stop/restart checks covering native runs, coding jobs and live managed processes, refusal on unreadable state, and all confirmed documentation corrections. Concurrency and unavailable-storage falsification, narrow regressions, both workspace test configurations and all three process gates passed on Windows. The backlog records exact results and the separate native CI/provider gates.
+
+The earlier atomic memory/sub-agent admission and bounded/redacted logging repairs remain complete. Their [original evidence](TODO.md#current-acceptance-slice-review-corrections-2026-10-16) is preserved, with a correction noting that structural documentation checks did not establish complete semantic freshness. Native CI/release and real-provider acceptance remain separate from local validation.
 
 The next work after those corrections is evidence-led: close the chosen MCP/provider/browser checks, coding delivery and native installation gates before expanding the provider list. Credential configuration and offline tests are not live account acceptance. The [capability wishlist](docs/product/capability-wishlist.md) contains residual opportunities, not a second execution queue.
 
@@ -127,7 +129,7 @@ Deliver:
 
 The durable workflow engine (event outbox and inbox, step records, compensation) is parked until a process needs to wait days across steps and a run plus a schedule cannot express it.
 
-**Exit gate:** a trigger starts a run exactly once, survives a daemon restart, and a replayed event starts nothing.
+**Target exit gate, not yet satisfied:** a trigger durably reaches its run across daemon restart without duplicate effects, and replay starts nothing. Current schedules/triggers claim before starting work: this provides at-most-once admission with a crash-loss window, not exactly-once delivery. Atomic webhook capacity admission closes the concurrent-limit defect; a durable handoff/outbox remains separate demand-gated work.
 
 ## Phase 7: Runtime Ecosystem
 

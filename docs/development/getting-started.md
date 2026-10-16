@@ -50,8 +50,8 @@ Phase 1 (`P1-001` through `P1-012`) has delivered a runnable local foundation:
 - per-user service planning and drift detection (the original Phase 1 foundation; installation was added in later product slices)
 - an automated process-level acceptance gate in `tests/e2e`, run on Windows, macOS, and Linux CI
 
-Since Phase 1 the product slices below were built ahead of their phases, each with an ADR and a live run against a real
-model (see [ROADMAP.md](../../ROADMAP.md), "Current Direction"):
+Since Phase 1 the product slices below were built ahead of their original phases. Their ADRs and the
+[current acceptance ledger](../../TODO.md#what-is-built-and-what-still-needs-acceptance) distinguish implementation, fixture tests and recorded live-model evidence:
 
 - `jarvis init` / `jarvis start`: first-run setup and a background daemon
 - models (OpenAI-compatible, including a local Ollama), tools under policy, approvals that survive a restart, and standing
@@ -89,7 +89,7 @@ Ollama ignores) and a validated `config.toml`, and it **never overwrites** an ex
 `--force`. New setup requires a private ElevenLabs key, from the hidden prompt, `ELEVENLABS_API_KEY` with `--elevenlabs`, or an absolute `--voice-key-file PATH`; the default voice ID is `liN4AsrhF3CylqMDWK6p` (not a key). It grants **no folder unless you name one** (`--workspace DIR`, repeatable, or the prompt); `~/Development` and `~/projects` are suggestions, not automatic grants. For another
 OpenAI-compatible server, unattended setup includes both key files: `jarvis init --base-url URL --model NAME --api-key-file C:\Secrets\model.key --voice-key-file C:\Secrets\voice.key` (replace these with existing private absolute paths; keys never pass through the command). Add `--code-image node:22-alpine --code-interpreter "node -e"` to give
 the assistant a no-network throwaway container for code, and `--trust-code` to let it run without asking each time
-(`ADR-0133`); web pages already run without asking, and anything with an external effect is still asked. `start` returns once the daemon listens, or says why it exited.
+(`ADR-0133`); web fetches run without asking by default. Outward communication asks by default too, but the owner can grant explicit per-tool standing trust (`ADR-0178`); stricter policy and scope/risk limits still apply. `start` returns once the daemon listens, or says why it exited.
 `--root DIR` (an existing directory) keeps a throwaway profile. The manual route below stays available for operators.
 
 In one terminal:
@@ -272,6 +272,7 @@ stopped with `jarvis cancel`. It cannot start further sub-agents, and at most fo
 ```powershell
 jarvis schedule add "Summarise what changed in my notes folder." --every 24h
 jarvis schedule add "Remind me to renew the domain." --at 2026-12-01T09:00:00Z
+jarvis schedule add "Send the morning briefing." --at-time 08:00 --days mon-fri --zone Europe/Amsterdam
 jarvis schedule list
 jarvis runs                     # what each run answered; --full for the whole answer
 jarvis schedule pause 01a1      # an identifier prefix is enough when it is unambiguous
@@ -279,8 +280,9 @@ jarvis schedule pause 01a1      # an identifier prefix is enough when it is unam
 
 A scheduled task is an ordinary run started later, so it has **no extra authority**: if it wants a tool that needs your
 approval it waits, and `jarvis approvals list` shows it. A task is skipped (and the skip counted) while its previous run is
-still waiting on you, and a machine that was off owes one fire, not a backlog. There is no "daily at 08:00" yet: it needs
-time-zone and daylight-saving handling (`P6-003`) and is not approximated. See `ADR-0132`.
+still waiting on you, and a machine that was off owes one fire, not a backlog. Wall-clock schedules use `--at-time`,
+`--days` and `--zone`, preserving the chosen local time through daylight-saving changes (`P6-003`, `ADR-0182`).
+Omitting `--zone` uses this computer's time zone. See [schedules and projects](../user/projects.md#work-in-it).
 
 ### Chatting (multi-turn)
 

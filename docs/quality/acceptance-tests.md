@@ -1,6 +1,21 @@
 # Acceptance Tests
 
-These are release-level scenarios. All are **unimplemented** until linked evidence is recorded. Unit tests alone cannot satisfy a scenario that names installation, restart, an external provider, a real OS, or a real call.
+These are target release-level scenarios. A scenario is accepted only when linked evidence satisfies its applicable clauses; a partial implementation or unit-test result cannot satisfy a clause that names installation, restart, an external provider, a real OS, or a real call.
+
+## Current coverage and historical evidence
+
+Reviewed 2026-10-16. The [active acceptance ledger](../../TODO.md) names the current revision, checks and remaining gates. The original Phase 1/2 narratives below are retained as historical evidence of those slices; their statements about absent features describe that phase, not today's complete product.
+
+| Area | Current interpretation |
+| --- | --- |
+| A01 installation | Source build, per-user program/service installation and process acceptance gates exist. Signed public installers and clean-machine install/update/rollback across intended artifacts remain unproven; A01 is not complete. |
+| A03 conversation/recovery | Durable sessions/runs and restart settlement exist. Later ADR-0155 adds bounded fresh continuations for eligible interrupted requests, not exact execution replay. CLI `chat` still starts a new session; no cross-process CLI resume is claimed. Browser history and retained run output are separate surfaces. |
+| A04–A07 tools/cancellation/MCP | Model, tool and approval execution paths now exist. The current phase gates and focused tests provide evidence for their stated paths; external-agent cancellation, external-client identity/audit and real-provider acceptance retain their own open gates. The Phase 2 limitations below are not a present feature inventory. |
+| A08 memory | Memory lifecycle and atomic correction/version checks exist (ADR-0227). `expected_version` is used for mutable memory and other records; its absence from run-start/approval decisions is a narrower historical correction. Owner-corpus quality and complete export/deletion acceptance remain distinct. |
+| A12–A18 future profiles | Ordinary triggers, schedules and selected owner calls exist. Signed provider webhooks, a multi-step workflow engine, general telephony and vendor-shaped voice transports are not established by those first slices; some remain demand-gated. |
+| A19–A25 release/security | Browser controls and selected bounded resource/policy paths exist. Signed update/rollback, backup/export/delete completeness and native release acceptance still require the evidence named by each scenario. |
+
+This table records implementation scope, not a new test run or blanket acceptance. The [roadmap](../../ROADMAP.md) controls which target profiles remain deferred.
 
 ## Evidence Format
 
@@ -32,6 +47,8 @@ Run on every supported OS/architecture artifact, not one representative platform
 
 ### Partial Evidence (`P1-012`)
 
+> **Historical Phase 1 evidence.** The following account records `P1-012` before later service installation work. Current service support and remaining distribution gates are summarized above and in the [installation guide](../operations/install-and-release.md).
+
 A01 is **not** satisfied: it requires a signed installer, which does not exist yet.
 
 The parts that need no installer are covered by the automated Phase 1 gate,
@@ -59,6 +76,8 @@ Given deliberately mismatched config/state paths, an unavailable database, stale
 **Phase:** 2
 
 Given a scripted streaming model and an active run, when `jarvisd` is terminated at every persisted run transition, then restart either resumes from the documented boundary or marks the run with a truthful terminal/recoverable state. It never emits duplicated final output or loses an accepted user message.
+
+> **Historical Phase 2 evidence.** This describes the original process gate and its then-current recovery limits. Later bounded fresh continuations do not turn it into proof of exact replay. See the current coverage table and [ADR-0155](../adr/0155-restarts-keep-work-the-owner-hears-and-leads-live-in-rows.md).
 
 **Satisfied for the offline half; one clause is proven by construction rather than by test.** The
 evidence is the Phase 2 process gate, `tests/e2e/tests/phase2_gate.rs`, which runs the real `jarvisd`
@@ -110,6 +129,8 @@ new process: the identifier is printed, but reading a conversation back by ident
 **Phase:** 2
 
 Given a run streaming model output, waiting on a tool, and waiting on approval in separate cases, when an authorized client cancels it, then new work stops, adapters receive cancellation, state settles once, and the client receives a terminal cancellation event.
+
+> **Historical Phase 2 evidence, including the 2026-09-22 correction.** Tool/approval execution and live-provider paths were added later. The quoted absence of `expected_version` refers to that early snapshot; current memory contracts require it. Preserve the original observations below without treating them as today's limitations or test results.
 
 **Satisfied for cancellation in flight; the remaining clauses are not reachable this phase.** The
 evidence is `apps/jarvisd/src/executor.rs`, which proves that a cancellation requested while a model

@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-10-10
 
+**Later owner-selected exception:** [ADR-0214](0214-first-run-tests-model-and-required-voice-before-saving.md) requires a working ElevenLabs TTS key/test during new CLI onboarding. This amends decision 7's no-new-required-step rule for that setup path only; existing profiles and manually configured headless daemon operation remain usable without cloud speech. The protocol-first and demand-gated architecture decisions remain in force.
+
 ## Context
 
 A review of `P5` to `P9` on 2026-10-10 asked whether the open items still describe the best way to build an autonomous assistant that is easy to set up. What is built: a durable run loop with approvals and a kill switch, 37 tools, Google mail and calendar, projects, schedules, sub-agents (one level), memory, a skill store, a console with voice, an MCP host, per-user service install, and an evaluation harness. What the open items still plan was written in September, before most of that existed:

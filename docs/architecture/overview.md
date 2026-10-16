@@ -84,6 +84,8 @@ flowchart TB
 
 ## Component Ownership
 
+This table defines the intended boundaries. In the current workspace, most use-case sequencing and adapter composition still live in `apps/jarvisd`; `jarvis-application` is scaffolding. Extract focused use cases as their transaction/lifecycle boundaries require it, rather than treating this diagram as proof that the layer separation is already complete.
+
 | Component | Owns | Must not own |
 | --- | --- | --- |
 | Gateway | client auth, request validation, protocol adaptation, streams | business policy, provider types |
@@ -134,7 +136,11 @@ sequenceDiagram
 
 Native model requests receive tool descriptions and scoped handles, not JARVIS credential values. JARVIS-owned tool requests return through application policy before execution. External ACP agents use their own authentication and native tools under task approval; these are host processes, and a scoped JARVIS tool bridge remains separate work.
 
+The sequence above describes native runs. Direct external MCP tool calls enforce policy but currently use in-memory pending approvals and do not persist the native run tool-call/outcome ledger; calls that delegate a JARVIS run do create that run's durable history. Completing direct-call accountability remains acceptance work before broader remote effects.
+
 ## Proactive Event Flow
+
+The following durable inbox/outbox flow is a target. Current schedules and triggers claim their occurrence/event before starting an ordinary run, with at-most-once admission and a possible lost event if the daemon stops between those operations. Dedupe and capacity limits do not establish restart-safe delivery.
 
 ```mermaid
 sequenceDiagram

@@ -19,7 +19,7 @@ jarvis project add Prospecting --goal "Book five demos with Dutch logistics firm
 
 * **Goal**: what done looks like, in a sentence or two.
 * **Guidance**: how you want it done. Language, tone, who it may contact, what to avoid, how often to bother you. Up to 12,000 characters.
-* **Folder**: where its files live, relative to a folder you granted in Settings → Files. It cannot point outside that folder.
+* **Folder**: where its files live, relative to a folder you granted in Settings → Folders & code. It cannot point outside that folder.
 
 ## Work in it
 
@@ -48,9 +48,9 @@ journal; its conversations and schedules stay.
 
 ## Cap how much it runs by itself
 
-Two caps, both for *scheduled* work only: runs and tokens. The project window also shows how many tokens the project used in the last 24 hours, whether or not a cap is set.
+Two caps: a run-count cap for scheduled work, and a token cap for all runs in the project, including interactive messages and sub-agents. The project window also shows how many tokens the project used in the last 24 hours, whether or not a cap is set.
 
-**Tokens.** `jarvis project set NAME --token-limit 500000` (or **Daily tokens** in the project window) stops the project's scheduled tasks from starting once its runs have used that many tokens (input plus output) in the last 24 hours; the rest wait and are counted as skipped. It is checked when a task is about to start, so one long run can go past it, and it never stops a run midway or refuses your own messages. If JARVIS cannot read the usage it holds the task rather than risk spending. Zero means no cap, and JARVIS cannot change the cap itself. Tokens, not money: provider prices change, so look up the price per million tokens for your model and multiply.
+**Tokens.** `jarvis project set NAME --token-limit 500000` (or **Daily tokens** in the project window) caps input plus output tokens in a rolling 24-hour window. Scheduled starts at the cap are skipped and counted. The executor also checks before a model call and after recorded model usage for every project run: reaching the cap stops the run with `daily_token_limit` before another model or tool call, and records a blocker in the project journal (`ADR-0191`). This can stop your interactive request too. A model call can overshoot because its usage is known only after it returns; concurrent calls already in flight can also overshoot. If usage cannot be read, the guard stops work with `token_limit_unavailable`. Zero means no cap, and JARVIS cannot change the cap itself. The optional workspace-wide token cap applies as well; see [Settings](settings.md#brain). These are token limits, not money limits.
 
 **Runs.**
 `jarvis project set NAME --daily-limit 12` (or **Daily runs** in the project window) stops the project's *scheduled* tasks from starting more than that many runs in any 24 hours; the rest wait, and are counted as skipped in

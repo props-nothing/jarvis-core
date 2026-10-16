@@ -9,7 +9,7 @@ JARVIS can live in a Telegram chat only you can use. It is the same assistant: s
 ## Set it up (about two minutes, once)
 
 1. In Telegram, open **@BotFather**, send `/newbot`, pick a name. It gives you a **token**.
-2. In the console open **Settings, Telegram**, paste the token and press **Save token**. No restart. The status turns to "Connected to @yourbot".
+2. In the console open **Settings → Channels → Telegram**, paste the token and press **Save token**. No restart. The status turns to "Connected to @yourbot".
 3. Open your bot in Telegram and send it any message. It replies with a **six digit code**.
 4. Enter the code in Settings and press **Pair**.
 

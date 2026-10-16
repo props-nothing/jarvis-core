@@ -638,6 +638,90 @@ async fn a_retry_with_the_same_delivery_id_starts_nothing_and_a_flood_is_refused
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(retry.as_deref(), Some("60"));
     assert_eq!(objectives_of(&fixture, TriggerKind::Webhook).await.len(), 3);
+    let (status, body, _) = deliver(&fixture, &secret, b"a", Some("delivery-1")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a full budget still acknowledges a duplicate"
+    );
+    assert!(body.contains("duplicate"));
+}
+
+/// Falsifies the former check-then-start race: all distinct deliveries race before any has to finish launching a run.
+#[tokio::test]
+async fn concurrent_webhook_deliveries_start_only_three_runs() {
+    let fixture = fixture(false).await;
+    let (secret, _) = make_webhook(&fixture).await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(24));
+    let mut tasks = Vec::new();
+    for index in 0..24 {
+        let app = fixture.app.clone();
+        let secret = secret.clone();
+        let barrier = Arc::clone(&barrier);
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            let request = must(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/hooks/{secret}"))
+                    .header("idempotency-key", format!("delivery-{index}"))
+                    .body(Body::from("event")),
+            );
+            must(app.oneshot(request).await).status()
+        }));
+    }
+    let mut accepted = 0;
+    let mut limited = 0;
+    for task in tasks {
+        match must(task.await) {
+            StatusCode::ACCEPTED => accepted += 1,
+            StatusCode::TOO_MANY_REQUESTS => limited += 1,
+            other => panic!("unexpected delivery response: {other}"),
+        }
+    }
+    assert_eq!((accepted, limited), (3, 21));
+    assert_eq!(objectives_of(&fixture, TriggerKind::Webhook).await.len(), 3);
+}
+
+/// A reserved event whose run never started still occupies a slot, and a storage outage starts no work.
+#[tokio::test]
+async fn webhook_route_counts_unstarted_reservations_and_refuses_database_failure() {
+    let fixture = fixture(false).await;
+    let (secret, trigger) = make_webhook(&fixture).await;
+    for key in ["pending-1", "pending-2", "pending-3"] {
+        assert_eq!(
+            must(
+                jarvis_storage::claim_webhook_event(
+                    &fixture.database,
+                    &trigger.trigger_id,
+                    key,
+                    UtcTimestamp::now(&SystemClock),
+                    3,
+                    50
+                )
+                .await
+            ),
+            jarvis_storage::WebhookEventAdmission::Admitted
+        );
+    }
+    let (status, _, _) = deliver(&fixture, &secret, b"another", Some("another")).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        objectives_of(&fixture, TriggerKind::Webhook)
+            .await
+            .is_empty()
+    );
+    fixture.database.close().await;
+    let (status, _, _) = deliver(&fixture, &secret, b"outage", Some("outage")).await;
+    assert!(
+        !status.is_success(),
+        "unavailable storage must never grant admission"
+    );
+    let reopened = must(SqliteDatabase::open(&fixture.directory.join("jarvis.sqlite3")).await);
+    assert!(
+        must(jarvis_storage::read_recent_runs(&reopened, LOCAL_WORKSPACE_ID, 10).await).is_empty()
+    );
+    reopened.close().await;
 }
 
 /// A body over 128 KB is refused, and a body that tries to forge the fence cannot end it early.

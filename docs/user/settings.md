@@ -91,7 +91,7 @@ You can always type a model name. **Load models** requests suggestions from the 
 
 | Setting | Default | What unset means |
 | --- | --- | --- |
-| `tool_workspace_roots` | none | **Off by design.** With no folder granted JARVIS has no file tools at all; nothing outside a folder you chose is reachable (`ADR-0020`). Creating a file is automatic inside a granted folder, changing one asks first (`ADR-0137`). With a folder granted JARVIS can also **run a command** there (`npm run build`, `cargo test`): it asks every time and shows the full command line, runs without a shell on your machine with your privileges (not isolated), and can be set to run without asking in Permissions (`ADR-0143`). |
+| `tool_workspace_roots` | none | **Off by design.** JARVIS's own file tools require a granted folder and confine their file access to those roots (`ADR-0020`). Creating a file runs under default policy; changing one asks by default (`ADR-0137`). Approved command tools, ACP agents and managed processes run as your user on the host: selecting a working directory does not confine their filesystem or network access. Commands show their arguments and ask by default; explicit per-tool standing trust can change the question (`ADR-0143`, `ADR-0222`). |
 | `code_sandbox_image` + `code_sandbox_interpreter` | none | **Off by design.** Running code needs Docker and an image you pulled yourself (it is never pulled for you, `ADR-0128`, `ADR-0131`). They are one setting: the console saves the pair together. |
 | `code_agent`, `code_agent_env`, `code_agent_auth` | none | The coding agent `jarvis.code.delegate` hands tasks to (`ADR-0230`, `ADR-0208`): a command (an argument vector, no shell; unset means an installed `copilot` or `gemini` is used if there is one), optional inherited environment-variable **names** for advanced CLI configuration, and the sign-in method JARVIS uses if the agent asks. The **Coding agent** card offers agent selection, Test and normal sign-in, with no environment-variable editor. Existing `code_agent_env` configurations remain supported. Changes apply at once, with no restart. See [code-agents.md](code-agents.md). |
 
@@ -99,7 +99,7 @@ You can always type a model name. **Load models** requests suggestions from the 
 
 | Setting | Default | What unset means |
 | --- | --- | --- |
-| Per tool: default / always ask / run without asking / off | default | Applies to the very next call, no restart (`ADR-0145`); the approval card's **Always allow** sets the same thing in one click. The tool's own rule and the risk threshold decide. Nothing is trusted unless you say so (`ADR-0133`). "Run without asking" never waives the rule that anything talking to other people asks, the workspace ceiling, or an "off". Stored as `policy.trust`, `policy.approval` and `policy.deny`. |
+| Per tool: default / always ask / run without asking / off | default | Applies to the very next call, no restart (`ADR-0145`); where offered, the approval card's **Always allow** saves the same standing trust. Outward communication asks by default, but explicit **Run without asking** can waive that question for the named tool (`ADR-0178`). Choosing this for an outward tool in Permissions asks for confirmation once. Denial, required scopes, the workspace risk ceiling and an explicit **Always ask** still apply. Stored as `policy.trust`, `policy.approval` and `policy.deny`. |
 
 ## Advanced
 

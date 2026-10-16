@@ -67,6 +67,30 @@ pub struct WireError {
 
 Negotiation selects the highest version common to both windows. An inverted window, a client newer than the supported maximum, or a client older than the supported minimum each fail closed with a distinct error. Every connection is bound to a profile by its credential; filesystem locality is not authorization.
 
+## Stop and restart preflight
+
+`POST /api/v1/shutdown` and the configured `POST /api/v1/restart` Settings action require the local client credential. Their shared preflight counts ordinary/native runs other than terminal or durable approval-waiting runs, queued/running coding jobs, and live managed processes registered by this daemon. Old process records on disk do not establish a live process.
+
+- `409` with `code: "runs_in_flight"` refuses the request and leaves the daemon running. `in_flight` is the sum of `agent_runs`, `coding_jobs` and `managed_processes`; those additive fields identify the work to finish or stop first.
+- `503` with `code: "work_state_unavailable"` means durable work or the managed-process registry could not be inspected. It never substitutes zero for an unreadable count.
+- `?force=true` explicitly bypasses this preflight, including unreadable state; the caller accepts interruption. The CLI exposes the same choice through `--force`.
+- `202` acknowledges an accepted stop/restart request, not proof that shutdown has finished. Existing authentication, restart configuration and process-spawn failures still apply.
+
+This is a work-state snapshot, not an atomic barrier against new admission during shutdown. Durable native approval waits remain resumable; interrupted coding jobs retain their existing explicit continuation semantics. See [ADR-0232](../adr/0232-stop-and-restart-check-background-work-and-fail-closed.md) and the [coding guide](../user/code-agents.md).
+
+## Webhook admission
+
+`POST /hooks/{secret}` retains its secret-path credential, 128 KiB body limit and untrusted-payload treatment. For an enabled webhook, delivery deduplication and capacity reservation commit together before a model run may start. The limits are three distinct reservations in a rolling minute and fifty in a rolling 24 hours per trigger. An `Idempotency-Key` or `X-GitHub-Delivery` supplies the delivery identity; without either, each request has a new identity.
+
+- `202` means a newly reserved event started a JARVIS run, not that its task or external effects completed.
+- `200` with `duplicate: true` means the same delivery was already reserved and starts no new work, even if its budget is now full.
+- `429` with `Retry-After: 60` reserves nothing. Retrying after 60 seconds may still hit the rolling daily limit.
+- `404` remains the response for unknown, invalid or paused hook addresses. An admission storage failure returns `503` and starts no work.
+
+A committed reservation remains counted when a crash or failed start prevents work; the same delivery is not automatically retried. This preserves at-most-once admission with a crash-loss window. Project/workspace guards may independently hold a request before reservation. These semantics do not add provider HMAC authentication, exactly-once delivery or a durable outbox.
+
+The admission decision and compatibility behavior are recorded in [ADR-0231](../adr/0231-webhook-deliveries-reserve-budget-with-their-deduplication-key.md).
+
 ## Runs
 
 ```rust

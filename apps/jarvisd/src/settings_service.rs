@@ -556,32 +556,41 @@ pub async fn remove_key(
 /// `POST /api/v1/restart`: starts `jarvis restart` (the `jarvis` program beside this one) and returns at once; that command
 /// stops this daemon gracefully and starts a new one with the saved settings.
 pub async fn restart(State(state): State<GatewayState>, RawQuery(raw): RawQuery) -> Response {
-    let context = match context(&state) {
+    restart_if_ready(&state, crate::stop::wants_force(raw.as_deref()), |root, force| {
+        let Some(cli) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| sibling_cli(&exe))
+        else {
+            return error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                ErrorCode::Unsupported,
+                "the `jarvis` program was not found beside this one; run `jarvis restart` in a terminal",
+            );
+        };
+        match spawn_restart(&cli, root, force) {
+            Ok(()) => (StatusCode::ACCEPTED, Json(json!({ "restarting": true }))).into_response(),
+            Err(message) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::Internal,
+                &message,
+            ),
+        }
+    }).await
+}
+
+async fn restart_if_ready(
+    state: &GatewayState,
+    force: bool,
+    launch: impl FnOnce(Option<&Path>, bool) -> Response,
+) -> Response {
+    let context = match context(state) {
         Ok(context) => context,
         Err(response) => return response,
     };
-    let force = crate::stop::wants_force(raw.as_deref());
-    if let Some(refusal) = crate::stop::refusal_if_working(&state, force).await {
+    if let Some(refusal) = crate::stop::refusal_if_working(state, force).await {
         return refusal;
     }
-    let Some(cli) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| sibling_cli(&exe))
-    else {
-        return error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            ErrorCode::Unsupported,
-            "the `jarvis` program was not found beside this one; run `jarvis restart` in a terminal",
-        );
-    };
-    match spawn_restart(&cli, context.root.as_deref(), force) {
-        Ok(()) => (StatusCode::ACCEPTED, Json(json!({ "restarting": true }))).into_response(),
-        Err(message) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ErrorCode::Internal,
-            &message,
-        ),
-    }
+    launch(context.root.as_deref(), force)
 }
 
 fn sibling_cli(daemon: &Path) -> Option<PathBuf> {
@@ -640,3 +649,7 @@ fn spawn_restart(cli: &Path, root: Option<&Path>, force: bool) -> Result<(), Str
             .map_err(|error| error.to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "settings_restart_tests.rs"]
+mod restart_tests;

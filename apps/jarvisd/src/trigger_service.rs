@@ -760,33 +760,8 @@ fn hook_answer(status: StatusCode, body: &str) -> Response {
         .into_response()
 }
 
-/// Refuses a delivery when the trigger already started its three runs in the last minute or its 50 today, and when the counts cannot be
-/// read (a count that cannot be read is not guessed at). `None` means the request may start a run.
-async fn hook_rate_limit(
-    state: &GatewayState,
-    trigger: &StoredTrigger,
-    now: UtcTimestamp,
-) -> Option<Response> {
-    let minute_ago =
-        UtcTimestamp::from_unix_nanos(now.unix_nanos() - 60_000_000_000).unwrap_or(now);
-    let (last_minute, today) = (
-        jarvis_storage::count_trigger_runs_since(state.database(), &trigger.id, minute_ago).await,
-        jarvis_storage::count_trigger_runs_since(
-            state.database(),
-            &trigger.id,
-            crate::project_service::day_window_start(),
-        )
-        .await,
-    );
-    let (Ok(last_minute), Ok(today)) = (last_minute, today) else {
-        return Some(hook_answer(
-            StatusCode::SERVICE_UNAVAILABLE,
-            r#"{"error":"not accepting requests now"}"#,
-        ));
-    };
-    if last_minute < MAX_STARTS_PER_POLL && today < MAX_RUNS_PER_DAY {
-        return None;
-    }
+/// A full budget reserves nothing; the sender can retry this delivery later.
+fn hook_rate_limited() -> Response {
     let mut busy = hook_answer(
         StatusCode::TOO_MANY_REQUESTS,
         r#"{"error":"too many requests"}"#,
@@ -795,15 +770,16 @@ async fn hook_rate_limit(
         axum::http::header::RETRY_AFTER,
         axum::http::HeaderValue::from_static("60"),
     );
-    Some(busy)
+    busy
 }
 
 /// `POST /hooks/{secret}`: a request that starts a run, for a service the owner connected.
 ///
 /// The secret in the address is the only credential, so an unknown, wrong or paused address all answer the same `404`: nothing says
 /// which addresses exist. What the sender can do is bounded the way a mail's sender is: a body of at most 128 KB, at most three runs a
-/// minute and 50 a day, the project and token caps, and a delivery id (`Idempotency-Key` or `X-GitHub-Delivery`) makes a retry start
-/// nothing. The body reaches the run only as fenced, untrusted data after the owner's objective.
+/// minute and 50 in a rolling 24 hours, the project and token caps, and a delivery id (`Idempotency-Key` or `X-GitHub-Delivery`) makes a
+/// retry start nothing. Budget and delivery identity are reserved together before starting work; committed reservations remain counted
+/// if a crash or failed start prevents the run. The body reaches the run only as fenced, untrusted data after the owner's objective.
 pub async fn hook(
     State(state): State<GatewayState>,
     Path(secret): Path<String>,
@@ -846,15 +822,25 @@ pub async fn hook(
             r#"{"error":"not accepting requests now"}"#,
         );
     }
-    if let Some(refusal) = hook_rate_limit(&state, &trigger, now).await {
-        return refusal;
-    }
     // Without a delivery id every request is its own event: there is nothing to tell a retry from a second request by.
     let key =
         delivery_key(&headers).unwrap_or_else(|| format!("hook:{}", jarvis_core::TriggerId::new()));
-    match jarvis_storage::claim_trigger_event(state.database(), &trigger.id, &key, now).await {
-        Ok(true) => {}
-        Ok(false) => return hook_answer(StatusCode::OK, r#"{"duplicate":true}"#),
+    match jarvis_storage::claim_webhook_event(
+        state.database(),
+        &trigger.id,
+        &key,
+        now,
+        MAX_STARTS_PER_POLL,
+        MAX_RUNS_PER_DAY,
+    )
+    .await
+    {
+        Ok(jarvis_storage::WebhookEventAdmission::Admitted) => {}
+        Ok(jarvis_storage::WebhookEventAdmission::Duplicate) => {
+            return hook_answer(StatusCode::OK, r#"{"duplicate":true}"#);
+        }
+        Ok(jarvis_storage::WebhookEventAdmission::RateLimited) => return hook_rate_limited(),
+        Err(DatabaseError::TriggerNotFound) => return hook_answer(StatusCode::NOT_FOUND, UNKNOWN),
         Err(_) => {
             return hook_answer(
                 StatusCode::SERVICE_UNAVAILABLE,

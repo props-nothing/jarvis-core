@@ -4,6 +4,8 @@
 - Date: 2026-10-15
 - Supersedes: the mandatory-worktree, automatic-commit and fixed-total-deadline defaults in ADR-0230/0209; other protocol and ownership decisions remain.
 
+> **Extended 2026-10-16:** [ADR-0232](0232-stop-and-restart-check-background-work-and-fail-closed.md) includes queued/running coding jobs and live managed processes in ordinary stop/restart preflight, and refuses unreadable work state. Explicit force and interrupted-job continuation keep their existing meaning.
+
 ## Context
 
 The owner reports coding work appearing in unfamiliar profile checkouts, unnecessary Git operations, missing skill resources and weak website results. The intended default is the first folder permitted in Settings, not JARVIS's source tree. Long tasks must remain stoppable without an arbitrary minute cap. Agent self-report is not delivery evidence.

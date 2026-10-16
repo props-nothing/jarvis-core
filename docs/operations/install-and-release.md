@@ -25,7 +25,9 @@ Manual release runs and `v*` tag pushes call the same CI workflow before packagi
 
 CI separates source/HUD checks, native Clippy, native tests and dependency policy. Windows tests use three jobs (storage, daemon, remaining workspace); every package still runs on every native OS. Each OS builds current acceptance binaries once before all three phase gates. Windows Rust and packaging jobs allow 60 minutes. Pinned Rust dependency caches are separated by check/partition or release target and never substitute for a locked build or quality gate. Failed runs retain diagnostics and Cargo build timings. Ordinary main pushes and PRs run CI directly; tag validation runs through Release's reusable CI call.
 
-The 2026-10-16 repair also removes the Unix Clippy failure and yanked ZIP dependencies without weakening dependency policy. Ordinary test fixtures reuse a closed migration image while keeping independent files and production durability checks. Commit `8bf6cbb641fa8ada46bb39d0bfc09ac8cb5a1ee2` passed all ten [native CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38927374174) and all five [package jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38929525053). All five downloaded artifacts and their archive checksums were verified. Four native archive smoke tests passed; Intel macOS is cross-built with its runtime smoke skipped. Warm native cache restores were observed. [Research and measurements](../research/integrations/github-actions-rust-ci.md) retain the earlier failures and local controls separately. That run predates automatic draft attachment and does not prove upload behavior.
+Current run/revision results belong in the [active CI and release ledger](../../TODO.md#owner-requested-ci-and-release-reliability-2026-10-16), which records later hosted follow-ups. Read the outcome of each job and all five packages for the selected revision; an earlier failure narrative or a local pass does not establish its present status. Native CI success remains separate from signed public release and clean-machine acceptance.
+
+The 2026-10-16 repair also removes the Unix Clippy failure and yanked ZIP dependencies without weakening dependency policy. Ordinary test fixtures reuse a closed migration image while keeping independent files and production durability checks. Commit `8bf6cbb641fa8ada46bb39d0bfc09ac8cb5a1ee2` passed all ten [native CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38927374174) and all five [package jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38929525053). All five downloaded artifacts and their archive checksums were verified. Four native archive smoke tests passed; Intel macOS is cross-built with its runtime smoke skipped. Warm native cache restores were observed. [Research and measurements](../research/integrations/github-actions-rust-ci.md) retain the earlier failures and local controls separately. That run predates automatic draft attachment and does not prove upload behavior. Later runtime changes require their own native CI and package evidence.
 
 After all five packages succeed, every eligible run uploads the complete set of five archives and five SHA-256 files into a draft, verifies the uploaded assets, and **automatically publishes a prerelease**. Checksums and expected platform names are verified before upload. GitHub's received asset names, sizes and SHA-256 digests must then match all ten local files, with the exact draft tag and target commit. Main and manual branch builds use `ci-<full tested commit SHA>`; publication creates that tag at the tested commit. Each commit has its own prerelease. Version-tag builds keep their existing `v*` tag, verifying that it still points to the tested commit.
 
@@ -34,6 +36,12 @@ Published packages are visible on the repository's [Releases page](https://githu
 Release assets persist beyond the 14-day Actions retention. A permission failure against an older source commit stays a failure; the workflow never substitutes the newer main tip. Automatic unsigned prereleases are owner-authorized; signing/notarization, complete dependency notices/SBOM, updates and clean-machine acceptance remain unfinished stable-distribution requirements.
 
 Local regression checks: `node --test scripts/test-release-flow.mjs` and `bash scripts/test-package-release.sh`. The release tests execute the CI lint/test pipelines under Bash `-eo pipefail`, proving both live diagnostic output and nonzero Cargo exits survive `tee`. CI streams workspace output as well as retaining annotation files, so a runner timeout no longer hides which tests were still running. Do not bypass quality or merely extend a timeout without that evidence.
+
+## Dated CI repair evidence (2026-10-14–16)
+
+The records below preserve the findings, test counts and next steps at the time each repair was made. Statements such as “must be pushed” or “native macOS rerun required” are historical, not a claim that those commits are still unpushed or that later native runs failed. The active ledger above records subsequent runs; do not erase a failure because a later revision fixed it.
+
+The 2026-10-16 repair also removes the Unix Clippy failure and yanked ZIP dependencies without weakening dependency policy. Ordinary test fixtures reuse a closed migration image while keeping independent files and production durability checks. Local Windows verification passed 3,110 tests in each default/all-feature workspace run, 179 JavaScript tests and all three acceptance gates, plus formatting, Clippy, dependency policy and workflow lint. [Research and measurements](../research/integrations/github-actions-rust-ci.md) distinguish this local evidence from the pending hosted native/cache/package run.
 
 CI run `38640916407` (2026-10-14) failed the Linux non-owner phone-disclosure contracts and the macOS coding-activity test; Windows timed out with redirected output. Release run `38644719396` correctly skipped packaging. The disclosure was restored without changing owner-call wording; the activity test now waits for both snapshots before cancelling, with bounded readiness/completion waits for loaded runners. The Windows timeout did not reproduce in the local complete suite. A successful hosted native matrix and packaging run still require these repairs to land on the default branch; local tests do not prove those runner or upload paths.
 
@@ -53,16 +61,16 @@ Initial targets:
 
 | OS | Architecture | CLI/daemon | Desktop |
 | --- | --- | --- | --- |
-| Windows | x86_64 | required | required when Phase 9 ships |
+| Windows | x86_64 | required | conditional on a selected desktop-shell requirement |
 | Windows | ARM64 | evaluate/native CI required before claim | evaluate |
-| macOS | Apple Silicon | required | required |
+| macOS | Apple Silicon | required | conditional on a selected desktop-shell requirement |
 | macOS | Intel | best effort only if CI/signing remains viable | best effort |
-| Linux | x86_64 | required | required |
+| Linux | x86_64 | required | conditional on a selected desktop-shell requirement |
 | Linux | ARM64 | required for server/edge | evaluate desktop |
 
-Build each release on native or officially supported CI. Do not claim a target from an untested cross-compile alone.
+Build each release on native or officially supported CI. Do not claim a target from an untested cross-compile alone. A Tauri shell is demand-gated by ADR-0167; it is not required to release the CLI/daemon and browser console.
 
-Artifacts include version, target triple, archive/package type, checksum, signature, SBOM, and provenance. `jarvis` and `jarvisd` versions are released together in v1.
+Artifacts include version, target triple, archive/package type, checksum, signature, SBOM, and provenance. The installed product uses one `jarvis` executable for CLI and daemon mode (`jarvis daemon`); the separately buildable `jarvisd` development/acceptance binary is not a required sibling in the user archive.
 
 ## Installation Modes
 

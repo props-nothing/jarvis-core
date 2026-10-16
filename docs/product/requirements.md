@@ -16,6 +16,8 @@ Reconciled 2026-10-16; these limitations keep the target requirements below from
 | OS-backed local secret storage | Current model/MCP keys and OAuth grants use private profile files. Keychain migration is P11-015. |
 | Runtime interchangeability and isolation | Native runs and ACP v1 coding are implemented. Coding defaults to in-place host execution, with optional worktrees; native agent tools are not all mediated by JARVIS. A scoped tool bridge and enforceable sandbox remain separate work. No private JARVIS runtime protocol is required (ADR-0167/0222). |
 | Durable multi-step workflows | Ordinary runs, approvals, schedules and triggers exist. Workflow dependencies, compensation and long multi-step waits remain parked until a named requirement needs them. |
+| Restart-safe event delivery | Current schedules/triggers claim before starting an ordinary run. They prevent duplicate admission but retain a crash-loss window; the exactly-once journey below remains a target. |
+| Durable accountability for every tool surface | Native runs persist approvals and tool outcomes. Direct external MCP calls currently use in-memory pending approvals and omit the durable run tool-call ledger; delegated JARVIS runs retain their normal history. |
 | Server and multiple devices | The supported implementation path is the local SQLite profile. Full PostgreSQL/server/device/role semantics remain unshipped. |
 
 The active backlog tracks remaining acceptance. This table does not waive a requirement, claim every provider path is verified, or change the owner's authority over effects.

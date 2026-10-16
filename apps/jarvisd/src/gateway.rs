@@ -101,6 +101,8 @@ pub struct GatewayState {
     phone: Option<Arc<crate::phone_service::PhoneService>>,
     /// The pictures tools produced, for the console to show (`P11-011`).
     images: Option<Arc<crate::image_store::ImageStore>>,
+    /// The same live process registry held by the tool adapter, for stop/restart checks.
+    processes: Option<Arc<crate::process_tools::ProcessTools>>,
 }
 
 impl GatewayState {
@@ -127,7 +129,22 @@ impl GatewayState {
             telegram: None,
             phone: None,
             images: None,
+            processes: None,
         }
+    }
+
+    pub(crate) fn with_processes(
+        mut self,
+        processes: Arc<crate::process_tools::ProcessTools>,
+    ) -> Self {
+        self.processes = Some(processes);
+        self
+    }
+
+    pub(crate) fn active_process_count(&self) -> Result<usize, &'static str> {
+        self.processes
+            .as_ref()
+            .map_or(Ok(0), |processes| processes.active_count())
     }
 
     /// Attaches the phone calls, which turns their routes on.

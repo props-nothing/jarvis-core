@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-10-11
 
+> **Amended 2026-10-16:** [ADR-0231](0231-webhook-deliveries-reserve-budget-with-their-deduplication-key.md) makes webhook deduplication and rolling-budget reservation atomic. Committed claims without a started run consume capacity; duplicate deliveries do not. The original decision and acceptance observations below remain historical evidence.
+
 ## Context
 
 `ADR-0193` made a new mail start an ordinary run. The rest of `P6-012` was other events (a file appears, a service calls) and the rule that autonomy must not become noise (`P6-007`, quiet hours). Research: `docs/research/integrations/webhook-and-file-triggers.md`.

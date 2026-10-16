@@ -497,7 +497,9 @@ pub async fn find_run(database: &SqliteDatabase, id: &str) -> Result<StoredRun, 
 
 /// How many runs this process is driving right now: every run that is not finished and not waiting on an approval.
 ///
-/// Used to warn before a restart, which would interrupt exactly these.
+/// Counts only native runs. Stop/restart callers must use [`crate::read_shutdown_work`]
+/// and the daemon's live managed-process registry to include external coding jobs
+/// and processes that continue after a native run finishes.
 ///
 /// # Errors
 ///

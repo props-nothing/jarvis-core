@@ -4,6 +4,8 @@ Status: Accepted
 Date: 2026-10-03
 Amends: [ADR-0129](0129-a-fetch-is-checked-on-the-address-it-connects-to.md), [ADR-0131](0131-model-authored-code-runs-in-a-disposable-container.md). Narrows [ADR-0122](0122-an-approval-override-can-only-tighten.md) in one stated way.
 
+**Amended by:** [ADR-0178](0178-a-tool-that-reaches-other-people-can-be-trusted-by-name.md) permits explicit per-tool standing trust to waive the external-communication approval rule. The exclusion of trusted mail tools below is retained as the original decision, not current policy; denial, scopes, risk ceilings and tighter approval choices still apply.
+
 ## Context
 
 Using the product showed what the approval rules cost. Every web page the model wanted to read was held for a

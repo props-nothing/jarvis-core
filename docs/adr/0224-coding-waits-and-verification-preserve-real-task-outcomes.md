@@ -4,6 +4,8 @@
 - Date: 2026-10-16
 - Extends: ADR-0222; selected by the owner after reviewing recent delegation failures.
 
+> **Extended 2026-10-16:** [ADR-0232](0232-stop-and-restart-check-background-work-and-fail-closed.md) protects unfinished coding jobs and managed processes during ordinary daemon stop/restart. It adds no automatic replay or new total deadline.
+
 ## Context
 
 Recent coding agents were explicitly cancelled during setup despite the absence of an overall deadline. Content-only ACP updates filled the activity queue, task listings exceeded model output limits, and an exit-zero build was described as clean despite missing lint tooling. The pinned Codex runtime's default reviewer and offline sandbox complicated authorized dependency installation.

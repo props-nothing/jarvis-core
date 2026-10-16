@@ -5,7 +5,7 @@ Its JSON result contains `content`, a byte `offset`, `truncated` and `next_offse
 Continue with the returned `next_offset` until it is null. Reads remain confined to granted folders.
 The file is read live; changing it between pages can change the result.
 
-Long chat requests are retained up to 200,000 characters. The console accepts multiline text;
+Long chat requests are retained up to 200,000 characters. The console uses a single-line **Message** input;
 the native model can retrieve the rest of a long request through `jarvis.context.read` with `source=input`.
 That tool can also discover older messages with `source=history` and read a message by its returned ID.
 Only the current conversation is accessible. Pages use character offsets except history, which uses message sequences.

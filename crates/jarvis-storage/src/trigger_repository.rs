@@ -1,11 +1,13 @@
 //! Durable storage for triggers, and the two operations that must not repeat: claiming a poll and claiming an event.
 //!
-//! # Two guarded writes
+//! # Guarded writes
 //!
 //! * [`claim_due_triggers`] advances a trigger's next poll in one guarded `UPDATE` (`WHERE id = ? AND next_poll_nanos = <what it read>`)
 //!   *before* the poll happens, so two passes cannot both poll it and a poll lost to a crash is simply the next one.
 //! * [`claim_trigger_event`] inserts the event key under the primary key and reports whether this caller was first. A run starts only
 //!   for the caller that was, so a message listed again, a restart, or a second pass starts nothing.
+//! * [`claim_webhook_event`] reserves a webhook's minute/day budget and deduplication key in one write transaction. Pending claims
+//!   count even before their run exists, so concurrent deliveries cannot spend the same capacity.
 //!
 //! An event is claimed **before** its run starts, which makes the guarantee *at most once*: a crash in between loses one event and never
 //! doubles one, the same direction a schedule fire takes (`ADR-0132`).
@@ -466,6 +468,97 @@ pub async fn claim_trigger_event(
         source,
     })?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Whether a webhook delivery may start work after checking its durable identity and budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WebhookEventAdmission {
+    /// The delivery and one unit of both rolling budgets were durably reserved.
+    Admitted,
+    /// This delivery was already reserved; it consumes no additional budget and must start no work.
+    Duplicate,
+    /// A rolling budget is full; nothing was reserved, so the delivery may be retried later.
+    RateLimited,
+}
+
+/// Atomically reserves a distinct webhook delivery within its minute and rolling 24-hour budgets.
+///
+/// The existing event row is the reservation: every webhook row counts, including a claim whose run has not started or failed to
+/// start. Webhooks have no baseline rows. A committed claim is never refunded or replayed after a crash or a failed start, preserving
+/// at-most-once admission. A duplicate is recognised before checking capacity, including when that capacity is full.
+///
+/// `BEGIN IMMEDIATE` holds the writer reservation across the reads and insert, as it does for ordinary run admission. The enabled
+/// webhook is checked inside that transaction too, so a pause or deletion that committed first prevents a new admission.
+///
+/// # Errors
+///
+/// Returns [`DatabaseError::InvalidTrigger`] for an invalid key, [`DatabaseError::TriggerNotFound`] for a missing, paused or non-webhook
+/// trigger, and [`DatabaseError::Sqlite`] for any storage failure. An error never grants permission to launch work.
+pub async fn claim_webhook_event(
+    database: &SqliteDatabase,
+    trigger_id: &str,
+    event_key: &str,
+    now: UtcTimestamp,
+    max_per_minute: u32,
+    max_per_day: u32,
+) -> Result<WebhookEventAdmission, DatabaseError> {
+    if event_key.is_empty() || event_key.len() > 128 {
+        return Err(invalid("event_key"));
+    }
+    let failed = |source| DatabaseError::Sqlite {
+        operation: "reserve a webhook event and its budget",
+        source,
+    };
+    let mut transaction = database
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(failed)?;
+    let enabled: Option<i64> =
+        sqlx::query_scalar("SELECT enabled FROM triggers WHERE id = ?1 AND kind = 'webhook'")
+            .bind(trigger_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(failed)?;
+    if enabled != Some(1) {
+        return Err(DatabaseError::TriggerNotFound);
+    }
+    let duplicate: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM trigger_events WHERE trigger_id = ?1 AND event_key = ?2",
+    )
+    .bind(trigger_id)
+    .bind(event_key)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(failed)?;
+    if duplicate != 0 {
+        return Ok(WebhookEventAdmission::Duplicate);
+    }
+    let now = nanos(now);
+    let (minute, day): (i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(CASE WHEN seen_nanos >= ?2 THEN 1 ELSE 0 END), 0), COUNT(*) \
+         FROM trigger_events WHERE trigger_id = ?1 AND seen_nanos >= ?3",
+    )
+    .bind(trigger_id)
+    .bind(now.saturating_sub(60_000_000_000))
+    .bind(now.saturating_sub(86_400_000_000_000))
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(failed)?;
+    if minute >= i64::from(max_per_minute) || day >= i64::from(max_per_day) {
+        return Ok(WebhookEventAdmission::RateLimited);
+    }
+    sqlx::query(
+        "INSERT INTO trigger_events (trigger_id, event_key, run_id, seen_nanos) VALUES (?1, ?2, NULL, ?3)",
+    )
+    .bind(trigger_id)
+    .bind(event_key)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .map_err(failed)?;
+    transaction.commit().await.map_err(failed)?;
+    Ok(WebhookEventAdmission::Admitted)
 }
 
 /// Records that a claimed event started a run.

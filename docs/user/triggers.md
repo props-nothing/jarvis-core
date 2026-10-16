@@ -28,9 +28,9 @@ The console shows them too, next to **Scheduled** (what each watches, when it la
 
 - **The first look starts nothing.** It records what already exists (mail that matches, files in the folder), so a trigger does not answer your backlog. Only what arrives afterwards starts a task. Resuming a paused trigger does the same, so a pause is never followed by a burst.
 - **One event, one task, once.** An event is never run twice, however often it is listed and across restarts. If JARVIS stops at the wrong moment, one task may be lost; it is never doubled.
-- **The task has your authority and no more.** Anything that needs your approval (sending mail, fetching a page, running a command) waits in `jarvis approvals list` or the console. A trigger approves nothing, and JARVIS has no tool to make one.
+- **The task has your authority and no more.** A tool that needs approval under your current policy waits in `jarvis approvals list` or the console. Outward actions and host commands ask by default; web fetch normally runs without a question, and explicit per-tool standing trust can change the default. A trigger approves nothing, and JARVIS has no tool to make one.
 - **What starts it is written by someone else.** The task is told your objective and a reference (a mail's id, a file's path); it reads the content itself, as untrusted data. For a webhook, the request body reaches it only after your objective, fenced and cut to 3,000 characters.
-- **A flood is bounded.** At most three tasks per look (or per minute for a webhook) and 50 per day per trigger. A paused project, or a project or workspace that used its daily token limit, holds the event until it can run.
+- **A flood is bounded.** Mail/file polling admits at most three tasks per look and applies its daily trigger budget. Webhooks atomically reserve at most three new deliveries per rolling minute and 50 per rolling 24 hours per trigger. Duplicate IDs consume no additional reservation; a reservation whose run fails to start still counts. A paused project or exhausted token budget prevents a new start; a webhook sender must retry a request refused before reservation when the budget permits it.
 - **A failed look is shown, not hidden.** `jarvis trigger list` says why the last look failed (Google not connected, folder not found) and looks again at the next interval.
 
 ## Mail
@@ -45,8 +45,8 @@ Polls your mailbox with a Gmail search, as typed in Gmail's search box. Mail is 
 
 `--webhook` prints an address like `/hooks/3f9c…` **once**. Anything on this computer that can send a `POST` to it (on the daemon's port, `http://127.0.0.1:8765` by default) starts a task, with no other credential, so **give the address only to the program you mean**. Only a hash of it is kept, so it cannot be shown again: make a new trigger to change it.
 
-- An unknown, wrong or paused address all answer `404`. At most three requests a minute and 50 a day are accepted (`429` with `Retry-After: 60` beyond that). A body over 128 KB is refused.
-- A sender that supplies a delivery id (`Idempotency-Key`, or GitHub's `X-GitHub-Delivery`) can retry safely: the same id starts nothing the second time.
+- An unknown, wrong or paused address answers `404`. New delivery reservations are limited atomically to three per rolling minute and 50 per rolling 24 hours (`429` with `Retry-After: 60` when full); these are not calendar-day counters. A body over 128 KB is refused.
+- A delivery ID (`Idempotency-Key`, or GitHub's `X-GitHub-Delivery`) is claimed once. Replaying it starts nothing and uses no additional slot, including after a failed start. Reservation and run creation are separate: if the daemon stops or run creation fails after reservation, that delivery can be lost and is not automatically replayed. This is at-most-once dispatch, not exactly-once completion.
 - Not built: checking a sender's signature (for example GitHub's `X-Hub-Signature-256`), and reaching the address from the internet. Do not put the daemon's port on the internet to do it.
 
 ```text

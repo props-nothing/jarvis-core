@@ -31,6 +31,8 @@ Use jarvis.code.delegate_wait with the task ID to wait up to 30 seconds per call
 
 After daemon restart, unfinished jobs become interrupted, not silently replayed. jarvis.code.delegate_resume asks for approval and starts a **new** in-place agent using the saved directory, brief, capabilities and checks. It first inspects existing files and avoids replaying completed effects. It does not restore an ACP conversation, rerun a previous process automatically or resume legacy worktree tasks blindly. Provider limits and sign-in can still interrupt a job.
 
+An ordinary stop or Settings restart refuses while native runs, queued/running coding jobs or managed preview processes would be interrupted, even after the parent conversation has finished. The reply lists the counts. An unreadable database or process registry also leaves the daemon running and reports that work state is unavailable. Wait for work to finish or explicitly use `jarvis stop|restart --force` to interrupt it; native runs parked for an owner approval remain durable and do not block a restart. This is a preflight check, not an atomic freeze on new work arriving during shutdown. See [ADR-0232](../adr/0232-stop-and-restart-check-background-work-and-fail-closed.md).
+
 ## Skills, dependencies and integrations are different
 
 Use jarvis.skills.discover to list project bundles from .agents/skills, .github/skills and .claude/skills. Optional public GitHub discovery resolves a branch/tag to an immutable commit and lists manifest paths. Installation uses that full commit SHA and selected bundle path, not a moving branch.

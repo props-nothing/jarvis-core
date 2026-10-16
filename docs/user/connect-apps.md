@@ -30,10 +30,10 @@ Cursor and VS Code take the same address and an `Authorization` header in their 
 
 ## What a connected program can do
 
-- See every tool JARVIS has, including the built-in browser and documentation lookup (about 48 tools on a fresh profile).
-- Use the ones that run without asking: start a JARVIS run with `jarvis.agent.delegate` and read its answer, open and read web pages, look up documentation, search and save memory, contacts and projects.
+- Discover the eligible tools exposed by this profile, including configured built-in browser and documentation tools. The endpoint excludes `jarvis.tools.search`, `jarvis.files.write`, `jarvis.files.edit`, `jarvis.files.move` and all `jarvis.voice.*` tools. Use the connected client's tool listing for the current inventory; configuration and permissions affect availability.
+- Request exposed tools through the same policy checks: delegate a JARVIS task with `jarvis.agent.delegate`, read its answer, read web pages, look up documentation, or use available memory/contact/project tools. Tools whose current policy permits unattended use run immediately; others wait for your decision. Some operations also require a run or conversation and cannot be called directly from this endpoint.
 
-A tool they call directly is not yet recorded in your history (the tasks they hand JARVIS are). It **cannot** answer approvals. When a tool needs your yes (clicking or typing in the browser, sending mail, changing your schedule, running commands), the call **waits** and the question appears with your other approvals: one click, `jarvis approvals approve`, or a spoken yes answers it, and the app gets the result. If you say no, or do not answer within two minutes, the call is refused and nothing runs. At most eight calls wait at once.
+Direct tool calls do not yet create the complete durable run/tool-call/audit history that delegated JARVIS runs have. An external app **cannot** answer its own approvals. When a tool needs your yes under current policy, the call **waits** and the question appears with your other approvals: one click, `jarvis approvals approve`, or a supported spoken approval answers it, and the app gets the result. If you say no, or do not answer within two minutes, the call is refused and nothing runs. At most eight calls wait at once; a daemon restart drops these in-memory waits rather than resuming the external request.
 
 ## Keeping it safe
 
@@ -50,7 +50,7 @@ For ElevenLabs: Agents, Integrations, **Add custom MCP server**, Server URL = th
 - **Without your own Cloudflare tunnel (below) the address changes every time JARVIS starts.** Paste the new one into the app after a restart. That is fine for trying it, not for a phone number people call.
 - Anyone with the address **and** the key can use the tools, so treat both as passwords. Every request without the key gets 401.
 - Switch it off the same way and the address stops working at once. It also stops when JARVIS stops.
-- Not tested yet against a real ElevenLabs agent. Details: [cloudflare-tunnel.md](../research/integrations/cloudflare-tunnel.md).
+- The owner has reported successful outbound calls through an ElevenLabs agent. That is evidence for the configured owner-call path, not every external client, inbound-call setup, tunnel recovery or account failure case. See [phone setup and remaining limits](phone.md) and the dated [tunnel research](../research/integrations/cloudflare-tunnel.md).
 
 Reasons and decisions: [ADR-0170](../adr/0170-other-apps-connect-to-jarvis-with-one-switch-and-one-key.md), [ADR-0172](../adr/0172-the-endpoint-for-other-agents-serves-the-built-in-browser-and-documentation-tools.md), [ADR-0173](../adr/0173-one-switch-makes-the-endpoint-for-other-agents-reachable-from-the-internet.md), [ADR-0202](../adr/0202-the-owner-may-give-jarvis-a-named-cloudflare-tunnel-for-an-address-that-never-changes.md).
 

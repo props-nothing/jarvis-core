@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-10-10
 
+**Amended by:** [ADR-0191](0191-a-run-stops-after-the-model-call-that-reaches-a-daily-token-limit.md) checks project token caps before model calls and after recorded usage for interactive, scheduled and delegated project runs, and adds a workspace-wide cap. Scheduler-only enforcement and “a run in progress is never stopped” below describe the original slice, not current behavior.
+
 ## Context
 
 Switching to a paid provider is now one click (`ADR-0164`), and scheduled tasks and sub-agents run without the owner there. `ADR-0155` capped how many *runs* a project's schedule may start, but a run's cost is its tokens, and one run can use a hundred times another. Every model call already records its own `usage_updated` event (`input_tokens`, `output_tokens`, `cached_input_tokens`); nothing added them up per project.

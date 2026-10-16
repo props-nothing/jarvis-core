@@ -247,6 +247,8 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0228](0228-native-subagent-admission-counts-and-starts-in-one-transaction.md) | Native subagent admission counts and starts in one transaction | Accepted |
 | [0229](0229-jarvis-keeps-a-search-index-over-the-folders-the-owner-granted-and-answers-with-the-passage-and-its-source.md) | JARVIS keeps a search index over the folders the owner granted, and answers with the passage and its source | Accepted |
 | [0230](0230-coding-tasks-go-to-an-acp-agent-in-its-own-git-worktree-and-its-permission-requests-are-answered-by-policy.md) | Coding tasks go to an ACP agent in its own git worktree, and its permission requests are answered by policy | Accepted |
+| [0231](0231-webhook-deliveries-reserve-budget-with-their-deduplication-key.md) | Webhook deliveries reserve budget with their deduplication key | Accepted |
+| [0232](0232-stop-and-restart-check-background-work-and-fail-closed.md) | Stop and restart check background work and fail closed | Accepted |
 
 ## Historical identifier aliases
 

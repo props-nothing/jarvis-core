@@ -108,7 +108,98 @@ async fn outside_workspaces_and_stale_ids_never_start_or_signal_processes() {
     )
     .unwrap();
     assert_eq!(tool.load(&id).unwrap().status, "interrupted");
+    assert_eq!(
+        tool.active_count().unwrap(),
+        0,
+        "old request files are not live processes"
+    );
     assert_eq!(tool.stop(&id).unwrap()["stop_requested"], false);
+}
+
+async fn shutdown_state(
+    scratch: &Scratch,
+    tool: Arc<ProcessTools>,
+) -> crate::gateway::GatewayState {
+    let database = Arc::new(
+        jarvis_storage::SqliteDatabase::test_fixture(&scratch.0.join("shutdown.sqlite3"))
+            .await
+            .unwrap(),
+    );
+    crate::gateway::GatewayState::new(database, jarvis_core::ClientCredential::generate().unwrap())
+        .with_processes(tool)
+}
+
+#[tokio::test]
+async fn a_live_managed_process_blocks_shutdown_until_its_supervisor_finishes() {
+    let scratch = Scratch::new();
+    let tool = Arc::new(scratch.tool());
+    let state = shutdown_state(&scratch, Arc::clone(&tool)).await;
+    let command = if cfg!(windows) {
+        json!({"program":"ping","arguments":["-t","127.0.0.1"]})
+    } else {
+        json!({"program":"sleep","arguments":["60"]})
+    };
+    let answer = tool.start(&command).await.unwrap();
+    let id = answer["process_id"].as_str().unwrap();
+    let refusal = crate::stop::refusal_if_working(&state, false)
+        .await
+        .unwrap();
+    assert_eq!(refusal.status(), axum::http::StatusCode::CONFLICT);
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(refusal.into_body(), 16_384)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["managed_processes"], 1);
+    assert_eq!(body["agent_runs"], 0);
+    assert!(
+        crate::stop::refusal_if_working(&state, true)
+            .await
+            .is_none()
+    );
+    tool.stop(id).unwrap();
+    assert_eq!(terminal(&tool, id).await.status, "stopped");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while tool.active_count().unwrap() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        crate::stop::refusal_if_working(&state, false)
+            .await
+            .is_none()
+    );
+    state.database().close().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_live_process_registry_blocks_shutdown_instead_of_claiming_idle() {
+    let scratch = Scratch::new();
+    let tool = Arc::new(scratch.tool());
+    let state = shutdown_state(&scratch, Arc::clone(&tool)).await;
+    let registry = Arc::clone(&tool.active);
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = registry.lock().unwrap();
+        panic!("fixture: registry owner failed");
+    }));
+    assert!(poisoned.is_err());
+    assert!(tool.active_count().is_err());
+    assert_eq!(
+        crate::stop::refusal_if_working(&state, false)
+            .await
+            .unwrap()
+            .status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert!(
+        crate::stop::refusal_if_working(&state, true)
+            .await
+            .is_none()
+    );
+    state.database().close().await;
 }
 
 #[tokio::test]

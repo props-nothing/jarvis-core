@@ -67,6 +67,12 @@ pub async fn stop(port: u16, credential: &str, force: bool) -> Result<StopOutcom
             .unwrap_or_else(|| "tasks are still working".to_owned());
         return Ok(StopOutcome::Busy(message));
     }
+    if response.status().as_u16() == 503 {
+        eprintln!(
+            "jarvis: work state could not be checked, so the daemon was left running; retry when its state is readable, or use --force to interrupt any unfinished work"
+        );
+        return Err(ExitStatus::Unavailable);
+    }
     if !response.status().is_success() {
         eprintln!(
             "jarvis: the daemon refused the stop request (status {}); is this the profile it is running?",
@@ -90,6 +96,8 @@ pub async fn stop(port: u16, credential: &str, force: bool) -> Result<StopOutcom
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
 
     /// Nothing listening is reported as such, not as a failure.
@@ -97,5 +105,51 @@ mod tests {
     async fn stopping_what_is_not_running_is_not_an_error() {
         // Port 1 is never a JARVIS daemon and is refused immediately.
         assert_eq!(stop(1, "unused", false).await, Ok(StopOutcome::NotRunning));
+    }
+
+    #[tokio::test]
+    async fn unreadable_daemon_work_is_unavailable_not_busy_or_a_successful_stop() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap_or_else(|error| panic!("listener: {error}"));
+        let port = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("address: {error}"))
+            .port();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener
+                    .accept()
+                    .await
+                    .unwrap_or_else(|error| panic!("accept: {error}"));
+                let mut bytes = [0_u8; 4096];
+                if stream
+                    .read(&mut bytes)
+                    .await
+                    .unwrap_or_else(|error| panic!("request: {error}"))
+                    == 0
+                {
+                    continue; // The CLI first probes the listener without sending HTTP.
+                }
+                let body =
+                    r#"{"code":"work_state_unavailable","message":"work could not be read"}"#;
+                let response = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .unwrap_or_else(|error| panic!("reply: {error}"));
+                break;
+            }
+        });
+        let outcome = tokio::time::timeout(Duration::from_secs(3), stop(port, "fixture", false))
+            .await
+            .unwrap_or_else(|error| panic!("503 must not enter the stop wait loop: {error}"));
+        assert_eq!(outcome, Err(ExitStatus::Unavailable));
+        server
+            .await
+            .unwrap_or_else(|error| panic!("server: {error}"));
     }
 }

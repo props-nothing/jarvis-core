@@ -6,7 +6,32 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
-## Current acceptance slice: review corrections (2026-10-16)
+## Current acceptance slice: runtime and guide follow-up (2026-10-16)
+
+The owner selected both reproduced runtime defects and all confirmed documentation drift from the follow-up review. Preserve the earlier evidence and unrelated changes; no cache cleanup, obsolete connector deletion, provider expansion or release publication belongs to this slice.
+
+- [x] [ADR-0231](docs/adr/0231-webhook-deliveries-reserve-budget-with-their-deduplication-key.md): reserve webhook delivery identity and minute/day capacity atomically before starting work. Prove concurrent distinct deliveries cannot exceed either limit, duplicates consume no additional slot, and storage failures fail closed. Retain explicit at-most-once crash/failure semantics.
+- [x] [ADR-0232](docs/adr/0232-stop-and-restart-check-background-work-and-fail-closed.md): protect ordinary stop/restart from interrupting queued/running coding tasks and applicable managed processes as well as ordinary runs. Refuse unreadable work state, preserve the explicit force action, and cover both shutdown and Settings restart.
+- [x] Correct current permission, project-budget, MCP credential/exposure, scheduling, composer/navigation, onboarding, research-status and release/acceptance guidance. Add ADR amendment pointers and replace obsolete prose references; preserve historical observations under their original revision.
+- [x] Run narrow regressions, required formatting/strict Clippy/workspace tests, process acceptance gates, documentation checks and relevant frontend/dependency/release checks. Record exact local evidence and retain native/live-provider gates separately.
+
+Commit preparation (2026-10-16): rebased onto `5a92081`, preserving the three intervening upstream commits as separate history. On the integrated Rust sources, default and all-feature workspace runs each passed **3,144 tests**, zero failures, five existing opt-in tests ignored; the seven managed-process tests, formatting and strict all-target/all-feature Clippy also passed. A fresh all-feature build passed all three process gates with both missing-binary guards enabled. The latest release automation passes **214 core Node tests**, workflow lint and archive/license checks; all **374 owned Markdown files** pass documentation checks. The final upstream change touched only release automation/docs: the Rust source, manifests and lockfile match the tested tree. Earlier dependency, HUD and website checks below therefore remain applicable. Native CI and release results for this new runtime commit remain pending. Detailed results: `artifacts/reviews/commit-integration-2026-10-16/validation.json` and adjacent logs.
+
+The first integrated all-feature attempt reported missing storage exports that were present in unchanged source. A forced rebuild with `CARGO_INCREMENTAL=0` compiled and passed; the initial failure log is retained separately. No production change or weakened check was used to obtain the passing result.
+
+Pre-integration local evidence on Windows (2026-10-16, `8bf6cbb` plus the original follow-up working tree): default and all-feature workspace runs each passed **3,144 tests**, zero failures, five existing opt-in tests ignored. Formatting, strict all-target/all-feature Clippy, a fresh all-feature workspace build and all three process acceptance gates passed; the gates enabled both missing-binary guards. Dependency policy, archive/license fixtures, workflow lint, **185 core Node tests**, HUD syntax/typecheck/build and **38 website tests** plus website typecheck/build/installer checks passed. All **374 owned Markdown files** across both repositories pass the link/anchor/ADR checks; all eleven archived history files match their pre-edit hashes. The existing optional website face-chunk size advisory remains. Docker was unavailable, so Docker-dependent runtime cases skipped. This is not new native macOS/Linux, real-provider, PostgreSQL or release-package acceptance.
+
+The regressions are falsified against temporary old behavior: omitting unlinked webhook reservations admitted all 24 callers for one remaining slot; restoring the old native-only/error-to-zero stop guard made queued coding and unreadable state incorrectly return 202. Corrected source was restored and retested. The HTTP webhook concurrency test now requires three admissions and 21 rate-limit refusals. Independent review confirmed the shared managed-process registry and common stop/restart guard. Evidence: `artifacts/reviews/runtime-followup-2026-10-16/validation.json` and its logs, plus the retained shutdown controls in `artifacts/reviews/shutdown-followup-2026-10-16/`.
+
+Narrow regression results: trigger storage **14 passed**, webhook service **17 passed**, stop **6 passed**, managed processes **7 passed**, Settings restart **2 passed**, and CLI lifecycle **2 passed**. The companion [frontend commit `a6b2775`](https://github.com/props-nothing/jarvis-frontend/commit/a6b2775) is pushed to `main` and contains only the four reviewed Markdown corrections; the 38 website tests, build and installer checks above cover that unchanged website implementation. Local logs and generated state stay outside both commits.
+
+The preceding review reproduced 12 accepted requests from 24 concurrent webhook deliveries despite the three-per-minute limit, and a non-forced shutdown accepted with a synthetic running coding-task record. Those observations describe the pre-fix revision `8bf6cbb`, not a real ACP cancellation or owner-account test. The original reproduction is preserved alongside the new validation; atomic delivery-to-run handoff and coordinated shutdown draining remain separate work.
+
+<a id="current-acceptance-slice-review-corrections-2026-10-16"></a>
+
+## Completed review corrections (2026-10-16)
+
+> **CORRECTION (2026-10-16):** the earlier documentation reconciliation passed structural checks but did not eliminate every stale current claim. The follow-up slice above corrects the confirmed semantic drift. The original implementation and validation evidence below remains preserved.
 
 The owner selected the repository review follow-up: fix confirmed runtime defects, reconcile all owned Markdown and the public website, and separate current decisions from historical evidence. No obsolete connector code is deleted by this slice.
 
@@ -54,6 +79,8 @@ Second hosted follow-up: `b930f73` / CI `38923320820` passed nine jobs, includin
 
 Preview repair validation: formatting, strict all-target/all-feature workspace Clippy and all 3,110 locked default workspace tests passed, with zero failures and five existing ignored tests. The MCP peer was explicitly built and its missing-binary guard enabled. Logs and temporary controls are retained under `artifacts/ci-review/preview-startup-2026-10-16/` in the primary checkout. No workflow, release check or production behavior changed in this repair.
 
+Pre-follow-up native evidence (checked 2026-10-16): [`8bf6cbb` / CI `38927374174`](https://github.com/props-nothing/jarvis-core/actions/runs/38927374174) completed all ten jobs successfully, including Linux/macOS tests and acceptance lanes, all Windows test partitions, all native Clippy jobs, source checks and dependency policy. This supersedes the earlier unresolved native failures for that revision. The later package/cache verification recorded above also closes those scopes for `8bf6cbb`; neither run verifies the runtime/guide follow-up or automatic draft uploads, which require their own hosted evidence.
+
 ## What is built and what still needs acceptance
 
 The current local product has a Rust daemon/CLI, a browser console, Telegram, Google mail/calendar tools, managed MCP clients and an opt-in MCP server, policy approvals, SQLite memory, file knowledge search, schedules/triggers, project budgets, coding delegation and managed host processes. See [README](README.md#built-experimental-next) for the product summary. This section names remaining evidence rather than repeating completed implementation logs.
@@ -86,7 +113,7 @@ These are residual scopes, not an instruction to rebuild delivered features. His
 ### Tools, policy and memory (P3–P4)
 
 - [~] `P3-008` MCP stdio/HTTP host composition is delivered. Remaining credential/provider acceptance and registration lifecycle are tracked by `P11-001b`; do not repeat the old “no production caller” implementation task. [Original evidence](docs/history/todo-p3-evidence-through-2026-10-16.md#p3-008).
-- [~] `P3-009` Authenticated external MCP access is delivered; per-client credentials/allowlists, audience-bound remote authorization and associated rate-limit acceptance remain. [Original evidence](docs/history/todo-p3-evidence-through-2026-10-16.md#p3-009).
+- [~] `P3-009` Authenticated external MCP access is delivered; per-client credentials/allowlists, audience-bound remote authorization and associated rate-limit acceptance remain. Direct calls still need a durable approval/tool-call/outcome ledger; their current pending approvals are in memory, while delegated JARVIS runs retain normal durable history. [Original evidence](docs/history/todo-p3-evidence-through-2026-10-16.md#p3-009).
 - [~] `P3-012` Approval restart and duplicate-delivery gates exist. Keep current acceptance tests as the gate; external-client authorization and policy-at-resume semantics must be reconciled against later ADRs before closing the remaining umbrella. [Original evidence](docs/history/todo-p3-evidence-through-2026-10-16.md#p3-012).
 - [ ] `P3-021` Additional remote/disposable sandbox adapter only for a named requirement; prove declared resource guarantees, crash isolation, output bounds and cleanup. Existing Docker execution does not sandbox ACP host processes. [Original evidence](docs/history/todo-p3-evidence-through-2026-10-16.md#p3-021).
 - [~] `P4-014` Conversational memory proposal/admission is delivered (including later owner Keep). Close residual acceptance across native platforms and current correction/forget behavior; do not reimplement the former missing model surface. [Original evidence](docs/history/todo-p4-evidence-through-2026-10-16.md#p4-014).
@@ -98,7 +125,7 @@ These are residual scopes, not an instruction to rebuild delivered features. His
 - [ ] `P5-010` Complete provider-seam tests and selected live checks for expiry, revoked scope, pagination, throttling, reauthorization and redacted diagnostics.
 - [~] `P6-007` Quiet hours and notifications exist. Add per-day proactive-message budgets, deduplication, per-kind/project controls and an owner-facing disable action when required.
 - [ ] `P6-010` Durable structured parent/child identity, restart semantics and linked cancellation remain with `P7-009`–`P7-011`. Atomic admission alone does not complete delegation durability.
-- [~] `P6-012` Mail, file and webhook triggers exist; preserve their deduplication and ordinary-run policy. The remaining external webhook acceptance is `P11-017`.
+- [~] `P6-012` Mail, file and webhook triggers exist; preserve their deduplication and ordinary-run policy. Atomic webhook budget reservations fix concurrent admission, not the claim-to-run crash-loss window. Reliable restart delivery remains a separate demand-gated handoff/outbox slice under the Phase 6 target; external-service acceptance remains `P11-017`.
 
 See [P5–P8 historical evidence](docs/history/todo-p5-p8-evidence-through-2026-10-16.md). Time-zone schedules and model-selected approved skills are delivered; the multi-step workflow engine remains parked.
 
@@ -111,7 +138,7 @@ See [P5–P8 historical evidence](docs/history/todo-p5-p8-evidence-through-2026-
 - [ ] `P7-008` Complete adversarial protocol/skew/crash/cancellation tests and audit coverage for the supported ACP capability surface; native tools are not all intercepted.
 - [ ] `P7-009` Replace objective-text parent markers with structured persisted parent/child identity and lifecycle semantics, including restart and parent cancellation.
 - [ ] `P7-010` Define delegation's effect/policy semantics consistently for native and coding jobs.
-- [ ] `P7-011` Prove depth and concurrency limits, duplicate-delivery behavior, child isolation, audit and cancellation propagation. Admission repair in the current slice closes only its documented concurrency/history defect.
+- [ ] `P7-011` Prove depth and concurrency limits, duplicate-delivery behavior, child isolation, audit and cancellation propagation. The completed ADR-0228 admission repair closes only its documented concurrency/history defect. ADR-0232 protects the stop/restart preflight; coordinated draining that prevents new work after that snapshot remains separate lifecycle work.
 
 ### Voice and channels (P8)
 

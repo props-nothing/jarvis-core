@@ -50,6 +50,14 @@ pub(crate) struct ProcessTools {
 }
 
 impl ProcessTools {
+    /// Only this daemon's live registry counts; old request files are interrupted history.
+    pub(crate) fn active_count(&self) -> Result<usize, &'static str> {
+        self.active
+            .lock()
+            .map(|processes| processes.len())
+            .map_err(|_| "managed process registry unavailable")
+    }
+
     pub(crate) fn new(roots: &[PathBuf], storage: PathBuf) -> Result<Self, CommandRunToolError> {
         Ok(Self {
             folders: CommandRunTool::new(roots)?,

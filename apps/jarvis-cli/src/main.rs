@@ -447,7 +447,7 @@ async fn stop_command(arguments: &[String], restart: bool) -> ExitStatus {
                 if !wait || std::time::Instant::now() >= patience {
                     eprintln!("jarvis: {message}.");
                     eprintln!(
-                        "        Wait with `--wait`, or interrupt them with `--force`; `jarvis runs` lists what is working."
+                        "        Wait with `--wait`, or interrupt them with `--force`; inspect runs, coding jobs and managed processes before stopping."
                     );
                     return ExitStatus::Rejected;
                 }

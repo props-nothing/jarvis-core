@@ -146,7 +146,7 @@ The binding must name the same server. `jarvis mcp test remote` also preserves a
 
 ## Verification status
 
-Generic pre-registered OAuth is tested offline with independent HTTP peers: discovery, PKCE/resource/issuer checks, persistence/refresh, client-change/disconnect races, malformed callbacks, a real MCP host credential path, authenticated setup routes and Settings DOM controls. An issuer-guard removal mutation is detected by its no-token-request test. **Real provider registration/browser consent and native macOS/Linux acceptance have not been run.** See [research and exact test evidence](../research/integrations/mcp-oauth.md).
+Generic pre-registered OAuth is tested offline with independent HTTP peers: discovery, PKCE/resource/issuer checks, persistence/refresh, client-change/disconnect races, malformed callbacks, a real MCP host credential path, authenticated setup routes and Settings DOM controls. An issuer-guard removal mutation is detected by its no-token-request test. **Real provider registration/browser consent and account-specific native-platform acceptance remain unverified.** Automated native CI results are recorded separately in the [active ledger](../../TODO.md#owner-requested-ci-and-release-reliability-2026-10-16); they do not establish a working owner account. See [research and exact test evidence](../research/integrations/mcp-oauth.md).
 
 Named HTTP credentials are verified with the real HTTP backend and profile store against a deterministic loopback peer: missing/rotated/removed keys, every HTTP operation, endpoint isolation, redirects, API/CLI/Settings metadata and literal redaction. A cross-server guard-removal mutation is detected by its regression test. This is not real-provider acceptance.
 

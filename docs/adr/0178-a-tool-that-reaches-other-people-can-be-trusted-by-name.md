@@ -3,6 +3,8 @@
 Status: Accepted (amends `ADR-0175` and `ADR-0177`)
 Date: 2026-10-10
 
+**Amended by:** [ADR-0180](0180-a-call-from-another-app-that-needs-the-owner-waits-for-the-owner.md) allows an eligible external MCP call to wait for the owner's decision rather than being refused merely because it needs approval. The external-call refusal in decision 3 below is historical; the external client still cannot approve its own call.
+
 ## Context
 
 After `ADR-0175` (third-party tools) and `ADR-0177` (memory and project tools), one carve-out remained: a native tool with an external-communication effect (`jarvis.calendar.create`, `jarvis.gmail.send`) ignored "Run without asking". The owner's saved settings showed `calendar.create` as trusted while it still asked, and the owner asked, twice, why these tools were not configurable "like the rest". A choice the screen offers, saves and then ignores is the defect `ADR-0175` already named; leaving it for native senders was inconsistent.

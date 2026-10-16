@@ -282,6 +282,191 @@ async fn an_event_is_claimed_once_and_a_replay_claims_nothing() {
     ));
 }
 
+async fn webhook_event_count(database: &SqliteDatabase, trigger: &str) -> i64 {
+    must(
+        sqlx::query_scalar("SELECT COUNT(*) FROM trigger_events WHERE trigger_id = ?1")
+            .bind(trigger)
+            .fetch_one(database.pool())
+            .await,
+    )
+}
+
+/// Both budgets count pending reservations, not only rows linked to a run. Twenty-four callers cannot share the last slot.
+#[tokio::test]
+async fn concurrent_webhook_admissions_reserve_only_the_remaining_minute_or_day_slot() {
+    for (existing, seeded_at) in [(2, at(1000)), (49, at(800))] {
+        let (_directory, database) = database().await;
+        let made = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(0)).await);
+        for index in 0..existing {
+            must(
+                claim_trigger_event(&database, &made.id, &format!("old-{index}"), seeded_at).await,
+            );
+        }
+        let database = std::sync::Arc::new(database);
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(24));
+        let mut tasks = Vec::new();
+        for index in 0..24 {
+            let database = std::sync::Arc::clone(&database);
+            let barrier = std::sync::Arc::clone(&barrier);
+            let trigger = made.id.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                claim_webhook_event(
+                    &database,
+                    &trigger,
+                    &format!("new-{index}"),
+                    at(1000),
+                    3,
+                    50,
+                )
+                .await
+            }));
+        }
+        let mut admitted = 0;
+        let mut limited = 0;
+        for task in tasks {
+            match must(must(task.await)) {
+                WebhookEventAdmission::Admitted => admitted += 1,
+                WebhookEventAdmission::RateLimited => limited += 1,
+                WebhookEventAdmission::Duplicate => panic!("the keys are distinct"),
+            }
+        }
+        assert_eq!((admitted, limited), (1, 23), "existing claims: {existing}");
+        assert_eq!(webhook_event_count(&database, &made.id).await, existing + 1);
+        assert_eq!(
+            must(count_trigger_runs_since(&database, &made.id, at(0)).await),
+            0,
+            "none of the claims needs a run link to reserve its budget"
+        );
+        database.close().await;
+    }
+}
+
+/// Concurrent retries share one reservation, and remain duplicates when that reservation fills the budget.
+#[tokio::test]
+async fn concurrent_webhook_duplicates_consume_one_slot_even_at_capacity() {
+    let (_directory, database) = database().await;
+    let made = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(0)).await);
+    let database = std::sync::Arc::new(database);
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(12));
+    let mut tasks = Vec::new();
+    for _ in 0..12 {
+        let database = std::sync::Arc::clone(&database);
+        let barrier = std::sync::Arc::clone(&barrier);
+        let trigger = made.id.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            claim_webhook_event(&database, &trigger, "same-delivery", at(10), 1, 1).await
+        }));
+    }
+    let mut admitted = 0;
+    let mut duplicates = 0;
+    for task in tasks {
+        match must(must(task.await)) {
+            WebhookEventAdmission::Admitted => admitted += 1,
+            WebhookEventAdmission::Duplicate => duplicates += 1,
+            WebhookEventAdmission::RateLimited => panic!("a duplicate does not spend capacity"),
+        }
+    }
+    assert_eq!((admitted, duplicates), (1, 11));
+    assert_eq!(webhook_event_count(&database, &made.id).await, 1);
+    assert_eq!(
+        must(claim_webhook_event(&database, &made.id, "different", at(10), 1, 1).await),
+        WebhookEventAdmission::RateLimited
+    );
+    database.close().await;
+}
+
+/// A crash or failed start does not refund a committed reservation; only elapsed budget windows restore capacity.
+#[tokio::test]
+async fn webhook_reservations_survive_restart_without_a_run_and_expire_by_their_windows() {
+    let (directory, database) = database().await;
+    let made = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(0)).await);
+    assert_eq!(
+        must(claim_webhook_event(&database, &made.id, "first", at(10), 1, 2).await),
+        WebhookEventAdmission::Admitted
+    );
+    database.close().await;
+    let reopened =
+        must(SqliteDatabase::open(&directory.path().join(DEFAULT_DATABASE_FILENAME)).await);
+    assert_eq!(
+        must(claim_webhook_event(&reopened, &made.id, "first", at(11), 1, 2).await),
+        WebhookEventAdmission::Duplicate
+    );
+    assert_eq!(
+        must(claim_webhook_event(&reopened, &made.id, "second", at(11), 1, 2).await),
+        WebhookEventAdmission::RateLimited
+    );
+    assert_eq!(
+        must(claim_webhook_event(&reopened, &made.id, "second", at(71), 1, 2).await),
+        WebhookEventAdmission::Admitted
+    );
+    assert_eq!(
+        must(claim_webhook_event(&reopened, &made.id, "third", at(132), 1, 2).await),
+        WebhookEventAdmission::RateLimited
+    );
+    assert_eq!(
+        must(claim_webhook_event(&reopened, &made.id, "third", at(86_411), 1, 2).await),
+        WebhookEventAdmission::Admitted
+    );
+    assert_eq!(
+        must(claim_webhook_event(&reopened, &made.id, "first", at(86_412), 1, 2).await),
+        WebhookEventAdmission::Duplicate,
+        "expiration frees budget, not delivery identity"
+    );
+    reopened.close().await;
+}
+
+/// Storage failure never yields admission, and an aborted insert leaves the key available for a successful retry.
+#[tokio::test]
+async fn webhook_reservation_fails_closed_on_database_errors() {
+    let (_directory, database) = database().await;
+    let made = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(0)).await);
+    must(sqlx::query("CREATE TRIGGER reject_webhook_claim BEFORE INSERT ON trigger_events BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END")
+        .execute(database.pool()).await);
+    assert!(matches!(
+        claim_webhook_event(&database, &made.id, "delivery", at(1), 3, 50).await,
+        Err(DatabaseError::Sqlite { .. })
+    ));
+    assert_eq!(webhook_event_count(&database, &made.id).await, 0);
+    must(
+        sqlx::query("DROP TRIGGER reject_webhook_claim")
+            .execute(database.pool())
+            .await,
+    );
+    assert_eq!(
+        must(claim_webhook_event(&database, &made.id, "delivery", at(2), 3, 50).await),
+        WebhookEventAdmission::Admitted
+    );
+    database.close().await;
+    assert!(matches!(
+        claim_webhook_event(&database, &made.id, "another", at(3), 3, 50).await,
+        Err(DatabaseError::Sqlite { .. })
+    ));
+}
+
+#[tokio::test]
+async fn webhook_reservation_requires_a_currently_enabled_webhook_and_valid_key() {
+    let (_directory, database) = database().await;
+    let mail = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &new("is:unread"), at(0)).await);
+    let hook = must(create_trigger(&database, LOCAL_WORKSPACE_ID, &webhook(HASH), at(0)).await);
+    for bad in [String::new(), "k".repeat(129)] {
+        assert!(matches!(
+            claim_webhook_event(&database, &hook.id, &bad, at(1), 3, 50).await,
+            Err(DatabaseError::InvalidTrigger { .. })
+        ));
+    }
+    must(set_trigger_enabled(&database, LOCAL_WORKSPACE_ID, &hook.id, false, at(1)).await);
+    for id in [&mail.id, &hook.id, "missing"] {
+        assert!(matches!(
+            claim_webhook_event(&database, id, "delivery", at(2), 3, 50).await,
+            Err(DatabaseError::TriggerNotFound)
+        ));
+    }
+    assert_eq!(webhook_event_count(&database, &hook.id).await, 0);
+    database.close().await;
+}
+
 /// Only an event that started a run counts toward the daily cap; a baseline entry does not, and the window is respected.
 #[tokio::test]
 async fn only_events_that_started_a_run_inside_the_window_count() {

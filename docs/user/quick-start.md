@@ -64,8 +64,7 @@ jarvis init --base-url https://api.example.com/v1 --model NAME --api-key-file "$
 
 Alternatively, supply `ELEVENLABS_API_KEY` through a private environment and pass `--elevenlabs` instead of `--voice-key-file`. No key value is shown here or needed by the source installer. Model and voice validation errors stop setup; do not start a new profile after a failed `init`. Omit `--workspace` to grant no folders.
 
-`--workspace` may be repeated. The assistant can read, list and create files in those folders (including new Excel, CSV and Word files it writes for you), search their text, and run commands there (such as a build or the tests) after you approve each one; changing an existing file is
-asked about first. Nothing outside them is reachable.
+`--workspace` may be repeated. JARVIS's file tools read, list, search and create files inside those granted folders, including new Excel, CSV and Word files. Changing an existing file and running a command ask by default; explicit per-tool standing trust can change that. Approved commands and coding agents run with your host privileges: the selected working directory does not confine their filesystem access. See [coding boundaries](code-agents.md#review-and-trust-boundaries).
 
 ## Keys
 
@@ -102,7 +101,7 @@ jarvis restart                   # apply
 
 Each change is checked by the same rules the daemon starts with and refused, leaving the file untouched, if it would not
 start (for example a voice id without a voice key). Changing one setting changes only that one: your folders, trust list and
-voice stay as they were. The same settings, and the keys, are in the console: press **Settings** in the header. A searchable side list groups the tabs (Brain, Voice & search, Folders & code, Permissions; Google, Telegram, Phone; Connect apps; Console, Alerts, Advanced); each setting says what it does in one line, with the rest under **More**, and on/off settings are switches. **Console** adjusts density and reduced motion for this browser, immediately and even while offline. Brain picks a provider and a model from a list, tests it, and sets the fallback. Keys are password fields and are never shown again;
+voice stay as they were. The same settings and keys are in **Settings**, which opens on **Overview**. **Apps & tools** contains integrations and files/coding, **Channels** contains Telegram and Phone, and **External access** controls other apps calling JARVIS. Search finds setting names and help; uncommon system settings remain in Advanced. **Console** adjusts appearance, density and motion for this browser, immediately and even while offline. Brain picks a provider and model, tests it, and sets the fallback. Provider keys are password fields and are never shown again;
 **Restart to apply** restarts JARVIS with what you saved, and the footer says which changes are still waiting for it. [settings.md](settings.md) explains every setting and why a few are off by
 default.
 
@@ -174,8 +173,7 @@ into `~/.local/bin`. Open a new terminal and `jarvis` works anywhere. `jarvis pa
 
 ## Stopping and troubleshooting
 
-- `jarvis stop` ends the background program gracefully; `jarvis restart` stops it (if it is running) and starts it again, for example
-  after you change a setting. Both wait until it has really finished.
+- `jarvis stop` and `jarvis restart` first check ordinary active runs, queued/running coding jobs and live managed processes, including previews. Without `--force`, any such work produces a busy refusal; `--wait` retries that busy response until the work finishes. If work state cannot be read, they fail closed with an unavailable error (HTTP 503); `--wait` does not turn unknown state into permission to stop. `--force` explicitly overrides the preflight and can interrupt that work. Native approvals already waiting for your decision remain durable. The check is a snapshot, not a barrier that prevents new work from starting between the check and shutdown. Once stopping, the command waits for the daemon to finish; restart then starts it again.
 - `jarvis doctor --live` checks the things that actually go wrong, each with its fix: the model server unreachable or rejecting the key,
   a granted folder gone, Docker not running for the code tool, JARVIS not started. `jarvis doctor` alone diagnoses the installation; `jarvis logs --lines 50` shows what the daemon said; `jarvis status` says whether it
   is running.

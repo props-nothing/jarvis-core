@@ -16,6 +16,7 @@ mod run_event_repository;
 mod run_repository;
 mod run_transcript_repository;
 mod session_repository;
+mod shutdown_repository;
 mod summary_repository;
 
 mod approval_repository;
@@ -137,6 +138,7 @@ pub use session_repository::{
     API_SESSION_CHANNEL, NewSession, RunAdmissionLimits, SessionTarget, StartRunInput, StartedRun,
     StoredSession, find_session, start_run,
 };
+pub use shutdown_repository::{ShutdownWork, read_shutdown_work};
 pub use skill_repository::{
     StoredSkillRevision, ToolValidator, archive_skill_revision, delete_skill_revision,
     find_skill_revision, find_skill_revision_state, promote_skill_revision, read_skill_revisions,
@@ -156,9 +158,9 @@ pub use tool_call_repository::{
 pub use trigger_repository::{
     MAX_TRIGGER_INTERVAL_SECONDS, MAX_TRIGGER_OBJECTIVE_CHARS, MAX_TRIGGER_QUERY_CHARS,
     MAX_TRIGGERS_PER_WORKSPACE, MIN_TRIGGER_INTERVAL_SECONDS, NewTrigger, StoredTrigger,
-    TriggerKind, claim_due_triggers, claim_trigger_event, count_trigger_runs_since, create_trigger,
-    delete_trigger, find_trigger, find_webhook_by_secret_hash, list_triggers,
-    mark_trigger_baselined, record_trigger_poll, record_trigger_run, set_trigger_enabled,
-    valid_trigger_folder,
+    TriggerKind, WebhookEventAdmission, claim_due_triggers, claim_trigger_event,
+    claim_webhook_event, count_trigger_runs_since, create_trigger, delete_trigger, find_trigger,
+    find_webhook_by_secret_hash, list_triggers, mark_trigger_baselined, record_trigger_poll,
+    record_trigger_run, set_trigger_enabled, valid_trigger_folder,
 };
 pub use workspace_repository::{DataPolicy, NewWorkspace, WorkspaceMode, record_workspace};

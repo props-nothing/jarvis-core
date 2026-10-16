@@ -495,6 +495,7 @@ struct Services {
     /// The composed tool pipeline, resolved at start for the same reason: an unusable workspace
     /// grant must fail the daemon rather than the first tool call.
     tools: Option<Arc<crate::tool_pipeline::ToolPipeline>>,
+    processes: Option<Arc<crate::process_tools::ProcessTools>>,
     /// The speech provider, resolved at start so a missing key file fails the daemon rather than the first sentence.
     speech: Option<Arc<jarvis_voice::ElevenLabsSpeech>>,
     /// Phone calls to the owner and their records (`ADR-0200`).
@@ -678,6 +679,8 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     paths.prepare()?;
 
     let loaded_config = load_config_migrating(&paths)?;
+    let config = loaded_config.config();
+    let daemon = config.daemon();
     let settings_context = SettingsContext::new(paths.clone(), root.map(Path::to_path_buf));
 
     // The daemon is the sole issuer of the profile credential.
@@ -695,7 +698,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     let singleton = SingletonGuard::acquire(&lock_path, build)?;
     let logging = Logging::init(
         paths.logs(),
-        loaded_config.config().logging().level(),
+        config.logging().level(),
         Redactor::new(secrets),
     )?;
 
@@ -729,7 +732,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         }
     };
 
-    let endpoint = LocalEndpoint::scoped(paths.runtime(), loaded_config.config().profile().name())?;
+    let endpoint = LocalEndpoint::scoped(paths.runtime(), config.profile().name())?;
     let listener = LocalListener::bind(&endpoint)?;
     let control = Arc::new(ControlPlane::new(
         Arc::clone(&health),
@@ -742,19 +745,15 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     // ADR-0011 makes the HTTP transport separately enabled and loopback-bound. Reading the
     // setting here rather than inside the gateway keeps the gateway itself free of policy about
     // whether it should exist.
-    let http_port = loaded_config
-        .config()
-        .daemon()
-        .http_enabled()
-        .then(|| loaded_config.config().daemon().http_port());
+    let http_port = daemon.http_enabled().then(|| daemon.http_port());
 
     // The executor is composed HERE, so an unimplemented name — or a live provider with unusable
     // coordinates — stops the daemon at startup with an actionable error rather than being discovered when
     // the first run is started and leaving a run that is accepted but never driven. Extracted as its own
     // function because the live provider adds a file read and a credential, and `start` was already at the
     // length where clippy's `too_many_lines` signals a function carrying a second responsibility.
-    let executor = compose_executor(loaded_config.config().daemon())?;
-    let speech = compose_speech(loaded_config.config().daemon())?;
+    let executor = compose_executor(daemon)?;
+    let speech = compose_speech(daemon)?;
     let phone = compose_phone(&paths, &database, &mcp_access);
 
     // The tool pipeline and MCP host are composed HERE, for the same reason the executor is: an unusable
@@ -762,8 +761,8 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     // Extracted into its own function because composing them carries its own failure policy — an MCP failure
     // is not fatal while a pipeline failure is — and `start` was at the length where clippy's `too_many_lines`
     // is a signal that a function has grown a second responsibility.
-    let (mcp, tools, mcp_snapshot) = compose_tools(
-        loaded_config.config(),
+    let (mcp, tools, mcp_snapshot, processes) = compose_tools(
+        config,
         &paths,
         Arc::clone(&database),
         &phone,
@@ -776,10 +775,10 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     // explicitly enabled a port: a daemon that reported itself ready with an endpoint it never bound would be
     // the "listener nobody notices is dead" case the REST transport's comments describe.
     let (serving_mcp, mcp_stop) = compose_serving_mcp(
-        loaded_config.config(),
+        config,
         &database,
         tools.as_ref(),
-        loaded_config.config().daemon().mcp_serve_port(),
+        daemon.mcp_serve_port(),
         &mcp_access,
         &crate::mcp_abilities::vetted_prefixes(mcp_snapshot.loaded.as_deref(), paths.runtime()),
     )
@@ -799,6 +798,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         services: Services {
             executor,
             tools,
+            processes,
             speech,
             phone,
             interrupted,
@@ -1018,6 +1018,7 @@ async fn compose_tools(
         Option<crate::mcp_host::ComposedHost>,
         Option<Arc<crate::tool_pipeline::ToolPipeline>>,
         Arc<crate::mcp_admin::McpSnapshot>,
+        Option<Arc<crate::process_tools::ProcessTools>>,
     ),
     DaemonError,
 > {
@@ -1095,7 +1096,7 @@ async fn compose_tools(
     push_document_tool(config, &mut additional)?;
     push_knowledge_tool(config, &database, &mut additional).await?;
     push_code_tool(config, &mut additional)?;
-    push_command_tool(config, paths, &database, &mut additional).await?;
+    let processes = push_command_tool(config, paths, &database, &mut additional).await?;
     // Delegation needs a model to drive a sub-agent with, so it is composed only when the daemon has an executor.
     let agent = executor.map(|executor| {
         Arc::new(crate::delegate::AgentTool::new(
@@ -1133,7 +1134,7 @@ async fn compose_tools(
         mcp.as_ref(),
         loaded_document,
     ));
-    Ok((mcp, tools, snapshot))
+    Ok((mcp, tools, snapshot, processes))
 }
 
 /// Opens the granted folders a second time for a tool that reads or writes files beside the file tools (`ADR-0157`, `ADR-0158`), or `None`
@@ -1421,10 +1422,10 @@ async fn push_command_tool(
         Vec<jarvis_tools::ToolDefinition>,
         Arc<dyn jarvis_tools::ToolExecutor>,
     )>,
-) -> Result<(), DaemonError> {
+) -> Result<Option<Arc<crate::process_tools::ProcessTools>>, DaemonError> {
     let roots = config.daemon().tool_workspace_roots();
     if roots.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let paths_of_roots: Vec<std::path::PathBuf> =
         roots.iter().map(std::path::PathBuf::from).collect();
@@ -1451,11 +1452,14 @@ async fn push_command_tool(
     }
     let process_storage = paths.data().join("managed-processes");
     let paths = paths_of_roots;
-    if let Ok(processes) = crate::process_tools::ProcessTools::new(&paths, process_storage) {
+    let processes = crate::process_tools::ProcessTools::new(&paths, process_storage)
+        .ok()
+        .map(Arc::new);
+    if let Some(processes) = &processes {
         additional.push((
             crate::process_tools::ProcessTools::definitions()
                 .map_err(|source| DaemonError::CommandRunTool { source })?,
-            Arc::new(processes),
+            Arc::clone(processes) as Arc<dyn jarvis_tools::ToolExecutor>,
         ));
     }
     if let Ok(skills) = crate::skill_bundles::SkillBundles::new(&paths) {
@@ -1483,7 +1487,7 @@ async fn push_command_tool(
         }
         Err(source) => return Err(DaemonError::CommandRunTool { source }),
     }
-    Ok(())
+    Ok(processes)
 }
 
 /// Adds the code-running tool to the composition, when it is configured and this host can run it.
@@ -1824,6 +1828,7 @@ impl HttpTransport {
         let Services {
             executor,
             tools,
+            processes,
             speech,
             interrupted,
             mcp_snapshot,
@@ -1844,6 +1849,9 @@ impl HttpTransport {
         }
         if let Some(tools) = tools {
             state = state.with_tools(tools);
+        }
+        if let Some(processes) = processes {
+            state = state.with_processes(processes);
         }
         if let Some(speech) = speech {
             state = state.with_speech(speech);

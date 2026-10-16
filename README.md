@@ -23,7 +23,7 @@ JARVIS is a **local-first personal AI assistant with a durable Rust core**. Talk
 Use a local or hosted OpenAI-compatible model, choose a fallback, and reach the same assistant from the browser console, terminal, Telegram or an authenticated external app. Cloud models and connected services receive the data needed for the operations you enable; local-first does not mean every integration is offline.
 
 > **Models suggest. You decide. Rust enforces.**
-> Tool effects pass through deterministic policy, durable approvals and an audit trail. A web page cannot grant permissions, and a model cannot approve its own request.
+> JARVIS run tool effects pass through deterministic policy, durable approvals and an audit trail. Direct external MCP calls use policy and owner approval, but their pending approvals are in memory and their direct outcomes are not yet stored in run history. A web page cannot grant permissions, and a model cannot approve its own request.
 
 ## What You Can Do
 

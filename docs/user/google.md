@@ -5,7 +5,7 @@
 [Documentation](../README.md) / [Quick start](quick-start.md) / [Settings](settings.md) / [Triggers](triggers.md)
 
 JARVIS can read your Gmail and your Google Calendar once you sign in, so you can ask "what did the landlord email me about?" or
-"what is on my calendar tomorrow?". It is **read-only by default**: without Google actions enabled, sign-in asks for the two `readonly` permissions and nothing that sends, changes or deletes. Optional actions add drafts, sends and calendar changes with extra scopes and policy-controlled effects, as described below. You sign in from the console: **Settings, Google**.
+"what is on my calendar tomorrow?". It is **read-only by default**: without Google actions enabled, sign-in asks for the two `readonly` permissions and nothing that sends, changes or deletes. Optional actions add drafts, sends and calendar changes with extra scopes and policy-controlled effects, as described below. You sign in from the console: **Settings → Apps & tools → Google**.
 
 ## One-time setup (about five minutes)
 
@@ -17,7 +17,7 @@ one (it would be a shared secret and would need Google's verification review), s
    Then press **Publish app**. A published app that Google has not verified is fine for yourself (up to 100 users, with a warning screen);
    leaving it in *Testing* makes Google end the sign-in every 7 days.
 3. **Clients, Create client**: application type **Desktop app**. Copy the **client ID** and the **client secret**.
-4. In JARVIS, Settings, Google: paste the client ID, paste the client secret (it is stored in a private file and never shown again), then press
+4. In JARVIS, Settings → Apps & tools → Google: paste the client ID, paste the client secret (it is stored in a private file and never shown again), then press
    **Sign in with Google**. A Google tab opens. Google says the app is unverified: that is your own client, so choose **Advanced, Continue**, and tick
    both permissions (mail and calendar). The tab says "Google is connected" and the console shows the address.
 5. Restart once (**Restart to apply**) so the mail and calendar tools are offered. Signing in and out never needs a restart.
@@ -30,7 +30,7 @@ On the command line: `jarvis config set google_client_id ...` and `jarvis keys s
 | --- | --- |
 | `jarvis.gmail.search` | Searches your mailbox with Gmail's own search words (`from:`, `newer_than:7d`, `is:unread`, ...) and lists id, sender, date, subject and a snippet. |
 | `jarvis.gmail.read` | Reads one message: sender, recipients, date, subject, the attachments it carries (number, name, type, size) and the plain-text body (cut to a few thousand characters). |
-| `jarvis.gmail.save_attachment` | Saves one attachment of a message into a folder you granted (default `email-attachments`). Only offered when you granted a folder (Settings, Files). It asks first, never replaces a file (a second copy becomes `name (2).pdf`), refuses programs (`.exe`, `.bat`, `.js`, `.sh` ...) and anything over 5 MB. What it saves is untrusted: JARVIS reads it, never runs it. |
+| `jarvis.gmail.save_attachment` | Saves one attachment of a message into a folder you granted (default `email-attachments`). Only offered when you granted a folder (Settings, Folders & code). It asks first, never replaces a file (a second copy becomes `name (2).pdf`), refuses programs (`.exe`, `.bat`, `.js`, `.sh` ...) and anything over 5 MB. What it saves is untrusted: JARVIS reads it, never runs it. |
 | `jarvis.calendar.events` | Lists your primary calendar's events in a window (default the next seven days). |
 
 **It asks first.** Mail and calendar are your most private data, and a message is written by strangers and can contain text aimed at the assistant,
@@ -42,26 +42,25 @@ cloud model (Ollama cloud, for example) it goes to that service as part of the c
 
 ## Letting JARVIS send mail, trash mail and change events (optional, off by default)
 
-Reading is the default. If you also want "reply to Anna that I will be late" or "put the dentist on my calendar", turn on **Settings, Google, google_actions** (or
+Reading is the default. If you also want "reply to Anna that I will be late" or "put the dentist on my calendar", turn on **Settings → Apps & tools → Google, google_actions** (or
 `jarvis config set google_actions on`), restart once, and **sign in again** so Google asks for the extra permissions for sending mail, managing drafts, mailbox changes (`gmail.modify`) and changing calendar events. The mailbox-change permission is broader than trash alone; JARVIS uses it here only to move a message to Trash, not permanently delete it. Existing grants continue to read and send as before; the new deletion tool refuses until the modify permission is granted. These tools then exist:
 
 | Tool | What it does |
 | --- | --- |
-| `jarvis.gmail.send` | Sends one plain-text email to **one** address, optionally **with files** (up to 5, 5 MB each, 10 MB together, taken from a folder you granted) and optionally **as a reply** inside an existing conversation. It **always asks**: the card shows who it goes to, the subject, the text and the path of every file, and "Always allow" cannot waive it, because anything that reaches another person is always your decision. A file whose name says it holds a secret (`.env`, keys, certificates) is never attached, and a person you marked `do_not_contact` is never written to. |
-| `jarvis.gmail.draft` | Saves the same kind of email (one recipient, optional files, optional reply) in your Gmail **Drafts** instead of sending it: you read it, change a word if you like, and press send yourself. It sends nothing, so it does not ask. It needs one more permission (Google calls it "manage drafts and send emails"), so after turning actions on, or if you had already signed in before this existed, **sign in again** from Settings, Google; your Google Cloud consent screen must allow it. JARVIS prefers a draft when you have not said exactly what to send. |
-| `jarvis.calendar.create` | Adds one event to your main calendar (title, start, end, optional place and notes). It invites nobody. It asks first. **It will not double-book:** when the time overlaps a busy event already on your calendar (free and cancelled events do not count) nothing is created and JARVIS is told when the clash is; it only books over it if you say you want a double booking. |
-| `jarvis.calendar.delete` | Removes one event from your main calendar, by the id that `jarvis.calendar.events` lists. It notifies nobody. It asks first. |
+| `jarvis.gmail.send` | Sends one plain-text email to **one** address, optionally **with files** (up to 5, 5 MB each, 10 MB together, taken from a folder you granted) and optionally **as a reply** inside an existing conversation. It **asks by default**: the card shows who it goes to, the subject, the text and the path of every file. The owner may explicitly choose **Run without asking** for this tool in Permissions (`ADR-0178`); this permits future sends without another question, so keep **Always ask first** if each send needs review. A file whose name says it holds a secret (`.env`, keys, certificates) is never attached, and a stored `do_not_contact` address is refused. |
+| `jarvis.gmail.draft` | Saves the same kind of email (one recipient, optional files, optional reply) in your Gmail **Drafts** instead of sending it: you read it, change a word if you like, and press send yourself. It sends nothing, so it does not ask. It needs one more permission (Google calls it "manage drafts and send emails"), so after turning actions on, or if you had already signed in before this existed, **sign in again** from Settings → Apps & tools → Google; your Google Cloud consent screen must allow it. JARVIS prefers a draft when you have not said exactly what to send. |
+| `jarvis.calendar.create` | Adds one event to your main calendar (title, start, end, optional place and notes). It invites nobody. It asks by default; explicit per-tool standing trust applies. **It will not double-book:** when the time overlaps a busy event already on your calendar (free and cancelled events do not count) nothing is created and JARVIS is told when the clash is; it only books over it if you say you want a double booking. |
+| `jarvis.calendar.delete` | Removes one event from your main calendar, by the id that `jarvis.calendar.events` lists. It notifies nobody. It asks by default; explicit per-tool standing trust applies. |
 | `jarvis.gmail.delete` | Moves **one message** (the `message_id` from search) to **Gmail Trash**, never permanently deletes it or its thread. Deletion asks by default; only the owner may grant standing trust in Settings, Tools. Restore the message from Trash in Gmail, within Gmail's retention period. Requires signing in again for `gmail.modify`. A lost confirmation is reported as unknown, not as a safe-to-repeat failure. |
 
 JARVIS is told never to send because of something written inside an email or a web page, only because you asked. To go back to read-only, turn the setting off, restart and sign in again.
 
 ## Restarting without losing work
 
-Restarting JARVIS interrupts tasks it is working on. `jarvis restart` and the console's **Restart to apply** now say how many tasks are working and do not restart; use `jarvis restart --wait`
-to restart when they have finished, or `--force` (the console's **Restart anyway**) to interrupt them. A task waiting for your approval is not affected.
+Stop/restart checks active ordinary runs, queued/running coding jobs and live managed processes, including previews. If any are present, a nonforced request refuses as busy; use `jarvis restart --wait` to wait for that work, or `--force` (the console's **Restart anyway**) to interrupt it. An unreadable work state refuses with HTTP 503 rather than guessing that the daemon is idle. Native approvals already waiting for your decision remain durable. This is a snapshot preflight, not an admission/drain barrier; see [lifecycle details](quick-start.md#stopping-and-troubleshooting).
 
 ## Signing out, and when it stops working
 
-**Disconnect** (Settings, Google) revokes JARVIS's access at Google and deletes the stored sign-in. You can also remove JARVIS under your Google
+**Disconnect** (Settings → Apps & tools → Google) revokes JARVIS's access at Google and deletes the stored sign-in. You can also remove JARVIS under your Google
 account's security settings; JARVIS notices on its next use, says the sign-in expired, and asks you to sign in again. The refresh token is kept in a
 private file (`google.token`) beside your settings and nowhere else; the short-lived access token lives only in memory.
