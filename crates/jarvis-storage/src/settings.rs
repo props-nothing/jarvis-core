@@ -1055,6 +1055,112 @@ pub fn set_secret(paths: &AppPaths, kind: SecretKind, raw: &str) -> Result<PathB
     Ok(path)
 }
 
+/// Saves a model provider as one configuration commit. A replacement key is staged in a new private file;
+/// failed validation cannot overwrite the previously referenced credential. Old files remain for running readers.
+///
+/// # Errors
+/// Refuses invalid settings, unreadable credentials, or reuse of an existing credential at a changed address.
+pub fn set_provider(
+    paths: &AppPaths,
+    fallback: bool,
+    model: &str,
+    address: Option<&str>,
+    key: Option<&str>,
+) -> Result<(), String> {
+    let prefix = if fallback {
+        "executor_fallback"
+    } else {
+        "executor"
+    };
+    let url_key = format!("daemon.{prefix}_base_url");
+    let ref_key = format!("daemon.{prefix}_api_key_ref");
+    let model_key = format!("daemon.{prefix}_model_name");
+    if model.trim().is_empty()
+        || (!fallback && address.is_none())
+        || (address.is_none() && key.is_some())
+    {
+        return Err(
+            "choose a model and provider address; same-provider fallback uses the main key"
+                .to_owned(),
+        );
+    }
+    let old_address = get(paths, &url_key).unwrap_or_default();
+    let secret = key.map(validate_secret).transpose()?;
+    if let Some(address) = address
+        && secret.is_none()
+        && (address.trim_end_matches('/') != old_address.trim_end_matches('/')
+            || key_state(
+                paths,
+                if fallback {
+                    SecretKind::Fallback
+                } else {
+                    SecretKind::Model
+                },
+            )?
+            .state
+                != "set")
+    {
+        return Err("provide a key for the selected provider; an existing key cannot be reused at a different address".to_owned());
+    }
+    let mut changes = vec![
+        Change {
+            key: model_key,
+            values: Some(vec![model.trim().to_owned()]),
+        },
+        Change {
+            key: url_key,
+            values: address.map(|value| vec![value.to_owned()]),
+        },
+    ];
+    let staged = if let Some(secret) = secret {
+        use std::io::Write as _;
+        let path = paths
+            .config()
+            .join(format!("{prefix}-{}.key", jarvis_core::scratch_tag()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .map_err(|_| "could not stage the credential".to_owned())?;
+        let result = (|| {
+            secure_private_file(PathKind::Config, &path)
+                .map_err(|_| "could not protect the credential")?;
+            file.write_all(secret.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|_| "could not write the credential")
+        })();
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&path);
+            return Err(error.to_owned());
+        }
+        changes.push(Change {
+            key: ref_key,
+            values: Some(vec![path.display().to_string()]),
+        });
+        Some(path)
+    } else {
+        if address.is_none() {
+            changes.push(Change {
+                key: ref_key,
+                values: None,
+            });
+        }
+        None
+    };
+    let result = apply(paths, &changes);
+    if result.is_err()
+        && let Some(path) = staged
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
 /// Removes the voice key and the settings that depend on it. The model key cannot be removed, only replaced.
 ///
 /// # Errors

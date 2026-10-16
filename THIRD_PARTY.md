@@ -68,3 +68,32 @@ Before adding a dependency:
 Original JARVIS code and documentation are licensed under [Apache-2.0](LICENSE), selected 2026-10-14 using the unmodified text from <https://www.apache.org/licenses/LICENSE-2.0.txt> (accessed 2026-10-14). [NOTICE](NOTICE) retains the bundled MediaPipe attribution and documents the geometry reduction. Apache-2.0 provides permissive reuse and a contributor patent grant and is compatible with the existing permissive dependency policy; separately licensed materials keep their terms.
 
 The independently maintained website also uses Apache-2.0 for original code and includes license texts for its bundled React/React DOM/Scheduler (MIT), Three.js (MIT), Lucide (ISC and MIT) and MediaPipe (Apache-2.0) materials. This does not settle source rights for the removed prototype. Release archives now carry `LICENSE`, `NOTICE` and this provenance document; a generated dependency-license inventory, signing/notarization and clean-machine evidence remain open under `P9-017b`.
+
+## HUD React runtime
+
+React and React DOM 19.3.1 are bundled in `apps/jarvisd/src/hud/generated/controls.js`. Source: https://github.com/facebook/react. Their scheduler dependency carries the same MIT license. Build-only dependencies and exact versions are in `apps/jarvisd/ui/package-lock.json`.
+
+```text
+MIT License
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```

@@ -2,7 +2,7 @@
 
 [Documentation](../README.md) / [Settings](settings.md) / [Advanced MCP setup](mcp.md)
 
-Open **Settings → Connections → GitHub**. This is the account connection JARVIS uses, not **Connect apps**, which lets another AI app use JARVIS.
+Open **Settings → Apps & tools → GitHub**. This is the account connection JARVIS uses, not **External access**, which lets another AI app use JARVIS.
 
 ## GitHub app setup, once
 
@@ -30,13 +30,13 @@ When a first connection changes the registered tool set, Settings says **Restart
 - **Test GitHub tools** independently connects and lists remote tools. It does not run a tool or model, change a repository, or restart JARVIS. Saved account status alone is not a live health check.
 - **Disconnect GitHub** removes local access and pending sign-in, while retaining app setup for later. JARVIS also attempts provider revocation. If that fails, local access remains removed; check [GitHub's authorized OAuth apps](https://github.com/settings/applications) to revoke it there.
 - A stale catalog may remain visible until restart, but its next credential-bearing request must fail after disconnect. Sign-in does not waive normal policy, approvals or tool limits.
-- A custom program already named `github` is not silently overwritten. Remove or rename it under **Advanced → Programs** before selecting this OAuth connection.
+- A custom program already named `github` is not silently overwritten. Remove or rename it under **Apps & tools → Custom tools (MCP)** before selecting this OAuth connection.
 
 ## Boundaries and verification
 
 The OAuth grant is bound to the selected profile/app and the exact hosted GitHub read-only destination. JARVIS does not forward it to arbitrary URLs, models, other MCP servers, browser storage or normal status output. It uses S256 PKCE and a one-use, short-lived local callback transaction. Private profile files are OS-permission-protected, not a claim that keychain encryption has shipped; keep the profile under the trusted user's control.
 
-Other services do not inherit this GitHub grant. For a compatible remote MCP service, **Settings → Advanced → Programs → Browser OAuth** now supports a separate [pre-registered OAuth app and persistent browser sign-in](mcp.md#a-remote-server-with-browser-sign-in). Supply that service's expected issuer, client ID/optional secret and minimal scopes; do not reuse GitHub or an editor's credentials. This generic path has offline fixture evidence, not real-provider/browser acceptance, and does not automatically register clients.
+Other services do not inherit this GitHub grant. For a compatible remote MCP service, **Settings → Apps & tools → Custom tools (MCP) → Browser OAuth** now supports a separate [pre-registered OAuth app and persistent browser sign-in](mcp.md#a-remote-server-with-browser-sign-in). Supply that service's expected issuer, client ID/optional secret and minimal scopes; do not reuse GitHub or an editor's credentials. This generic path has offline fixture evidence, not real-provider/browser acceptance, and does not automatically register clients.
 
 Existing Google sign-in remains under **Settings → Google**, also linked from Connections. Advanced local MCP servers can use [named environment credentials](mcp.md#a-local-server-that-needs-a-key); remote servers that accept an externally provisioned bearer token can use [named HTTP credentials](mcp.md#a-remote-server-that-needs-a-token).
 

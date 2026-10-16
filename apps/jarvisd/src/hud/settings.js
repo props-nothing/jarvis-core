@@ -58,20 +58,24 @@ window.JarvisSettings = function (context) {
     // Sidebar dots describe saved configuration, not runtime availability.
     var NAV = [
       ["JARVIS", [
-        ["overview", "Overview", "Your saved setup at a glance: model, folders, accounts and channels, permissions, and browser appearance. Configuration is not a runtime health check."],
+        ["overview", "Overview", "Your model, connected services, permissions and appearance."],
         ["brain", "Brain", "Which model JARVIS thinks with, and a second one for when the first is limited or down."],
         ["voice", "Voice & search", "How JARVIS sounds, and how it searches the web. Both are optional."],
         ["files", "Folders & code", "What JARVIS may touch on this computer. Both are off until you turn them on, so nothing is reachable by accident."],
         ["permissions", "Permissions", "For each tool: let the rules decide, always ask, run without asking, or switch it off."]
       ]],
-      ["Accounts & channels", [
-        ["connections", "Connections", "Connect accounts with browser sign-in. GitHub setup, saved account, testing and disconnect; no token or server command for ordinary sign-in."],
+      ["Apps & tools", [
+        ["apps", "Apps & tools", "Choose the services and tools JARVIS can use."],
+        ["connections", "GitHub", "Connect accounts with browser sign-in. GitHub setup, saved account, testing and disconnect; no token or server command for ordinary sign-in."],
         ["google", "Google", "Sign in with your Google account so JARVIS can read your mail and calendar."],
+        ["programs", "Custom tools (MCP)", "Add a local program or remote MCP server. Advanced tool connections, OAuth, bearer authentication and approval behavior."]
+      ]],
+      ["Channels", [
         ["telegram", "Telegram", "Talk to JARVIS from your phone. It answers in a Telegram chat only you can use, and asks you there when it needs your approval."],
         ["phone", "Phone", "JARVIS rings you when it needs you, and you can ring JARVIS. A voice agent at ElevenLabs does the talking; the tools stay with JARVIS."]
       ]],
-      ["Connections", [
-        ["connect", "Connect apps", "Let your other AI apps (Claude Code, Cursor, VS Code, your own scripts) and cloud agents hand JARVIS a task. They connect with a key only you have."]
+      ["Access", [
+        ["connect", "External access", "Let your other AI apps (Claude Code, Cursor, VS Code, your own scripts) and cloud agents hand JARVIS a task. They connect with a key only you have."]
       ]],
       ["System", [
         ["console", "Console", "Make this console yours: accent, cinematic or quiet atmosphere, comfortable or compact density, and system or reduced motion. Browser-local, immediate and available offline."],
@@ -82,6 +86,51 @@ window.JarvisSettings = function (context) {
     var TABS = NAV.reduce(function (all, group) { return all.concat(group[1]); }, []);
     var sview = { reply: null, tools: [], tab: "overview", error: "", toolsError: "", toolsLoaded: false };
     var navGroups = [], navButtons = {}, settingsLoad = 0;
+    // Non-secret form drafts belong to this dialog instance, never localStorage.
+    var drafts = {}, catalogUnmount = null;
+    function draftKey(field) { return (field.dataset.section || sview.tab) + ":" + field.id; }
+    function paintDrafts() { var button = $("settings-discard"); if (button) { button.disabled = !Object.keys(drafts).length; button.title = "Unsaved fields stay in this page across sections. Reloading discards them."; } }
+    function forgetDraft(field) { delete drafts[draftKey(field)]; paintDrafts(); }
+    function acknowledgeDraft(field, value) { if (drafts[draftKey(field)] === value) forgetDraft(field); }
+    function walkFields(node, visit) {
+      Array.from(node.children || []).forEach(function (child) {
+        if (/^(INPUT|SELECT|TEXTAREA)$/.test(child.tagName)) visit(child);
+        walkFields(child, visit);
+      });
+    }
+    function rememberDraft(event) {
+      var field = event.target;
+      if (!field.id || field.type === "password" || field.type === "checkbox" || field.dataset.autosave) return;
+      drafts[draftKey(field)] = field.value;
+      paintDrafts();
+    }
+    $("settings-body").addEventListener("input", rememberDraft);
+    $("settings-body").addEventListener("change", rememberDraft);
+    function restoreDrafts(body) {
+      walkFields(body, function (field) {
+        var key = draftKey(field);
+        if (Object.prototype.hasOwnProperty.call(drafts, key)) field.value = drafts[key];
+      });
+      walkFields(body, function (field) { if (field.restoreDraft) field.restoreDraft(); });
+    }
+    function clearSecrets() { walkFields($("settings-body"), function (field) { if (field.type === "password") field.value = ""; }); }
+    function appsPanel(body) {
+      var entries = [
+        { id: "connections", name: "GitHub", description: "Repositories, issues and pull requests. Sign in, check access or disconnect.", status: "Open to check account" },
+        { id: "google", name: "Google", description: "Gmail and Calendar. Configure sign-in and allowed actions.", status: keyIsSet("google") ? "Client configured · sign-in checked in details" : "Setup needed" },
+        { id: "voice", name: "Voice & web search", description: "ElevenLabs voice and web search credentials.", status: keyIsSet("voice") || keyIsSet("search") ? "Credentials saved" : "Optional setup" },
+        { id: "files", name: "Files & coding", description: "Folder access, coding agents and sandbox configuration.", status: tabState("files") === "ok" ? "Configured" : "Access off until configured" },
+        { id: "permissions", name: "Browser & documentation", description: "Built-in tools. Inspect available tools and choose when JARVIS asks.", status: "Managed by JARVIS · availability in details" },
+        { id: "programs", name: "Custom tools (MCP)", description: "Connect a local program or remote tool server. For advanced integrations.", status: "Open to inspect servers" }
+      ];
+      if (window.JarvisControls) catalogUnmount = window.JarvisControls.mountCatalog(body, entries, goTab);
+      else entries.forEach(function (entry) {
+        var card = section(entry.name, entry.description + " " + entry.status);
+        var open = el("button", "", "Open " + entry.name);
+        open.addEventListener("click", function () { goTab(entry.id); });
+        card.appendChild(open); body.appendChild(card);
+      });
+    }
     function settingsNote(text, bad) {
       var note = $("settings-note");
       note.textContent = text || "";
@@ -91,11 +140,17 @@ window.JarvisSettings = function (context) {
       settingsNote("Could not do that (" + (error.status || "no reply") + ")", true);
     }
     // Changes that only take effect after a restart are listed in the footer, so it is always clear whether one is waiting.
-    var pendingRestart = [], restartInFlight = false;
+    var pendingRestart = [], restartInFlight = false, restartHints = {};
+    function integrationRestart(name, needed) {
+      if (needed) restartHints[name] = true; else delete restartHints[name];
+      pendingRestart = pendingRestart.filter(function (item) { return item !== name; });
+      if (needed) pendingRestart.push(name);
+      paintRestart();
+    }
     function paintRestart() {
       var hint = $("settings-hint"), button = $("settings-restart");
       var waiting = pendingRestart.length > 0;
-      hint.textContent = waiting ? "Waiting for a restart: " + pendingRestart.join(", ") + "." : "Nothing is waiting for a restart.";
+      hint.textContent = sview.reply && sview.reply.restart_state_known === false ? "Saved changes could not be compared with startup. Restart status is unknown." : waiting ? "Waiting for a restart: " + pendingRestart.join(", ") + "." : "Nothing is waiting for a restart.";
       hint.className = "dim" + (waiting ? " hot" : "");
       button.className = waiting ? "hot" : "";
       button.disabled = !waiting || !sview.reply || !!sview.error || restartInFlight;
@@ -111,12 +166,15 @@ window.JarvisSettings = function (context) {
       loadSettings();
     }
     function focusSettingsTab() {
+      var picker = $("settings-section-pick");
+      if (picker && picker.getClientRects && picker.getClientRects().length) { picker.focus(); return; }
       var button = navButtons[sview.tab];
       if (button && !button.hidden) button.focus(); else $("settings-body").focus();
     }
     function goTab(id) {
       if (!TABS.some(function (tab) { return tab[0] === id; })) return;
       if (sview.tab !== id) {
+        clearSecrets();
         sview.tab = id;
         settingsNote("");
         renderSettings();
@@ -231,7 +289,9 @@ window.JarvisSettings = function (context) {
     function stateBadge(setting) {
       var set = setting.value !== null && setting.value !== undefined;
       var atDefault = set && setting.default && String(setting.value) === String(setting.default);
-      return el("span", "badge " + (set && !atDefault ? "on" : "off"), atDefault ? "default" : set ? "set" : setting.default ? "default" : "off");
+      var badge = el("span", "badge " + (set && !atDefault ? "on" : "off"), atDefault ? "default" : set ? "set" : setting.default ? "default" : "off");
+      badge.setAttribute("aria-hidden", "true");
+      return badge;
     }
     // One setting: its field, Save (and Unset when set), and either its help (when set) or what "unset" means (when not).
     var LABELS = {
@@ -266,7 +326,8 @@ window.JarvisSettings = function (context) {
     }
     var controlNumber = 0;
     function describeControl(field, label, help) {
-      if (!field.id) field.id = "settings-field-" + (++controlNumber);
+      if (!field.id) field.id = "settings-field-" + sview.tab + "-" + (++controlNumber);
+      field.dataset.section = sview.tab;
       label.setAttribute("for", field.id);
       if (help) {
         help.id = field.id + "-help";
@@ -280,6 +341,7 @@ window.JarvisSettings = function (context) {
       name.appendChild(stateBadge(setting));
       var field = el("input");
       field.type = "text";
+      field.id = "setting-" + setting.key;
       field.value = showFor(setting);
       field.placeholder = setting.default ? "default: " + setting.default : (setting.example ? "e.g. " + setting.example : "(not set)");
       var acts = el("div", "acts");
@@ -287,15 +349,19 @@ window.JarvisSettings = function (context) {
       save.addEventListener("click", function () {
         var values = valuesFor(setting.kind, field.value);
         if (!values.length || !values[0]) { settingsNote("Enter a value, or use Unset.", true); return; }
+        var submitted = field.value;
+        save.disabled = true;
         putJson("/settings/" + encodeURIComponent(setting.key), "PUT", { values: values }).then(function () {
+          acknowledgeDraft(field, submitted);
           afterSave(setting, live, labelFor(setting, label));
-        }, function (error) { settingsNote(explain(error, "That value was refused."), true); });
+        }, function (error) { save.disabled = false; settingsNote(explain(error, "That value was refused."), true); });
       });
       acts.appendChild(save);
       if (isSetting(setting)) {
         var unset = el("button", "", "Unset");
         unset.addEventListener("click", function () {
           putJson("/settings/" + encodeURIComponent(setting.key), "DELETE").then(function () {
+            forgetDraft(field);
             afterSave(setting, live, labelFor(setting, label) + " removed");
           },
             function (error) { settingsNote(explain(error, "That cannot be removed on its own."), true); });
@@ -305,6 +371,7 @@ window.JarvisSettings = function (context) {
       var help = helpNode(isSetting(setting) ? setting.help : setting.unset_means);
       describeControl(field, name, help);
       save.setAttribute("aria-label", "Save " + labelFor(setting, label));
+      save.id = field.id + "-save";
       row.appendChild(name);
       row.appendChild(field);
       row.appendChild(acts);
@@ -352,6 +419,7 @@ window.JarvisSettings = function (context) {
       name.title = setting.key;
       name.appendChild(stateBadge(setting));
       var select = el("select");
+      select.dataset.autosave = "true";
       options.forEach(function (option) { var node = el("option", "", option[1]); node.value = option[0]; select.appendChild(node); });
       select.value = isSetting(setting) ? String(setting.value) : "";
       if (select.value !== (isSetting(setting) ? String(setting.value) : "")) select.value = "";
@@ -460,12 +528,27 @@ window.JarvisSettings = function (context) {
     var openPicker = null;
     function modelPicker(input) {
       var wrap = el("div", "combo");
-      var toggle = el("button", "combo-toggle", "\u25BE");
+      var toggle = el("button", "combo-toggle");
       toggle.type = "button";
-      toggle.title = "Show the models";
+      toggle.tabIndex = -1;
+      toggle.disabled = true;
+      toggle.title = "Load models to see suggestions; you can also type a name.";
       toggle.setAttribute("aria-label", "Show model choices");
+      var chevron = el("span", "chevron");
+      chevron.setAttribute("aria-hidden", "true");
+      toggle.appendChild(chevron);
       var menu = el("ul", "combo-list");
+      menu.id = input.id + "-options";
+      menu.setAttribute("role", "listbox");
+      menu.setAttribute("aria-label", "Model suggestions");
       menu.hidden = true;
+      input.setAttribute("role", "combobox");
+      input.setAttribute("aria-autocomplete", "list");
+      input.setAttribute("aria-controls", menu.id);
+      input.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-controls", menu.id);
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-haspopup", "listbox");
       wrap.appendChild(input);
       wrap.appendChild(toggle);
       wrap.appendChild(menu);
@@ -476,43 +559,58 @@ window.JarvisSettings = function (context) {
       }
       function draw() {
         var shown = visible();
+        if (active >= shown.length) active = -1;
+        input.removeAttribute("aria-activedescendant");
         menu.replaceChildren();
-        if (!models.length) {
-          menu.appendChild(el("li", "note", "Press Load models to see what this provider offers, or type a model name."));
-        } else if (!shown.length) {
-          menu.appendChild(el("li", "note", "No model matches. Keep typing to use that name as it is."));
+        if (!shown.length) {
+          var empty = el("li", "note", "No matching models. You can still use the name you typed.");
+          empty.setAttribute("role", "presentation");
+          menu.appendChild(empty);
         }
         shown.forEach(function (m, index) {
           var item = el("li", (m.likely_chat ? "" : "dim ") + (m.id === input.value ? "current " : "") + (index === active ? "active" : ""), m.id + (m.likely_chat ? "" : "   (probably not a chat model)"));
-          item.addEventListener("mousedown", function (event) { event.preventDefault(); choose(m.id); });
+          item.id = menu.id + "-" + index;
+          item.setAttribute("role", "option");
+          item.setAttribute("aria-selected", index === active || (active < 0 && m.id === input.value) ? "true" : "false");
+          item.addEventListener("mousedown", function (event) { event.preventDefault(); });
+          item.addEventListener("click", function () { choose(m.id); });
           menu.appendChild(item);
-          if (index === active) item.scrollIntoView({ block: "nearest" });
+          if (index === active) { input.setAttribute("aria-activedescendant", item.id); item.scrollIntoView({ block: "nearest" }); }
         });
       }
       function open() {
+        if (!models.length) return;
         if (openPicker && openPicker !== api2) openPicker.close();
         openPicker = api2;
         menu.hidden = false;
+        input.setAttribute("aria-expanded", "true");
+        toggle.setAttribute("aria-expanded", "true");
         draw();
       }
       function close() {
         menu.hidden = true;
+        input.setAttribute("aria-expanded", "false");
+        toggle.setAttribute("aria-expanded", "false");
+        input.removeAttribute("aria-activedescendant");
         active = -1;
         typed = false;
         if (openPicker === api2) openPicker = null;
       }
-      function choose(id) { input.value = id; close(); input.dispatchEvent(new Event("change")); }
-      toggle.addEventListener("mousedown", function (event) { event.preventDefault(); if (menu.hidden) { input.focus(); open(); } else close(); });
-      input.addEventListener("focus", function () { typed = false; active = -1; open(); });
+      function choose(id) { input.value = id; close(); input.focus(); input.dispatchEvent(new Event("change", { bubbles: true })); }
+      toggle.addEventListener("mousedown", function (event) { event.preventDefault(); });
+      toggle.addEventListener("click", function () { if (menu.hidden) { input.focus(); open(); } else close(); });
+      input.addEventListener("focus", function () { typed = false; active = -1; });
       input.addEventListener("click", function () { if (menu.hidden) open(); });
       input.addEventListener("input", function () { typed = true; active = -1; if (menu.hidden) open(); else draw(); });
       input.addEventListener("keydown", function (event) {
+        if (event.isComposing) return;
         var shown = visible();
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
           if (menu.hidden) open();
           if (!shown.length) return;
-          active = (active + (event.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length;
+          active = active < 0 ? (event.key === "ArrowDown" ? 0 : shown.length - 1)
+            : Math.max(0, Math.min(shown.length - 1, active + (event.key === "ArrowDown" ? 1 : -1)));
           draw();
         } else if (event.key === "Enter" && !menu.hidden && active >= 0 && shown[active]) {
           event.preventDefault();
@@ -521,18 +619,23 @@ window.JarvisSettings = function (context) {
           close();
         }
       });
-      document.addEventListener("mousedown", function (event) { if (!menu.hidden && !wrap.contains(event.target)) close(); });
       var api2 = {
         element: wrap,
         close: close,
+        contains: function (target) { return wrap.contains(target); },
         // Sets the models on offer; `show` opens the list so the person sees it arrive.
         setModels: function (list, show) {
           models = list || [];
+          active = -1;
+          toggle.disabled = !models.length;
+          toggle.title = models.length ? "Show model choices" : "Load models to see suggestions; you can also type a name.";
+          if (!models.length) { close(); return; }
           if (show && models.length) { input.focus(); open(); } else if (!menu.hidden) draw();
         }
       };
       return api2;
-    }    function providerCard(slot) {
+    }
+    function providerCard(slot) {
       var fallback = slot === "fallback";
       var urlKey = fallback ? "daemon.executor_fallback_base_url" : "daemon.executor_base_url";
       var modelKey = fallback ? "daemon.executor_fallback_model_name" : "daemon.executor_model_name";
@@ -549,8 +652,8 @@ window.JarvisSettings = function (context) {
       title.appendChild(el("span", "badge " + (isSet ? "on" : "off"), isSet ? "set" : "off"));
       card.appendChild(title);
       card.appendChild(el("p", "lead", fallback
-        ? "Asked instead when the main model is rate limited, overloaded, down or out of credit. A different provider keeps JARVIS working through an outage; what a run is saying is then sent to that provider."
-        : "Choose a provider and model. Loading models and testing are optional, explicit provider requests. A submitted key is cleared; paste it again when saving if it is not already on file."));
+        ? "Used when the main model is unavailable or limited. A different provider can keep JARVIS working during an outage; conversation content is sent to that provider."
+        : "Choose the provider and model JARVIS uses for conversations. Save & test saves the setup, then checks the model."));
 
       var select = el("select");
       select.id = "settings-model-" + slot + "-provider";
@@ -592,7 +695,7 @@ window.JarvisSettings = function (context) {
         providerHelp.textContent = p.help || "";
         // With "same provider" there is no address or key of its own to show.
         if (addressRow) addressRow.hidden = isSame();
-        if (keyRowNode) keyRowNode.hidden = isSame();
+        if (keyRowNode) keyRowNode.hidden = isSame() || !p.needs_key;
       }
       var addressRow = null, keyRowNode = null;
       function say(text, bad) { status.textContent = text; status.className = "help " + (bad ? "bad" : ""); }
@@ -601,6 +704,7 @@ window.JarvisSettings = function (context) {
         keyBox.value = "";
         if (p.id !== "custom") address.value = p.url;
         if (p.id === "custom" && !addressChanged()) address.value = "";
+        drafts[draftKey(address)] = address.value;
         picker.setModels([], false);
         say("");
         refreshFields();
@@ -608,6 +712,7 @@ window.JarvisSettings = function (context) {
       address.addEventListener("input", function () {
         var p = providerFor(address.value);
         if (!isSame() && p) select.value = p.id;
+        drafts[draftKey(select)] = select.value;
         refreshFields();
       });
       refreshFields();
@@ -636,7 +741,7 @@ window.JarvisSettings = function (context) {
       var test = el("button", "", "Test");
       test.addEventListener("click", function () { ask(true); });
       var save = el("button", "", "Save");
-      save.addEventListener("click", function () {
+      function saveProvider(check) {
         var p = chosen(), typed = keyBox.value.trim(), name = model.value.trim();
         if (!name) { say("Choose or type a model first.", true); return; }
         var changes = [{ key: modelKey, values: [name] }];
@@ -647,27 +752,35 @@ window.JarvisSettings = function (context) {
           // The key on file belongs to the address it was saved for: never leave it standing for a different provider.
           if (p.needs_key && !typed && (addressChanged() || keyState !== "set")) { say("Paste the key for " + p.name + " first.", true); return; }
         }
-        var keyStep = function () {
-          if (typed && !isSame() && p.needs_key) return putJson("/settings/keys/" + which, "PUT", { key: typed });
-          if (!isSame() && !p.needs_key && (addressChanged() || keyState !== "set")) return putJson("/settings/keys/" + which, "PUT", { key: "ollama" });
-          if (isSame() && fallback && keyState === "set") return putJson("/settings/keys/fallback", "DELETE");
-          return Promise.resolve();
-        };
+        var payload = { slot: slot, model: name, base_url: isSame() ? null : address.value.trim() };
+        if (!isSame() && typed && p.needs_key) payload.key = typed;
+        else if (!isSame() && !p.needs_key && (addressChanged() || keyState !== "set")) payload.key = "ollama";
         keyBox.value = "";
-        putJson("/settings", "PUT", { changes: changes }).then(keyStep).then(function () {
+        save.disabled = true;
+        var submittedDrafts = [[select, select.value], [address, address.value], [model, model.value]];
+        putJson("/settings/provider", "PUT", payload).then(function () {
+          submittedDrafts.forEach(function (entry) { acknowledgeDraft(entry[0], entry[1]); });
           saved(fallback ? "Fallback model" : "Main model");
-        }, function (error) { say(explain(error, "That was refused."), true); });
-      });
-      var acts = el("div", "acts");
-      acts.appendChild(load); acts.appendChild(test); acts.appendChild(save);
+          if (check) putJson("/settings/models", "POST", { slot: slot, test_model: name }).then(function (reply) {
+            settingsNote("Provider saved. " + (reply.test && reply.test.ok ? "Model check passed. Restart to use it for conversation." : "Model check failed: " + (reply.test ? reply.test.message : "No test result.")), !(reply.test && reply.test.ok));
+          }, function (error) { settingsNote(explain(error, "Provider saved, but its model check failed. Open Brain to retry."), true); });
+        }, function (error) { save.disabled = false; say(explain(error, "That was refused; your previous provider is unchanged."), true); });
+      }
+      save.addEventListener("click", function () { saveProvider(false); });
+      var saveTest = el("button", "yes", "Save & test");
+      saveTest.addEventListener("click", function () { if (!save.disabled) saveProvider(true); });
+      var acts = el("div", "acts provider-actions");
+      acts.appendChild(load); acts.appendChild(test); acts.appendChild(save); acts.appendChild(saveTest);
 
       addressRow = providerRow("Provider address", address);
       keyRowNode = providerRow("API key" + (keyState === "set" ? " (saved, hidden)" : ""), keyBox, null,
-        helpNode("Write-only: the key is cleared when submitted and is never stored in browser preferences."));
+        helpNode("Write-only. Loading or testing clears a typed key; enter it again before saving. Never stored in browser preferences."));
       card.appendChild(providerRow("Provider", select, null, providerHelp));
       card.appendChild(addressRow);
       card.appendChild(keyRowNode);
-      card.appendChild(providerRow("Model name", picker.element, acts, status, model));
+      card.appendChild(providerRow("Model name", picker.element, null, status, model));
+      card.appendChild(acts);
+      select.restoreDraft = refreshFields;
       refreshFields();
       return card;
     }
@@ -839,6 +952,7 @@ window.JarvisSettings = function (context) {
         customRow.appendChild(el("span", "name", "Command"));
         var customField = el("input");
         customField.type = "text"; customField.autocomplete = "off"; customField.spellcheck = false;
+        customField.setAttribute("aria-label", "Coding agent command");
         customField.value = chosen === "custom" ? (info.command || []).join(" ") : "";
         customField.placeholder = "e.g. npx -y @github/copilot@1.0.96 --acp";
         customRow.appendChild(customField);
@@ -896,6 +1010,13 @@ window.JarvisSettings = function (context) {
         holder.appendChild(out);
       }
       api("/code-agents").then(paint, function () { holder.appendChild(el("p", "help bad", "The coding agents could not be listed.")); });
+      var activity = el("button", "", "View coding tasks in Activity");
+      activity.addEventListener("click", function () { closeSettings(); if (context.openActivity) context.openActivity(); });
+      card.appendChild(activity);
+      return card;
+    }
+    function mountCodingTasks(parent, isVisible) {
+      var card = el("div", "coding-tasks");
       var taskHeader = el("div", "code-task-header");
       taskHeader.appendChild(el("h4", "", "Background coding tasks"));
       var refreshTasks = el("button", "", "\u21bb");
@@ -1044,7 +1165,7 @@ window.JarvisSettings = function (context) {
       }
       var pollTimer = null, activeTasks = false;
       function tasksVisible() {
-        return !$('settings').hidden && sview.tab === "files" && $("settings-body").contains(card);
+        return isVisible() && parent.contains(card);
       }
       function scheduleTasks() {
         if (pollTimer !== null) clearTimeout(pollTimer);
@@ -1076,8 +1197,9 @@ window.JarvisSettings = function (context) {
         });
       }
       refreshTasks.addEventListener("click", function () { loadTasks(false); });
+      parent.appendChild(card);
       loadTasks(false);
-      return card;
+      return function () { if (pollTimer !== null) clearTimeout(pollTimer); card.remove(); };
     }
     var POSTURES = [["default", "Default (the rules decide)"], ["ask", "Always ask first"], ["trusted", "Run without asking"], ["off", "Off"]];
     var permFilter = { text: "", changedOnly: false };
@@ -1281,7 +1403,7 @@ window.JarvisSettings = function (context) {
         secret.placeholder = status.client_secret_set ? "Saved; enter a replacement only to change it" : "Paste the app client secret once";
         callback.textContent = status.callback_url || "The daemon has not reported a callback address.";
         line.textContent = status.pending ? "Waiting for GitHub sign-in..." : status.connected ? "Signed in as " + (status.login || "your GitHub account") + " (saved connection). " + (status.restart_needed ? "Restart JARVIS to register its tools." : "Tools were registered at startup; Test checks the connection now.") : status.configured ? "Ready to sign in. Press Connect GitHub." : "Complete the one-time app setup below, then press Connect GitHub.";
-        if (status.connected && status.restart_needed) needsRestart("GitHub tools");
+        integrationRestart("GitHub tools", !!(status.connected && status.restart_needed));
         controls();
       }
       function active() { return !$("settings").hidden && sview.tab === "connections" && body.contains(card); }
@@ -1346,10 +1468,11 @@ window.JarvisSettings = function (context) {
         "Enter the code in the Status box above. From then on only your chat is answered; everyone else is ignored."
       ], keyState === "set", "Messages go through Telegram's servers, so treat this chat like any cloud chat. Nothing needs to be opened on your network."));
       var row = el("div", "set-row");
-      var name = el("span", "name", "Bot token");
+      var name = el("label", "name", "Bot token");
       name.appendChild(el("span", "badge " + (keyState === "set" ? "on" : "off"), keyState));
       var field = el("input");
       field.type = "password";
+      field.id = "settings-telegram-token";
       field.autocomplete = "off";
       field.placeholder = keyState === "set" ? "set; paste a new token to replace it (this unpairs the chat)" : "123456:ABC-DEF...";
       var acts = el("div", "acts");
@@ -1367,7 +1490,9 @@ window.JarvisSettings = function (context) {
       row.appendChild(name);
       row.appendChild(field);
       row.appendChild(acts);
-      row.appendChild(el("span", "help", "Stored in a private file on this machine and never shown again."));
+      var tokenHelp = el("span", "help", "Stored in a private file on this machine and never shown again.");
+      describeControl(field, name, tokenHelp);
+      row.appendChild(tokenHelp);
       body.appendChild(row);
       function paint(status) {
         more.replaceChildren();
@@ -1388,6 +1513,8 @@ window.JarvisSettings = function (context) {
           code.inputMode = "numeric";
           code.maxLength = 6;
           code.placeholder = "123456";
+          code.setAttribute("aria-label", "Telegram pairing code");
+          code.autocomplete = "one-time-code";
           var go = el("button", "yes", "Pair");
           function pair() {
             go.disabled = true;
@@ -1696,7 +1823,7 @@ window.JarvisSettings = function (context) {
         secret.placeholder = current.client_secret_set ? "Saved for this client; leave empty to keep it" : "Optional for public clients";
         line.textContent = current.pending ? "Waiting for browser sign-in. Finish at the provider, then press Check sign-in." : current.connected ? "OAuth grant saved on this computer. Test tools checks reachability now." : current.configured ? "App setup saved. Press Connect to sign in." : "Complete the one-time app setup, then press Connect.";
         if (!current.pending) signIn.replaceChildren();
-        if (current.restart_needed) needsRestart("OAuth tools: " + server.name);
+        integrationRestart("OAuth tools: " + server.name, !!current.restart_needed);
         controls();
       }
       function fail(message) { pending = false; out.className = "help bad"; out.textContent = message; controls(); }
@@ -1718,7 +1845,7 @@ window.JarvisSettings = function (context) {
         pending = true; controls(); signIn.replaceChildren(); out.className = "help"; out.textContent = "Starting browser sign-in...";
         putJson(base + "/connect", "POST", {}).then(function (reply) {
           pending = false;
-          if ($("settings").hidden || sview.tab !== "advanced" || !$("settings-body").contains(panel)) { closeBlank(); return; }
+          if ($("settings").hidden || sview.tab !== "programs" || !$("settings-body").contains(panel)) { closeBlank(); return; }
           var address = mcpOAuthAddress(reply);
           if (!address) { closeBlank(); fail("The daemon did not provide a valid provider sign-in address. No provider page was opened."); return; }
           var opened = false;
@@ -1849,13 +1976,17 @@ window.JarvisSettings = function (context) {
         if (!remote || oauth) bearer.value = "";
         if (test) test.disabled = oauth;
         bearer.placeholder = "mcp:" + (name.value.trim() || "NAME") + ":KEY";
-        bearerHelp.textContent = "If this remote server needs a bearer token, first run jarvis keys set " + bearer.placeholder + " in a terminal. Its prompt is hidden. Enter only that reference here, never the token. Use this server's name and an address without a query. Leave blank for no authorization. GitHub sign-in stays under Connections.";
+        bearerHelp.textContent = "If this remote server needs a bearer token, first run jarvis keys set " + bearer.placeholder + " in a terminal. Its prompt is hidden. Enter only that reference here, never the token. Use this server's name and an address without a query. Leave blank for no authorization. GitHub sign-in is under Apps & tools → GitHub.";
       }
       command.addEventListener("input", updateBearer); name.addEventListener("input", updateBearer); auth.addEventListener("change", updateBearer);
       updateBearer();
       var only = el("input"); only.type = "checkbox";
       var readRow = el("div", "set-row toggle");
-      readRow.appendChild(el("span", "name", "It only reads"));
+      var approvalLabel = el("label", "name", "Trust this server’s tools as read-only");
+      only.id = "mcp-trust-read-only";
+      approvalLabel.setAttribute("for", only.id);
+      only.setAttribute("aria-label", "Trust this server’s tools as read-only");
+      readRow.appendChild(approvalLabel);
       var wrap = el("label", "switch");
       var track = el("span", "track");
       var state = el("span", "state", "No");
@@ -1863,7 +1994,7 @@ window.JarvisSettings = function (context) {
       only.addEventListener("change", function () { state.textContent = only.checked ? "Yes" : "No"; });
       readRow.appendChild(wrap);
       readRow.appendChild(el("span"));
-      readRow.appendChild(el("span", "help", "Yes lets its tools run without asking. Only say yes for a program that cannot change anything. By default every call asks you first."));
+      readRow.appendChild(el("span", "help", "Off: ask before using this server. On: classify its tools as read-only so they can run without asking. This is your trust decision; it does not prevent the server from changing data."));
       var out = el("p", "help", "");
       var test = el("button", "", "Test");
       var add = el("button", "yes", "Add");
@@ -1937,8 +2068,8 @@ window.JarvisSettings = function (context) {
             custom.forEach(function (server) { holder.appendChild(mcpServerCard(server, reload)); });
           }
           holder.appendChild(mcpAddForm(reload));
+          integrationRestart("Programs", !!reply.restart_needed);
           if (reply.restart_needed) {
-            needsRestart("Programs");
             var banner = el("div", "card");
             banner.appendChild(el("p", "lead", "A restart switches your changes on."));
             var go = el("button", "yes", "Restart now");
@@ -1965,6 +2096,7 @@ window.JarvisSettings = function (context) {
       var wrap = el("div");
       wrap.appendChild(el("p", "help", title));
       var box = el("textarea"); box.readOnly = true; box.rows = 4; box.value = getText(); box.spellcheck = false;
+      box.setAttribute("aria-label", title);
       box.addEventListener("focus", function () { box.select(); });
       wrap.appendChild(box);
       var acts = el("div", "acts"); acts.appendChild(copyButton(function () { return box.value; })); wrap.appendChild(acts);
@@ -2000,6 +2132,8 @@ window.JarvisSettings = function (context) {
       ].forEach(function (text, index) { details.appendChild(el("p", "help", (index + 1) + ". " + text)); });
       var host = el("input"); host.type = "text"; host.placeholder = "jarvis.yourdomain.com"; host.autocomplete = "off"; host.spellcheck = false;
       var token = el("input"); token.type = "password"; token.placeholder = "cloudflared.exe service install eyJ... (or just the eyJ... token)"; token.autocomplete = "off"; token.spellcheck = false;
+      host.setAttribute("aria-label", "Hostname");
+      token.setAttribute("aria-label", "Tunnel token");
       var save = el("button", "yes", "Save and connect");
       save.addEventListener("click", function () {
         save.disabled = true; out.className = "help"; out.textContent = "";
@@ -2007,11 +2141,11 @@ window.JarvisSettings = function (context) {
           function (error) { save.disabled = false; out.className = "help bad"; out.textContent = explain(error, "That could not be saved."); });
       });
       var hostRow = el("div", "set-row");
-      hostRow.appendChild(el("span", "name", "hostname"));
+      hostRow.appendChild(el("span", "name", "Hostname"));
       hostRow.appendChild(host);
       hostRow.appendChild(el("span"));
       var tokenRow = el("div", "set-row");
-      tokenRow.appendChild(el("span", "name", "tunnel token"));
+      tokenRow.appendChild(el("span", "name", "Tunnel token"));
       tokenRow.appendChild(token);
       var acts = el("div", "acts"); acts.appendChild(save); tokenRow.appendChild(acts);
       details.appendChild(hostRow);
@@ -2095,14 +2229,14 @@ window.JarvisSettings = function (context) {
           var toggle = el("button", info.enabled ? "" : "yes", info.enabled ? "Switch off" : "Switch on");
           toggle.addEventListener("click", function () {
             toggle.disabled = true;
-            putJson("/mcp/access", "POST", { enabled: !info.enabled }).then(function () { needsRestart("Connect apps"); reload(); },
+            putJson("/mcp/access", "POST", { enabled: !info.enabled }).then(function () { needsRestart("External access"); reload(); },
               function (error) { toggle.disabled = false; settingsNote(explain(error, "That could not be changed."), true); });
           });
           acts.appendChild(toggle);
           card.appendChild(acts);
           holder.appendChild(card);
+          integrationRestart("External access", !!info.restart_needed);
           if (info.restart_needed) {
-            needsRestart("Connect apps");
             var banner = el("div", "card");
             banner.appendChild(el("p", "lead", "One restart switches this on or off."));
             var go = el("button", "yes", "Restart now");
@@ -2307,13 +2441,21 @@ window.JarvisSettings = function (context) {
           goTab(visible[index].id.replace("settings-tab-", ""));
         });
       }
+      var mobilePick = $("settings-section-pick");
+      if (mobilePick && !mobilePick.children.length) {
+        TABS.forEach(function (tab) { var option = el("option", "", tab[1]); option.value = tab[0]; mobilePick.appendChild(option); });
+        mobilePick.addEventListener("change", function () { goTab(mobilePick.value); });
+      }
+      if (mobilePick) mobilePick.value = sview.tab;
       var terms = ((search && search.value) || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
       var visible = [];
       navGroups.forEach(function (group) {
         var shown = false;
         group.entries.forEach(function (entry) {
           var tab = entry.tab, button = entry.button;
-          var text = (tab[1] + " " + tab[2]).toLowerCase();
+          var groupForTab = { brain: "brain", voice: "voice", files: "files", alerts: "advanced", advanced: "advanced", phone: "phone", google: "google", telegram: "telegram" };
+          var fields = ((sview.reply && sview.reply.settings) || []).filter(function (setting) { return setting.group === groupForTab[tab[0]]; }).map(function (setting) { return setting.key + " " + labelFor(setting) + " " + setting.help; }).join(" ");
+          var text = (tab[1] + " " + tab[2] + " " + fields).toLowerCase();
           button.hidden = !terms.every(function (term) { return text.indexOf(term) >= 0; });
           if (!button.hidden) { visible.push(button); shown = true; }
           var selected = sview.tab === tab[0];
@@ -2370,6 +2512,7 @@ window.JarvisSettings = function (context) {
         label.setAttribute("for", id);
         var select = el("select");
         select.id = id;
+        select.dataset.autosave = "true";
         controls[key] = select;
         options.forEach(function (option) {
           var item = el("option", "", option[1]);
@@ -2418,9 +2561,16 @@ window.JarvisSettings = function (context) {
     var lastTab = "";
     function renderSettings() {
       var body = $("settings-body");
+      if (openPicker) openPicker.close();
       // A switch or a save redraws the tab; stay where the person was scrolling instead of jumping to the top.
       var scrolled = lastTab === sview.tab ? body.scrollTop : 0;
-      var focusId = lastTab === sview.tab && sview.tab === "overview" && document.activeElement ? document.activeElement.id : "";
+      var focused = document.activeElement;
+      var focusId = lastTab === sview.tab && focused && body.contains(focused) ? focused.id : "";
+      var selection = focused && typeof focused.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd] : null;
+      clearSecrets();
+      paintDrafts();
+      if (catalogUnmount) { catalogUnmount(); catalogUnmount = null; }
+      controlNumber = 0;
       lastTab = sview.tab;
       settingsNav();
       body.replaceChildren();
@@ -2488,6 +2638,10 @@ window.JarvisSettings = function (context) {
         body.appendChild(foldersCard());
         if (byKey("daemon.code_agent")) body.appendChild(codingAgentCard());
         if (byKey("daemon.code_sandbox_image")) body.appendChild(codeCard());
+      } else if (sview.tab === "programs") {
+        programsPanel(body);
+      } else if (sview.tab === "apps") {
+        appsPanel(body);
       } else if (sview.tab === "connect") {
         connectPanel(body);
       } else if (sview.tab === "permissions") {
@@ -2517,10 +2671,11 @@ window.JarvisSettings = function (context) {
         var claimed = ["daemon.mcp_serve_port", "daemon.notifications", "daemon.push_topic", "daemon.push_server", "daemon.quiet_hours"];
         body.appendChild(section("JARVIS itself"));
         inGroup("advanced").filter(function (s) { return claimed.indexOf(s.key) < 0; }).forEach(function (s) { body.appendChild(rowFor(s)); });
-        body.appendChild(section("For developers", "Letting other apps use JARVIS is under Connect apps."));
-        programsPanel(body);
+        body.appendChild(section("For developers", "Let other apps call JARVIS under External access. Add services JARVIS can call under Apps & tools."));
       }
+      restoreDrafts(body);
       body.scrollTop = scrolled;
+      if (focusId && $(focusId)) { $(focusId).focus(); if (selection && $(focusId).setSelectionRange) $(focusId).setSelectionRange(selection[0], selection[1]); }
     }
     function loadSettings() {
       var request = ++settingsLoad;
@@ -2534,6 +2689,7 @@ window.JarvisSettings = function (context) {
       api("/settings").then(function (reply) {
         if (request !== settingsLoad) return;
         sview.reply = reply;
+        if (Array.isArray(reply.restart_changes)) pendingRestart = reply.restart_changes.map(function (key) { return LABELS[key] || key.replace(/^daemon\./, "").replace(/_/g, " "); }).concat(Object.keys(restartHints));
         sview.error = "";
         refresh();
       }, function (error) {
@@ -2564,7 +2720,7 @@ window.JarvisSettings = function (context) {
       focusSettingsTab();
       loadSettings();
     }
-    function closeSettings() { $("settings").hidden = true; }
+    function closeSettings() { if (openPicker) openPicker.close(); clearSecrets(); $("settings").hidden = true; }
     // Things that have stopped working while nobody is looking at Settings: the internet address, the phone door, Telegram. Each is
     // asked from the daemon's own status routes (no provider is called), and only a real problem is shown, with a way to the tab that fixes it.
     var attention = $("attention");
@@ -2588,7 +2744,7 @@ window.JarvisSettings = function (context) {
         api("/mcp/access").then(function (info) {
           var pub = info.public || {};
           if (pub.wanted && pub.status && pub.status.state === "problem") {
-            items.push({ tab: "connect", label: "Connect apps", text: "The internet address is not working: " + (pub.status.reason || "it could not start") + "." });
+            items.push({ tab: "connect", label: "External access", text: "The internet address is not working: " + (pub.status.reason || "it could not start") + "." });
           }
         }, none),
         api("/phone").then(function (phone) {
@@ -2606,6 +2762,9 @@ window.JarvisSettings = function (context) {
     setInterval(checkAttention, 20000);
     $("open-settings").addEventListener("click", openSettings);
     $("settings-close").addEventListener("click", closeSettings);
+    if ($("settings-discard")) $("settings-discard").addEventListener("click", function () {
+      drafts = {}; clearSecrets(); renderSettings(); settingsNote("Unsaved drafts discarded. Saved settings are unchanged.");
+    });
     var settingsSearch = $("settings-search"), settingsEmpty = $("settings-search-empty");
     if (settingsSearch) {
       settingsSearch.setAttribute("aria-controls", "settings-tabs");
@@ -2613,6 +2772,9 @@ window.JarvisSettings = function (context) {
     }
     if (settingsEmpty) settingsEmpty.setAttribute("role", "status");
     $("settings").addEventListener("click", function (event) { if (event.target === $("settings")) closeSettings(); });
+    function dismissPickerOutside(event) { if (openPicker && !openPicker.contains(event.target)) openPicker.close(); }
+    document.addEventListener("mousedown", dismissPickerOutside);
+    document.addEventListener("focusin", dismissPickerOutside);
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape" && !$("settings").hidden) {
         // Escape closes an open model list first, and the dialog only when none is open.
@@ -2629,7 +2791,7 @@ window.JarvisSettings = function (context) {
       paintRestart();
       settingsNote("Restarting. This page reconnects by itself in a few seconds.");
       putJson("/restart" + (restartForce ? "?force=true" : ""), "POST").then(function () {
-        pendingRestart = [];
+        settingsNote("Restart requested. Reopen settings after reconnection to verify that the saved changes are applied.");
         restartInFlight = false;
         paintRestart();
         restartForce = false;
@@ -2648,5 +2810,6 @@ window.JarvisSettings = function (context) {
       });
     });
     paintRestart();
+    return { mountCodingTasks: mountCodingTasks };
 };
 }());

@@ -424,6 +424,10 @@ pub fn router(state: GatewayState) -> Router {
             post(crate::settings_service::probe_models),
         )
         .route(
+            "/settings/provider",
+            axum::routing::put(crate::settings_service::set_provider),
+        )
+        .route(
             "/settings/keys/{which}",
             axum::routing::put(crate::settings_service::set_key)
                 .delete(crate::settings_service::remove_key),
@@ -476,13 +480,7 @@ pub fn router(state: GatewayState) -> Router {
         .merge(health_routes())
         // The heads-up display's two static assets: no data, no secret, served without the credential
         // (`crate::hud::is_public_asset` is the one place that says so).
-        .route(crate::hud::PAGE_PATH, get(crate::hud::page))
-        .route(crate::hud::ALIAS_PATH, get(crate::hud::page))
-        .route(crate::hud::SCRIPT_PATH, get(crate::hud::script))
-        .route(crate::hud::HEAD_PATH, get(crate::hud::head))
-        .route(crate::hud::MISSION_PATH, get(crate::hud::mission))
-        .route(crate::hud::SETTINGS_PATH, get(crate::hud::settings))
-        .route(crate::hud::STYLE_PATH, get(crate::hud::style))
+        .merge(hud_routes())
         .route(
             crate::google_account::CALLBACK_PATH,
             get(crate::google_service::callback),
@@ -499,6 +497,18 @@ pub fn router(state: GatewayState) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .with_state(state)
+}
+
+fn hud_routes() -> Router<GatewayState> {
+    Router::new()
+        .route(crate::hud::PAGE_PATH, get(crate::hud::page))
+        .route(crate::hud::ALIAS_PATH, get(crate::hud::page))
+        .route(crate::hud::SCRIPT_PATH, get(crate::hud::script))
+        .route(crate::hud::HEAD_PATH, get(crate::hud::head))
+        .route(crate::hud::MISSION_PATH, get(crate::hud::mission))
+        .route(crate::hud::SETTINGS_PATH, get(crate::hud::settings))
+        .route(crate::hud::CONTROLS_PATH, get(crate::hud::controls))
+        .route(crate::hud::STYLE_PATH, get(crate::hud::style))
 }
 
 /// The routes each feature module brings, under `/api/v1`. They are merged into the authenticated router, so none of them can omit the
@@ -2946,6 +2956,60 @@ mod tests {
                 response.status(),
                 StatusCode::UNAUTHORIZED,
                 "{method} {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn settings_report_changes_from_other_clients_until_a_new_startup_snapshot() {
+        let (app, credential, _profile, paths) = test_router_with_settings().await;
+        jarvis_storage::settings::set(&paths, "workspace_daily_token_limit", &["50000".to_owned()])
+            .unwrap_or_else(|error| panic!("{error}"));
+        for _ in 0..2 {
+            let request = Request::builder()
+                .uri("/api/v1/settings")
+                .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                .body(Body::empty())
+                .unwrap_or_else(|error| panic!("{error}"));
+            let response = app
+                .clone()
+                .oneshot(request)
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 131_072)
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+            let reply: serde_json::Value =
+                serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(reply["restart_state_known"], true);
+            assert!(reply["restart_changes"].as_array().is_some_and(|changes| {
+                changes.contains(&serde_json::json!("daemon.workspace_daily_token_limit"))
+            }));
+            assert_eq!(reply["profile_id"].as_str().map(str::len), Some(64));
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_form_requires_authentication_and_refuses_credential_reuse() {
+        let (app, credential, _profile, paths) = test_router_with_settings().await;
+        let document = std::fs::read(jarvis_storage::ConfigStore::from_paths(&paths).path())
+            .unwrap_or_default();
+        let body = r#"{"slot":"main","model":"other","base_url":"https://other.example/v1"}"#;
+        for (token, expected) in [
+            ("wrong", StatusCode::UNAUTHORIZED),
+            (credential.as_str(), StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(put_json("/api/v1/settings/provider", token, body))
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(response.status(), expected);
+            assert_eq!(
+                std::fs::read(jarvis_storage::ConfigStore::from_paths(&paths).path())
+                    .unwrap_or_default(),
+                document
             );
         }
     }

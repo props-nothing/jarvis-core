@@ -31,6 +31,7 @@ const SCRIPT: &str = include_str!("hud/hud.js");
 const HEAD: &str = include_str!("hud/head.js");
 const MISSION: &str = include_str!("hud/mission.js");
 const SETTINGS: &str = include_str!("hud/settings.js");
+const CONTROLS: &str = include_str!("hud/generated/controls.js");
 const STYLE: &str = include_str!("hud/hud.css");
 
 /// The path of the page.
@@ -51,6 +52,8 @@ pub const MISSION_PATH: &str = "/mission.js";
 
 /// The path of the settings dialog's script.
 pub const SETTINGS_PATH: &str = "/settings.js";
+/// The compiled, local integration catalog (no owner data).
+pub const CONTROLS_PATH: &str = "/controls.js";
 
 /// The path of the page's stylesheet.
 pub const STYLE_PATH: &str = "/hud.css";
@@ -76,6 +79,7 @@ pub fn is_public_asset(method: &Method, path: &str) -> bool {
             || path == HEAD_PATH
             || path == MISSION_PATH
             || path == SETTINGS_PATH
+            || path == CONTROLS_PATH
             || path == STYLE_PATH)
 }
 
@@ -106,6 +110,11 @@ fn asset(body: &'static str, content_type: &'static str) -> Response {
 /// `GET /` and `GET /hud`
 pub async fn page() -> Response {
     asset(PAGE, "text/html; charset=utf-8")
+}
+
+/// `GET /controls.js`.
+pub async fn controls() -> Response {
+    asset(CONTROLS, "text/javascript; charset=utf-8")
 }
 
 /// `GET /hud.js`
@@ -145,6 +154,9 @@ mod tests {
         assert!(is_public_asset(&Method::GET, "/head.js"));
         assert!(is_public_asset(&Method::GET, "/mission.js"));
         assert!(is_public_asset(&Method::GET, "/settings.js"));
+        assert!(is_public_asset(&Method::GET, "/controls.js"));
+        assert!(!is_public_asset(&Method::POST, "/controls.js"));
+        assert!(!is_public_asset(&Method::GET, "/controls.js/"));
         assert!(is_public_asset(&Method::GET, "/hud.css"));
         for path in [
             "/hud/",

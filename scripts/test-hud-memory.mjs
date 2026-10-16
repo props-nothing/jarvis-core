@@ -171,7 +171,7 @@ test('memory inspector lazy loading targets the real Operations overlay', () => 
 
 test('opening Operations loads once and closing or reopening preserves the inspected draft', async () => {
   const fixture = harness();
-  Object.assign(fixture.context, { abilitiesAt: 1, loadProjects() {} });
+  Object.assign(fixture.context, { abilitiesAt: 1, loadProjects() {}, mountActivityTasks() {} });
   vm.runInNewContext(source.slice(source.indexOf('  function setOps(open)'), source.indexOf('  $("open-ops").addEventListener')), fixture.context);
   fixture.context.setOps(false);
   assert.equal(fixture.calls.length, 0);

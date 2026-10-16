@@ -9,11 +9,14 @@
 //    Edge the browser's recognizer may use its vendor's cloud service; the page says so.
 (function () {
   var fragment = new URLSearchParams(location.hash.slice(1));
-  if (fragment.get("token")) {
-    sessionStorage.setItem("jarvis-token", fragment.get("token"));
-    history.replaceState(null, "", location.pathname);
-  }
-  var token = sessionStorage.getItem("jarvis-token");
+  var token = fragment.get("token");
+  try {
+    if (token) sessionStorage.setItem("jarvis-token", token);
+    else token = sessionStorage.getItem("jarvis-token");
+  } catch (ignored) { /* This tab can still use its fragment credential without browser storage. */ }
+  if (fragment.get("token")) history.replaceState(null, "", location.pathname);
+  function storedPreference(key) { try { return localStorage.getItem(key); } catch (ignored) { return null; } }
+
 
   function $(id) { return document.getElementById(id); }
   function el(tag, className, text) {
@@ -37,7 +40,7 @@
     session: null, activity: "",
     offline: true, needYou: 0, working: 0, thinking: 0,
     listening: false, speaking: false, voiceBusy: false, preparing: false, voiceKind: "browser", level: 0, voiceLevel: 0,
-    speak: localStorage.getItem("jarvis-speak") === "1",
+    speak: storedPreference("jarvis-speak") === "1",
     wake: false,
     pending: [], announced: null
   };
@@ -51,6 +54,7 @@
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
     }
+    if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) init.signal = AbortSignal.timeout(15000);
     return fetch("/api/v1" + path, init).then(function (response) {
       if (!response.ok) {
         var error = new Error(String(response.status));
@@ -144,25 +148,65 @@
   var chat = $("chat");
   // Conversations are kept in this browser (not in a tab), so closing the page and coming back continues where you were, and an
   // earlier conversation can be reopened. Each one remembers its daemon session, so reopening it carries on with the same context.
-  var CHATS_KEY = "jarvis-chats", CURRENT_KEY = "jarvis-chat-current", MAX_CHATS = 30;
-  var chats = [];
-  try { chats = JSON.parse(localStorage.getItem(CHATS_KEY) || "[]"); } catch (ignored) { chats = []; }
-  if (!Array.isArray(chats)) chats = [];
+  var historyScope = null, historyTouched = false;
+  var CHATS_KEY = null, CURRENT_KEY = null, MAX_CHATS = 30, chats = [];
+  function historyNotice(problem) {
+    $("history-status").textContent = problem || "Browser history: up to 30 chats, latest 60 messages each. Daemon records are retained separately.";
+    $("history-status").dataset.warning = problem && !problem.startsWith("Loading") ? "true" : "false";
+  }
+  historyNotice("Loading this profile’s browser history…");
+  $("clear-history").disabled = true;
+  function loadProfileHistory() {
+    return (token ? api("/settings") : Promise.resolve(null)).then(function (profile) {
+      if (!profile || !/^[a-f0-9]{64}$/.test(profile.profile_id)) throw new Error("Profile unavailable");
+      historyScope = profile.profile_id;
+      CHATS_KEY = "jarvis-chats:" + historyScope;
+      CURRENT_KEY = "jarvis-chat-current:" + historyScope;
+      var stored;
+      try { stored = JSON.parse(localStorage.getItem(CHATS_KEY) || "[]"); }
+      catch (ignored) { historyNotice("Browser history could not be read. This page still works."); return; }
+      if (!Array.isArray(stored)) stored = [];
+      stored = stored.filter(function (item) { return item && typeof item.id === "string" && Array.isArray(item.transcript); }).slice(0, MAX_CHATS);
+      stored.forEach(function (item) { item.transcript = item.transcript.filter(function (entry) { return entry && typeof entry.text === "string" && ["user", "jarvis", "system"].indexOf(entry.role) >= 0; }).slice(-60); });
+      if (!historyTouched && stored.length) {
+        chats = stored;
+        currentChat = chats.find(function (item) { return item.id === storedPreference(CURRENT_KEY); }) || chats[0];
+        transcript = currentChat.transcript; S.session = currentChat.session || null;
+        renderChat(); paintProjectPick();
+      } else {
+        chats = chats.concat(stored.filter(function (item) { return !chats.some(function (current) { return current.id === item.id; }); }));
+        if (historyTouched) saveChats();
+      }
+      $("clear-history").disabled = false;
+      paintUnread();
+      historyNotice();
+    }).catch(function () { historyNotice("Profile unavailable: this conversation will only be kept in this page. Reload after reconnecting to restore browser history."); });
+  }
   function newChatRecord() {
     return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), session: null, project: null, title: "", updated: Date.now(), transcript: [] };
   }
-  var currentChat = chats.filter(function (item) { return item.id === localStorage.getItem(CURRENT_KEY); })[0] || chats[0] || null;
+  var currentChat = chats.filter(function (item) { return item.id === (CURRENT_KEY && storedPreference(CURRENT_KEY)); })[0] || chats[0] || null;
   if (!currentChat) { currentChat = newChatRecord(); chats.unshift(currentChat); }
   var transcript = currentChat.transcript || [];
   S.session = currentChat.session || null;
   function saveChats() {
+    if (!historyScope) { historyTouched = true; return; }
     try {
       chats = chats.filter(function (item) { return item === currentChat || (item.transcript && item.transcript.length); })
         .sort(function (a, b) { return b.updated - a.updated; }).slice(0, MAX_CHATS);
       localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
       localStorage.setItem(CURRENT_KEY, currentChat.id);
-    } catch (ignored) { /* storage full or blocked: the conversation still works, it is just not kept */ }
+    } catch (ignored) { historyNotice("Browser storage is full or blocked. New messages are not being kept after this page closes."); }
   }
+  $("clear-history").addEventListener("click", function () {
+    if (!window.confirm("Clear this profile’s browser history? Daemon records and running work are retained.")) return;
+    try {
+      if (CHATS_KEY) localStorage.removeItem(CHATS_KEY);
+      if (CURRENT_KEY) localStorage.removeItem(CURRENT_KEY);
+      chats = [currentChat]; currentChat.transcript = []; transcript = [];
+      chat.replaceChildren(); closeChats(); historyNotice("Browser history cleared. Daemon records are retained separately.");
+    } catch (ignored) { historyNotice("Browser history could not be cleared. Storage is unavailable."); }
+  });
   function remember(role, text, pictures) {
     var entry = { role: role, text: text };
     if (pictures && pictures.length) entry.pictures = pictures;
@@ -239,26 +283,21 @@
   }
   function renderEmpty() {
     var empty = el("div", "empty");
-    empty.appendChild(el("span", "eyebrow", currentChat.project ? "Project workspace" : "A little less busywork"));
-    empty.appendChild(el("h2", "", currentChat.project ? "Move your project forward." : "What shall we work on?"));
-    empty.appendChild(el("p", "", "Turn a question into a plan, a useful answer, or a next step. You decide what happens."));
+    empty.appendChild(el("h2", "", currentChat.project ? "What’s next for this project?" : "Start a conversation"));
+    empty.appendChild(el("p", "", "Ask anything, or choose a starting point."));
     var ideas = currentChat.project
       ? [["Check project progress", "Where does this project stand?"], ["Plan the next steps", "Plan the next steps and start on the first"], ["Find sources", "Research this and give me sources"]]
       : [["Explore your capabilities", "What can you do for me?"], ["Research a topic", "Research the latest news on AI agents and give me sources"], ["Plan a project", "Help me plan a project"]];
     var row = el("div", "suggest");
-    ideas.forEach(function (idea, index) {
+    ideas.forEach(function (idea) {
       var button = el("button");
       button.type = "button";
-      button.appendChild(el("span", "suggest-index", "0" + (index + 1)));
+      button.title = "Add this idea to your message";
       button.appendChild(el("span", "", idea[0]));
-      var arrow = el("span", "suggest-arrow", "\u2197");
-      arrow.setAttribute("aria-hidden", "true");
-      button.appendChild(arrow);
       button.addEventListener("click", function () { $("input").value = idea[1]; $("input").focus(); });
       row.appendChild(button);
     });
     empty.appendChild(row);
-    empty.appendChild(el("p", "empty-help", "Pick a starting point, then edit and send. Type / to focus the message. Use the microphone to talk; approvals stay one yes or no."));
     chat.appendChild(empty);
   }
   function renderChat() {
@@ -287,6 +326,7 @@
     return true;
   }
   function newChat() {
+    historyTouched = true;
     // An empty conversation is already a new one.
     if (!transcript.length) { closeChats(); $("input").focus(); return; }
     var fresh = newChatRecord();
@@ -295,7 +335,7 @@
     feel("attentive", 1.4, "nod");
     $("input").focus();
   }
-  function closeChats() { $("chats").hidden = true; }
+  function closeChats() { $("chats").hidden = true; $("chats-btn").setAttribute("aria-expanded", "false"); }
   function renderChats() {
     var host = $("chats");
     host.replaceChildren();
@@ -310,6 +350,7 @@
       row.appendChild(el("span", "dim", age(new Date(item.updated).toISOString())));
       var drop = el("button", "chatdrop", "\u00D7");
       drop.title = "Remove this conversation from this browser";
+      drop.setAttribute("aria-label", "Remove " + (item.title || "untitled conversation") + " from browser history");
       drop.addEventListener("click", function () {
         if (item === currentChat) { if (busy) { say("one moment: it is still answering."); return; } }
         chats = chats.filter(function (other) { return other !== item; });
@@ -324,7 +365,7 @@
   $("new-chat").addEventListener("click", newChat);
   $("chats-btn").addEventListener("click", function () {
     var host = $("chats");
-    if (host.hidden) { renderChats(); host.hidden = false; } else closeChats();
+    if (host.hidden) { renderChats(); host.hidden = false; $("chats-btn").setAttribute("aria-expanded", "true"); } else closeChats();
   });
 
   // What a tool call means in words, for the progress line: "writing app/page.tsx" says more than "Requested jarvis.files.write".
@@ -619,7 +660,7 @@
     send(text);
   });
   $("input").addEventListener("keydown", function (event) {
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    if (event.key === "Enter" && !event.isComposing) {
       event.preventDefault();
       $("composer").requestSubmit();
     }
@@ -1245,6 +1286,7 @@
     var typing = focused && (/^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName) || focused.isContentEditable);
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || document.querySelector(".overlay:not([hidden])")) return;
     if (event.key === "Escape") {
+      if ($("voice-options").open) { $("voice-options").open = false; $("voice-options-toggle").focus(); return; }
       if (!$("ops").hidden) { setOps(false); return; }
       if (!$("chats").hidden) { closeChats(); return; }
       interruptSpeech(); if (recognizer && !S.wake) stopListening(); return;
@@ -1257,11 +1299,30 @@
   });
 
   // ---- the Ops page: everything that is not the face or the conversation --------------------------------------------
+  document.addEventListener("click", function (event) {
+    var options = $("voice-options");
+    if (options.open && !options.contains(event.target)) options.open = false;
+  });
+  function mountActivityTasks() {
+    if (!settingsControls || !$("coding-tasks")) return;
+    if (codingTasksDispose) codingTasksDispose();
+    codingTasksDispose = settingsControls.mountCodingTasks($("coding-tasks"), function () { return !$("ops").hidden && !$("coding-tasks-frame").hidden; });
+  }
   function setOps(open) {
     $("ops").hidden = !open;
+    if (open) mountActivityTasks();
+    else if (codingTasksDispose) { codingTasksDispose(); codingTasksDispose = null; }
     if (open) { abilitiesAt = 0; if (typeof refreshAbilities === "function") refreshAbilities(); loadProjects(); }
     if (!memoryLoaded && !$("ops").hidden) loadMemory(true);
   }
+  var codingTasksDispose = null;
+  function selectOpsSection(section) {
+    if (section === "activity") mountActivityTasks();
+    document.querySelectorAll("[data-ops-section]").forEach(function (panel) { panel.hidden = panel.dataset.opsSection !== section; });
+    ["activity", "automations", "knowledge", "tools"].forEach(function (id) { $("ops-" + id).setAttribute("aria-pressed", id === section ? "true" : "false"); });
+    if (section === "knowledge" && !memoryLoaded) loadMemory(true);
+  }
+  ["activity", "automations", "knowledge", "tools"].forEach(function (id) { $("ops-" + id).addEventListener("click", function () { selectOpsSection(id); }); });
   $("open-ops").addEventListener("click", function () { setOps($("ops").hidden); });
   $("ops-close").addEventListener("click", function () { setOps(false); });
   $("ops").addEventListener("click", function (event) { if (event.target === $("ops")) setOps(false); });
@@ -2259,7 +2320,7 @@
     }
   }, true);
   syncDialogs();
-  JarvisSettings({ $: $, el: el, api: api, putJson: putJson, explain: explain, families: families, familyLabel: familyLabel });
+  var settingsControls = JarvisSettings({ $: $, el: el, api: api, putJson: putJson, explain: explain, families: families, familyLabel: familyLabel, openActivity: function () { setOps(true); selectOpsSection("activity"); } });
   // ---- header and caption ---------------------------------------------------------------------------------------
   function uiState() {
     if (S.offline) return "offline";
@@ -2271,7 +2332,7 @@
     return "idle";
   }
   var captions = {
-    offline: "offline", idle: "standing by", working: "working", listening: "listening",
+    offline: "offline", idle: "", working: "working", listening: "listening",
     speaking: "speaking", waiting: "needs you"
   };
   function paintHeader() {
@@ -2287,25 +2348,18 @@
     var active = S.working + (S.thinking && !S.working ? 1 : 0);
     var work = $("pill-work");
     work.className = "pill" + (active > 0 ? " work" : "");
-    work.lastChild.textContent = active + " working";
+    work.lastChild.textContent = S.offline ? "Work status unavailable" : active + " working";
+    work.hidden = active === 0;
     var wait = $("pill-wait");
     wait.className = "pill" + (S.needYou > 0 ? " wait" : "");
-    wait.lastChild.textContent = S.needYou + " waiting";
+    wait.lastChild.textContent = S.offline ? "Decisions status unavailable" : S.needYou + " waiting";
+    wait.hidden = S.needYou === 0;
     $("stop").hidden = active + S.needYou === 0;
     $("stage").dataset.state = mode;
-    $("presence-work-value").textContent = S.offline ? "\u2014" : String(active).padStart(2, "0");
-    $("presence-wait-value").textContent = S.offline ? "\u2014" : String(S.needYou).padStart(2, "0");
-    $("presence-work-detail").textContent = S.offline ? "Link unavailable" : active ? "Follow the work" : "Standing by";
-    $("presence-wait-detail").textContent = S.offline ? "Link unavailable" : S.needYou ? "Your yes or no" : "Nothing waiting";
     $("stage-talk").disabled = !Recognition;
-    $("stage-state").textContent = preparing ? "Preparing voice" : { offline: "Offline", idle: "Ready when you are", working: "Working", listening: "Listening", speaking: "Speaking", waiting: "Your decision" }[mode];
-    $("stage-detail").textContent = S.offline ? (token ? "Daemon unavailable. Reconnecting…" : "Open with jarvis hud to connect.")
-      : S.needYou ? S.needYou + (S.needYou === 1 ? " decision waiting. You stay in command." : " decisions waiting. You stay in command.")
-      : active ? active + (active === 1 ? " active task. Follow its progress in Operations." : " active tasks. Follow their progress in Operations.")
-      : "Your rules. Your control. Ready for the next step.";
     var status = $("composer-status");
     var statusText = S.offline ? (token ? "Offline · your draft stays here until JARVIS reconnects." : "Open with jarvis hud to connect. You can draft a message here.")
-      : busy ? "Answering · you can draft your next message." : "Enter to send · / to focus · you approve the actions that need it.";
+      : busy ? "Answering · you can draft your next message." : "";
     if (status.textContent !== statusText) status.textContent = statusText;
     status.className = "composer-status" + (S.offline ? " bad" : "");
     $("send").disabled = S.offline || busy;
@@ -2313,9 +2367,8 @@
     document.title = (S.needYou > 0 ? "(" + S.needYou + ") " : "") + "JARVIS";
   }
   $("quiet").addEventListener("click", interruptSpeech);
-  $("stage-write").addEventListener("click", function () { $("input").focus(); });
   $("stage-talk").addEventListener("click", function () { $("mic").click(); });
-  ["stage-ops", "presence-work", "presence-wait"].forEach(function (id) { $(id).addEventListener("click", function () { setOps(true); }); });
+  ["pill-work", "pill-wait"].forEach(function (id) { $(id).addEventListener("click", function () { setOps(true); selectOpsSection("activity"); }); });
   function paintClock() { $("clock").textContent = new Date().toLocaleTimeString([], { hour12: false }); }
   paintClock();
   setInterval(paintClock, 1000);
@@ -2438,38 +2491,45 @@
   }
 
   // ---- polling --------------------------------------------------------------------------------------------------
-  var lastSignature = "";
+  var lastSignature = "", refreshPending = null, pollFailures = 0;
+  var optionalPanels = { schedules: [], triggers: [] };
   function refresh() {
-    if (!token) {
-      $("message").textContent = "No credential. Open this page with `jarvis hud`.";
-      return Promise.resolve();
+    if (refreshPending) return refreshPending;
+    if (!token) { $("message").textContent = "No credential. Open this page with `jarvis hud`."; return Promise.resolve(); }
+    var optionalProblems = [];
+    function optional(name) {
+      return api("/" + name).then(function (reply) { optionalPanels[name] = reply[name] || []; }, function (error) {
+        if (error.status === 401) throw error;
+        optionalProblems.push(name);
+      });
     }
-    return Promise.all([api("/runs?limit=30"), api("/approvals"), api("/schedules"), api("/triggers")]).then(function (results) {
-      S.offline = false;
-      $("message").textContent = "";
-      var signature = JSON.stringify([results[0].runs, results[1].approvals, results[2].schedules, results[3].triggers]);
+    refreshPending = Promise.allSettled([api("/runs?limit=30"), api("/approvals"), optional("schedules"), optional("triggers")]).then(function (settled) {
+      var failed = settled.find(function (item) { return item.status === "rejected"; });
+      if (failed) throw failed.reason;
+      var results = settled.map(function (item) { return item.value; });
+      S.offline = false; pollFailures = 0;
+      $("message").textContent = optionalProblems.length ? "Could not refresh " + optionalProblems.join(" and ") + ". Their last available data is shown; conversation remains available." : "";
+      var runs = results[0].runs, approvals = results[1].approvals;
+      var signature = JSON.stringify([runs, approvals, optionalPanels]);
       if (signature !== lastSignature) {
         lastSignature = signature;
-        renderPanels(results[0].runs, results[1].approvals, results[2].schedules, results[3].triggers);
+        renderPanels(runs, approvals, optionalPanels.schedules, optionalPanels.triggers);
       }
-      announce(results[1].approvals);
-      observeRuns(results[0].runs);
-      watchSchedules(results[2].schedules);
-      refreshAbilities();
-      refreshProposals();
+      announce(approvals); observeRuns(runs); watchSchedules(optionalPanels.schedules);
+      refreshAbilities(); refreshProposals();
       if (Date.now() - digestAt > 60000) loadDigest();
       if (Date.now() - contactsAt > 30000) loadContacts();
       if (Date.now() - projectsAt > 15000) loadProjects();
-      tickAges();
-      paintHeader();
+      tickAges(); paintHeader();
     }).catch(function (error) {
-      lastSignature = "";
-      S.offline = true;
-      $("message").textContent = error.status === 401
-        ? "The daemon rejected the credential. Open this page again with `jarvis hud`."
-        : "Cannot reach the daemon.";
+      lastSignature = ""; S.offline = true; pollFailures += 1;
+      $("message").textContent = error.status === 401 ? "The daemon rejected the credential. Open this page again with `jarvis hud`." : "Cannot reach the daemon.";
       paintHeader();
-    });
+    }).finally(function () { refreshPending = null; });
+    return refreshPending;
+  }
+  function poll() {
+    refresh().finally(function () { setTimeout(poll, document.hidden ? 15000 : Math.min(30000, 1500 * Math.pow(2, pollFailures))); });
   }
 
   // ---- the face -------------------------------------------------------------------------------------------------
@@ -2536,6 +2596,18 @@
     ctx.stroke();
     if (quiet) { ctx.restore(); return; }
     var turn = calm ? 0 : t * 0.035 * speed;
+    // Perspective rings sit behind the face. They are ambient geometry, never invented telemetry.
+    [-0.38, 0.38].forEach(function (tilt, index) {
+      ctx.strokeStyle = rgba(index ? 0.055 : 0.1);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, size * 0.98, size * 0.67, tilt, 0, TAU);
+      ctx.stroke();
+      var start = (index ? -turn : turn) + index * Math.PI;
+      ctx.strokeStyle = rgba(index ? 0.14 : 0.27);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, size * 0.98, size * 0.67, tilt, start, start + 0.5);
+      ctx.stroke();
+    });
     ctx.shadowColor = rgba(0.35);
     ctx.shadowBlur = 8;
     for (var segment = 0; segment < 12; segment += 1) {
@@ -2570,11 +2642,13 @@
   function draw(t, mode) {
     ctx.clearRect(0, 0, W, H);
     // While the live view is up, the face makes room for it and moves to the right.
-    var room = window.JarvisMission ? Math.min(350, W * 0.38) * JarvisMission.dock(W) : 0;
+    var compact = window.innerWidth <= 960;
+    var room = !compact && window.JarvisMission ? Math.min(350, W * 0.38) * JarvisMission.dock(W) : 0;
     var avail = W - room;
-    var top = W < 600 ? 116 : 40, bottom = W < 600 ? 104 : 84;
-    var usable = Math.max(120, H - top - bottom);
-    var size = Math.min(avail * FACE, (usable - 28) / 1.75);
+    // The mobile stage is compact; the desktop leaves room for the controls below.
+    var top = compact ? 12 : 20, bottom = compact ? 8 : 100;
+    var usable = Math.max(80, H - top - bottom);
+    var size = Math.min(avail * FACE, usable / 1.55);
     var cx = room + avail / 2, cy = top + usable / 2;
     var quiet = document.documentElement.dataset.atmosphere === "quiet";
     var reach = size * 0.5;
@@ -2611,7 +2685,7 @@
           ? Math.min(1, S.voiceLevel * 1.6)
           : 0.12 + 0.88 * Math.pow(Math.abs(Math.sin(t * 9.3) * Math.sin(t * 3.7 + 0.8)), 0.7);
       }
-      JarvisHead.draw(ctx, cx, cy, size, { rgb: current, energy: energy, mode: mode, mouth: mouth, t: t, calm: calm });
+      JarvisHead.draw(ctx, cx, cy, size * 1.55, { rgb: current, energy: energy, mode: mode, mouth: mouth, t: t, calm: calm });
     }
 
     // the voice, as a thin line of bars under the face, only while someone is talking
@@ -2638,17 +2712,20 @@
     if (window.JarvisMission) JarvisMission.draw(ctx, cx, cy, reach, t, current, calm, W, H, room);
 
     // the caption sits just under the face, wherever the face is
-    var place = Math.round(cy + size * 0.87) + "|" + Math.round(room);
+    var place = Math.round(cy + size * 0.74) + "|" + Math.round(room);
     if (place !== captionAt) {
       captionAt = place;
       var label = $("caption");
-      label.style.top = Math.round(cy + size * 0.87) + "px";
+      label.style.top = Math.round(cy + size * 0.74) + "px";
       label.style.bottom = "auto";
       label.style.left = Math.round(room) + "px";
     }
   }
 
   function frame(stamp) {
+    if (document.hidden || !$("settings").hidden || !$("ops").hidden || window.innerHeight <= 600 && window.innerWidth <= 960) {
+      setTimeout(function () { requestAnimationFrame(frame); }, 250); return;
+    }
     var t = stamp / 1000;
     calm = document.documentElement.dataset.motion === "reduced" || !!(motionQuery && motionQuery.matches);
     var mode = uiState();
@@ -2658,7 +2735,7 @@
     readVoiceLevel();
     energy += (targetEnergy(mode, calm ? 0 : t) - energy) * 0.12;
     draw(t, mode);
-    requestAnimationFrame(frame);
+    if (calm) setTimeout(function () { requestAnimationFrame(frame); }, 250); else requestAnimationFrame(frame);
   }
   // The face is a button: clicking it silences JARVIS. A node of the live view under the pointer is named, and pressing it opens its step.
   function canvasPoint(event) {
@@ -2678,8 +2755,8 @@
   });
   requestAnimationFrame(frame);
 
-  refresh();
-  setInterval(refresh, 1500);
+  loadProfileHistory();
+  poll();
   paintHeader();
   // a greeting when the console opens: a smile and a nod, then it carries on with its own business
   setTimeout(function () { feel("pleased", 2.4, "nod"); }, 900);

@@ -47,6 +47,111 @@ fn words(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
 }
 
+#[test]
+fn provider_save_commits_model_address_and_a_private_new_key_together() {
+    let (_scratch, paths) = Scratch::new();
+    let old_key = get(&paths, "executor_api_key_ref").unwrap_or_else(|error| panic!("{error}"));
+    set_provider(
+        &paths,
+        false,
+        "new-model",
+        Some("https://new.example/v1"),
+        Some("new-test-key"),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let new_key = get(&paths, "executor_api_key_ref").unwrap_or_else(|error| panic!("{error}"));
+    assert_ne!(old_key, new_key);
+    assert_eq!(
+        std::fs::read_to_string(new_key).ok().as_deref(),
+        Some("new-test-key")
+    );
+    assert_eq!(
+        std::fs::read_to_string(old_key).ok().as_deref(),
+        Some("ollama")
+    );
+    assert_eq!(
+        get(&paths, "executor_model_name").ok().as_deref(),
+        Some("new-model")
+    );
+    assert!(!text(&paths).contains("new-test-key"));
+}
+
+#[test]
+fn provider_refusal_preserves_config_and_old_secret_and_removes_staging_file() {
+    let (_scratch, paths) = Scratch::new();
+    let before = text(&paths);
+    let count = std::fs::read_dir(paths.config())
+        .unwrap_or_else(|error| panic!("{error}"))
+        .count();
+    // New address without a new credential must fail closed even if the browser omits its own guard.
+    assert!(
+        set_provider(
+            &paths,
+            false,
+            "new-model",
+            Some("https://other.example/v1"),
+            None
+        )
+        .is_err()
+    );
+    let invalid = before.replace(
+        "shutdown_timeout_seconds = 30",
+        "shutdown_timeout_seconds = 0",
+    );
+    std::fs::write(ConfigStore::from_paths(&paths).path(), &invalid)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        set_provider(
+            &paths,
+            false,
+            "new-model",
+            Some("https://replacement.example/v1"),
+            Some("replacement-test-key")
+        )
+        .is_err()
+    );
+    assert!(
+        set_provider(
+            &paths,
+            false,
+            "new-model",
+            Some("https://other.example/v1"),
+            Some("invalid key")
+        )
+        .is_err()
+    );
+    assert_eq!(text(&paths), invalid);
+    assert_eq!(
+        std::fs::read_dir(paths.config())
+            .unwrap_or_else(|error| panic!("{error}"))
+            .count(),
+        count
+    );
+    assert_eq!(
+        std::fs::read_to_string(paths.config().join("model.key"))
+            .ok()
+            .as_deref(),
+        Some("ollama")
+    );
+}
+
+#[test]
+fn fallback_can_return_to_main_provider_without_leaving_its_old_key_reference() {
+    let (_scratch, paths) = Scratch::new();
+    set_provider(
+        &paths,
+        true,
+        "fallback",
+        Some("https://fallback.example/v1"),
+        Some("fallback-key"),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    set_provider(&paths, true, "same-provider-model", None, None)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(get(&paths, "executor_fallback_api_key_ref").is_err());
+    assert!(get(&paths, "executor_fallback_base_url").is_err());
+}
+
 /// **Changing one setting changes one setting.** The folder grant and the key file survive a model change, which
 /// `init --force` would not have preserved.
 #[test]

@@ -3,17 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060c12">
 <title>JARVIS</title>
 <link rel="stylesheet" href="/hud.css">
 </head>
 <body>
+<a class="skip-link" href="#input">Skip to conversation</a>
 <div id="app">
   <header class="app-header">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><div><span class="logo">JARVIS</span><span class="sub">Personal operating system</span></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1 class="logo">JARVIS</h1></div>
     <div class="pills">
       <span class="pill" id="pill-link"><i></i><span>connecting</span></span>
-      <span class="pill" id="pill-work"><i></i><span>0 working</span></span>
-      <span class="pill" id="pill-wait"><i></i><span>0 waiting</span></span>
+      <button class="pill" id="pill-work" type="button" aria-controls="ops" title="Open active work" hidden><i></i><span>0 working</span></button>
+      <button class="pill" id="pill-wait" type="button" aria-controls="ops" title="Open waiting decisions" hidden><i></i><span>0 waiting</span></button>
     </div>
     <div class="spacer"></div>
     <span id="clock" aria-hidden="true"></span>
@@ -25,18 +27,11 @@
   <div id="message" role="status"></div>
   <div id="attention" class="attention" role="alert" hidden></div>
 
-  <div id="main">
+  <main id="main">
     <section id="stage" aria-label="JARVIS presence and live activity">
       <canvas id="orb" aria-hidden="true"></canvas>
-      <div class="stage-heading"><span class="eyebrow">Personal intelligence / owner controlled</span><h1>At your<br><span>command.</span></h1><p>One intelligence. Your rules.</p></div>
-      <div class="stage-mode"><i aria-hidden="true"></i><span id="stage-state">Connecting</span></div>
-      <div class="presence-rail" aria-label="Live operations shortcuts">
-        <button id="presence-work" class="presence-card" type="button" aria-controls="ops" title="Open active tasks in Operations"><span class="presence-label">Active runs</span><strong id="presence-work-value">—</strong><span class="presence-meta" id="presence-work-detail">Awaiting link</span></button>
-        <button id="presence-wait" class="presence-card" type="button" aria-controls="ops" title="Open decisions waiting for you"><span class="presence-label">Decisions</span><strong id="presence-wait-value">—</strong><span class="presence-meta" id="presence-wait-detail">Awaiting link</span></button>
-        <div class="presence-authority"><i aria-hidden="true"></i><span>You stay<br>in control.</span></div>
-      </div>
-      <div id="caption">standing by</div>
-      <div class="stage-footer"><span id="stage-detail">Connecting to your daemon.</span><button id="quiet" type="button" hidden>Silence voice <kbd>Esc</kbd></button><div class="stage-shortcuts" aria-label="Console shortcuts"><button id="stage-write" type="button"><kbd>/</kbd> Write</button><button id="stage-talk" type="button"><kbd>M</kbd> Talk</button><button id="stage-ops" type="button"><kbd>O</kbd> Operations</button></div></div>
+      <div id="caption" role="status"></div>
+      <div class="stage-footer"><button id="stage-talk" type="button"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>Talk to JARVIS <kbd>M</kbd></button><button id="quiet" type="button" hidden>Silence <kbd>Esc</kbd></button></div>
       <div id="mission" aria-live="off">
         <div class="mhead"><i></i><span id="mtitle">LIVE</span><b id="mcount"></b><button type="button" id="mclear" title="Put this away (it comes back when JARVIS does something new)" aria-label="Clear">&times;</button></div>
         <div id="mfeed"></div>
@@ -53,26 +48,25 @@
         <span class="title">Conversation</span>
         <select id="project-pick" title="The project this conversation belongs to: JARVIS is told its goal and guidance, and keeps its journal" hidden></select>
         <span class="spacer"></span>
-        <button type="button" id="chats-btn" title="Earlier conversations">History</button>
-        <button type="button" id="new-chat" title="Start a new conversation (N, or say &ldquo;new chat&rdquo;)">New chat</button>
+        <button type="button" id="chats-btn" aria-controls="chats" aria-expanded="false" title="Earlier conversations">History</button>
+        <button type="button" id="new-chat" aria-label="New chat" title="New chat (N)"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        <details id="voice-options"><summary id="voice-options-toggle" aria-label="Voice options" title="Voice options"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></summary><div id="toggles"><label><input type="checkbox" id="speak"> Speak answers</label><label><input type="checkbox" id="wake"> Wake word &ldquo;Jarvis&rdquo;</label></div></details>
       </div>
       <div id="chats" hidden></div>
+      <p id="history-status" class="history-status" role="status"></p>
+      <div class="history-tools"><button type="button" id="clear-history" title="Clear this profile’s browser history; daemon records are retained">Clear history</button></div>
       <div id="chat" aria-live="polite"></div>
       <form id="composer" autocomplete="off">
         <button type="button" id="mic" title="Talk (M)" aria-label="Talk">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2z" fill="currentColor"/></svg>
         </button>
-        <textarea id="input" rows="2" placeholder="Ask, plan, or build something…" aria-label="Message" aria-describedby="composer-status"></textarea>
-        <button type="submit" id="send" disabled>Send</button>
+        <input id="input" type="text" name="message" placeholder="Message JARVIS…" aria-label="Message" aria-describedby="composer-status" enterkeyhint="send">
+        <button type="submit" id="send" aria-label="Send message" title="Send message (Enter)" disabled><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       </form>
       <div id="composer-status" class="composer-status" role="status">Connecting to JARVIS…</div>
-      <div id="toggles">
-        <label><input type="checkbox" id="speak"> Speak answers</label>
-        <label><input type="checkbox" id="wake"> Wake word &ldquo;Jarvis&rdquo;</label>
-        <span id="hint"></span>
-      </div>
+      <p id="hint" role="status"></p>
     </aside>
-  </div>
+  </main>
 </div>
 
 <div id="ops" class="overlay" hidden>
@@ -83,18 +77,20 @@
       <span class="spacer"></span>
       <button id="ops-close">Back to JARVIS</button>
     </div>
+    <div class="ops-tabs" role="group" aria-label="Operations sections"><button id="ops-activity" aria-pressed="true" type="button">Activity</button><button id="ops-automations" aria-pressed="false" type="button">Automations</button><button id="ops-knowledge" aria-pressed="false" type="button">Knowledge</button><button id="ops-tools" aria-pressed="false" type="button">Tools & diagnostics</button></div>
     <div class="opsgrid">
       <div class="opscol">
-        <section class="frame"><h2>Waiting for you</h2><div id="waiting"></div><div id="remember"></div></section>
-        <section class="frame"><h2>Working</h2><div id="working"></div></section>
-        <section class="frame"><h2>Projects</h2><div id="projects"></div><div class="row cmd"><button id="project-new" title="Long-running work with its own goal, guidance and journal">New project</button></div></section>
-        <section class="frame"><h2>Scheduled</h2><div id="scheduled"></div></section>
-        <section class="frame"><h2>Triggers</h2><div id="triggers"></div></section>
+        <section class="frame" data-ops-section="activity"><h2>Waiting for you</h2><div id="waiting"></div><div id="remember"></div></section>
+        <section class="frame" data-ops-section="activity"><h2>Working</h2><div id="working"></div></section>
+        <section class="frame" data-ops-section="activity"><h2>Projects</h2><div id="projects"></div><div class="row cmd"><button id="project-new" title="Long-running work with its own goal, guidance and journal">New project</button></div></section>
+        <section class="frame" data-ops-section="automations" hidden><h2>Scheduled</h2><div id="scheduled"></div></section>
+        <section class="frame" data-ops-section="automations" hidden><h2>Triggers</h2><div id="triggers"></div></section>
       </div>
       <div class="opscol">
-        <section class="frame"><h2>Recent</h2><div id="recent"></div></section>
-        <section class="frame"><h2>Contacts</h2><div id="contacts"></div></section>
-        <section class="frame" id="memory-inspector" aria-labelledby="memory-heading">
+        <section class="frame" data-ops-section="activity" id="coding-tasks-frame"><h2>Coding tasks</h2><div id="coding-tasks"></div></section>
+        <section class="frame" data-ops-section="activity"><h2>Recent</h2><div id="recent"></div></section>
+        <section class="frame" data-ops-section="knowledge" hidden><h2>Contacts</h2><div id="contacts"></div></section>
+        <section class="frame" data-ops-section="knowledge" hidden id="memory-inspector" aria-labelledby="memory-heading">
           <h2 id="memory-heading">Memory</h2>
           <p class="note">Browse current memories, then read their source or correct a claim.</p>
           <form id="memory-filters">
@@ -118,22 +114,23 @@
         </section>
       </div>
       <div class="opscol">
-        <section class="frame"><h2>Last 24 hours</h2><div id="digest"></div></section>
-        <section class="frame"><h2>Telemetry</h2><div id="stats"></div></section>
-        <section class="frame"><h2>Can do</h2><div id="abilities"></div></section>
-        <p class="note">Anything that needs a yes or no also appears in the face page's lower-right tray: press Approve or Deny, or just say &ldquo;yes&rdquo; or &ldquo;no&rdquo;. The terminal works too: <code>jarvis approvals</code>.</p>
+        <section class="frame" data-ops-section="activity"><h2>Last 24 hours</h2><div id="digest"></div></section>
+        <section class="frame" data-ops-section="tools" hidden><h2>Telemetry</h2><div id="stats"></div></section>
+        <section class="frame" data-ops-section="tools" hidden><h2>Can do</h2><div id="abilities"></div></section>
+        <p class="note" data-ops-section="activity">Anything that needs a yes or no also appears in the face page's lower-right tray: press Approve or Deny, or just say &ldquo;yes&rdquo; or &ldquo;no&rdquo;. The terminal works too: <code>jarvis approvals</code>.</p>
       </div>
     </div>
   </div>
 </div>
 <div id="settings" class="overlay" hidden>
   <div class="sheet wide frame" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1">
-    <div class="settings-heading"><div><span class="eyebrow">Your intelligence. Your configuration.</span><h2>Settings <span class="settings-heading-sub">/ Control centre</span></h2></div><span class="settings-context" id="settings-section-label">Overview</span></div>
+    <div class="settings-heading"><h2>Settings</h2><span class="settings-context" id="settings-section-label">Overview</span><button id="settings-close" type="button" aria-label="Close settings" title="Close settings (Esc)">&times;</button></div>
     <div class="settings-layout">
       <div class="settings-navigation">
-        <label class="search-label" for="settings-search">Find a section</label>
-        <input id="settings-search" type="search" placeholder="Search settings…" autocomplete="off" aria-controls="settings-tabs">
+        <label class="search-label" for="settings-search">Find a setting</label>
+        <input id="settings-search" type="search" placeholder="Search settings…" autocomplete="off" aria-label="Search settings" aria-controls="settings-tabs">
         <p id="settings-search-empty" class="none" role="status" hidden>No matching sections.</p>
+        <label class="settings-mobile-label" for="settings-section-pick">Section</label><select id="settings-section-pick" aria-label="Settings section"></select>
         <nav id="settings-tabs" class="sidenav" role="tablist" aria-label="Settings sections" aria-orientation="vertical"></nav>
       </div>
       <div class="settings-main">
@@ -142,9 +139,8 @@
       </div>
     </div>
     <div class="foot">
-      <span class="dim" id="settings-hint">Nothing is waiting for a restart.</span>
+      <button type="button" id="settings-discard">Discard drafts</button><span class="dim" id="settings-hint">Nothing is waiting for a restart.</span>
       <button id="settings-restart" title="Stops JARVIS and starts it again with the saved settings">Restart to apply</button>
-      <button id="settings-close">Close</button>
     </div>
   </div>
 </div><div id="project-sheet" class="overlay" hidden>
@@ -159,6 +155,7 @@
   </div>
 </div><script src="/head.js"></script>
 <script src="/mission.js"></script>
+<script src="/controls.js"></script>
 <script src="/settings.js"></script>
 <script src="/hud.js"></script>
 </body>

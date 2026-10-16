@@ -4,7 +4,10 @@
 //! on the screen and refused at startup. Every route sits behind the local credential. **No response contains a key**: a
 //! key is accepted write-only and only its state (`set`, `not set`, `FILE MISSING`, `EMPTY FILE`) is ever reported.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use axum::{
     Json,
@@ -17,6 +20,8 @@ use jarvis_storage::settings::{self, SecretKind};
 use jarvis_storage::{AppPaths, ConfigStore};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 use crate::gateway::{GatewayState, error_response};
 
@@ -25,6 +30,7 @@ use crate::gateway::{GatewayState, error_response};
 pub struct SettingsContext {
     paths: AppPaths,
     root: Option<PathBuf>,
+    startup: Option<BTreeMap<String, String>>,
 }
 
 impl SettingsContext {
@@ -37,8 +43,44 @@ impl SettingsContext {
     /// Builds the context from the daemon's resolved paths and its `--root`, if any.
     #[must_use]
     pub fn new(paths: AppPaths, root: Option<PathBuf>) -> Self {
-        Self { paths, root }
+        let startup = configuration_snapshot(&paths).ok();
+        Self {
+            paths,
+            root,
+            startup,
+        }
     }
+}
+
+// Private fingerprints are compared only in memory; responses contain setting names, never hashes or secret bytes.
+fn configuration_snapshot(paths: &AppPaths) -> Result<BTreeMap<String, String>, String> {
+    settings::list(paths)?
+        .into_iter()
+        .filter(|view| {
+            // These switches are read live; tool postures have their own applied response.
+            !view.key.starts_with("policy.")
+                && !matches!(
+                    view.key.as_str(),
+                    "daemon.phone_approves"
+                        | "daemon.phone_opening_line"
+                        | "daemon.phone_call_anyone"
+                        | "daemon.phone_screen_callers"
+                        | "daemon.phone_calls_per_hour"
+                        | "daemon.phone_calls_per_day"
+                )
+        })
+        .map(|view| {
+            let mut value = view
+                .value
+                .unwrap_or_else(|| view.default.unwrap_or_default().to_owned());
+            if view.kind == "file" && !value.is_empty() {
+                let bytes = std::fs::read(&value)
+                    .map_err(|_| "a configured credential file cannot be read".to_owned())?;
+                let _ = write!(value, "/{:x}", Sha256::digest(bytes));
+            }
+            Ok((view.key, value))
+        })
+        .collect()
 }
 
 /// The body of `PUT /api/v1/settings/{key}`.
@@ -78,6 +120,55 @@ pub struct PostureBody {
 #[serde(deny_unknown_fields)]
 pub struct KeyBody {
     key: String,
+}
+
+/// An entire provider form. Secret input deliberately has no Debug implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderBody {
+    slot: String,
+    model: String,
+    base_url: Option<String>,
+    key: Option<String>,
+}
+
+/// `PUT /api/v1/settings/provider`: commit address, model and credential together.
+pub async fn set_provider(
+    State(state): State<GatewayState>,
+    Json(body): Json<ProviderBody>,
+) -> Response {
+    if body
+        .base_url
+        .as_deref()
+        .is_some_and(|address| jarvis_models::openai::BaseUrl::new(address).is_err())
+    {
+        return refused(
+            "That model address is not usable; use an http or https address without a login.",
+        );
+    }
+    let context = match context(&state) {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let fallback = match body.slot.as_str() {
+        "main" => false,
+        "fallback" => true,
+        _ => return refused("unknown model slot"),
+    };
+    match settings::set_provider(
+        &context.paths,
+        fallback,
+        &body.model,
+        body.base_url.as_deref(),
+        body.key.as_deref(),
+    ) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"saved": true, "restart_to_apply": true})),
+        )
+            .into_response(),
+        Err(message) => refused(&message),
+    }
 }
 
 // The error is the response itself, as every handler here returns it; boxing it would only add an unwrap at each use.
@@ -147,7 +238,25 @@ pub async fn list(State(state): State<GatewayState>) -> Response {
                     json!({ "id": preset.id, "name": preset.name, "url": preset.url, "needs_key": preset.needs_key, "help": preset.help })
                 })
                 .collect();
+            let current = configuration_snapshot(&context.paths).ok();
+            let restart_known = context.startup.is_some() && current.is_some();
+            let changes: Vec<_> = context
+                .startup
+                .as_ref()
+                .zip(current)
+                .map(|(startup, current)| {
+                    current
+                        .into_iter()
+                        .filter_map(|(key, value)| {
+                            (startup.get(&key) != Some(&value)).then_some(key)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let body = json!({
+                "profile_id": format!("{:x}", Sha256::digest(context.paths.config().to_string_lossy().as_bytes())),
+                "restart_state_known": restart_known,
+                "restart_changes": changes,
                 "settings": items,
                 "providers": providers,
                 "postures": postures,

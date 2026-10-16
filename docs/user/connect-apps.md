@@ -1,4 +1,4 @@
-# Connect apps
+# External access
 
 **Other programs can use JARVIS. They cannot become its owner.**
 
@@ -6,11 +6,11 @@
 
 Let another program use JARVIS: Claude Code, Cursor, VS Code, or your own script.
 
-This is different from [Abilities](abilities.md) (what JARVIS can use) and from Permissions (which of JARVIS's tools ask first). Connect apps is the other direction: *other programs using JARVIS*.
+This is different from [Abilities](abilities.md) (what JARVIS can use) and from Permissions (which of JARVIS's tools ask first). External access is the other direction: *other programs using JARVIS*.
 
 ## Turn it on
 
-Open **Settings → Connect apps** and use the switch, then **Restart now**. Or from a terminal:
+Open **Settings → External access** and use the switch, then **Restart now**. Or from a terminal:
 
 ```text
 jarvis mcp access on
@@ -43,7 +43,7 @@ A tool they call directly is not yet recorded in your history (the tasks they ha
 
 ## From the internet (for cloud apps such as a phone agent)
 
-A cloud app connects from its own servers, so an address that only works on this computer is no use to it. Under **Settings, Connect apps, From the internet** press **Make it reachable** (or run `jarvis mcp access public on`). JARVIS opens a free Cloudflare address, downloading Cloudflare's `cloudflared` program once if needed (about 55 MB, checked against a fixed checksum), and shows the address.
+A cloud app connects from its own servers, so an address that only works on this computer is no use to it. Under **Settings, External access, From the internet** press **Make it reachable** (or run `jarvis mcp access public on`). JARVIS opens a free Cloudflare address, downloading Cloudflare's `cloudflared` program once if needed (about 55 MB, checked against a fixed checksum), and shows the address.
 
 For ElevenLabs: Agents, Integrations, **Add custom MCP server**, Server URL = the address shown, Secret token = your key. Then attach it to your agent.
 
@@ -60,7 +60,7 @@ For a phone agent you want an address that is the same after every restart, so y
 
 1. In the Cloudflare dashboard open **Networking, Tunnels, Create tunnel** and name it (for example `jarvis`). Pick any operating system on the next page: **you do not install or run anything**, JARVIS runs Cloudflare's connector itself.
 2. On that page, under **Install and Run**, copy the command (`cloudflared.exe service install eyJ...`). **Do not run it.** The long text starting with `eyJ` is the tunnel token.
-3. In JARVIS, Settings, Connect apps, From the internet, open **Want an address that never changes?**, enter the name you want (for example `jarvis.yourdomain.com`), paste the command (or just the token) and press **Save and connect**. Or run `jarvis mcp access public named jarvis.yourdomain.com --from-env CLOUDFLARE_TUNNEL_TOKEN` (the token comes from the environment variable, a `--file`, or is typed in; it is never a command-line value). Within a few seconds Cloudflare's **Connection Status** turns to connected.
+3. In JARVIS, Settings, External access, From the internet, open **Want an address that never changes?**, enter the name you want (for example `jarvis.yourdomain.com`), paste the command (or just the token) and press **Save and connect**. Or run `jarvis mcp access public named jarvis.yourdomain.com --from-env CLOUDFLARE_TUNNEL_TOKEN` (the token comes from the environment variable, a `--file`, or is typed in; it is never a command-line value). Within a few seconds Cloudflare's **Connection Status** turns to connected.
 4. Back in Cloudflare continue to the route: add a **published application** with the same name and, as the **Service URL**, the address shown in JARVIS (usually `http://127.0.0.1:8766`).
 5. The address is now `https://jarvis.yourdomain.com/mcp`. Put it in ElevenLabs once as the MCP server URL, with your key as the secret token.
 

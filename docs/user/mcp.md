@@ -2,7 +2,7 @@
 
 **Bring an existing tool server. Keep JARVIS in charge of its effects.**
 
-[Documentation](../README.md) / [Built-in abilities](abilities.md) / [Connect apps](connect-apps.md) / [Settings](settings.md)
+[Documentation](../README.md) / [Built-in abilities](abilities.md) / [External access](connect-apps.md) / [Settings](settings.md)
 
 Most people never need this page: the browser and documentation lookup come built in and appear under **Settings, Permissions** like any other tool ([abilities.md](abilities.md)).
 
@@ -35,7 +35,7 @@ What to know: a program starts with a **small operational environment**, plus on
 
 ## Easier GitHub setup: browser sign-in
 
-For GitHub, prefer **Settings → Connections → GitHub**. Register a JARVIS OAuth app once in the expandable setup section, save its client ID and write-only client secret, then use **Connect GitHub**. The account authorization persists and refreshes when needed; no PAT, native helper, Docker or server command is required. This first connection exposes only the fixed hosted read-only tool set. See [Connections](connections.md) for registration, permissions, Test, Disconnect and outstanding live verification. The daemon still asks for an explicit restart when its tool registry needs updating; there is no automatic restart. Other compatible services use the separate [pre-registered OAuth path](#a-remote-server-with-browser-sign-in) below, not this GitHub grant.
+For GitHub, prefer **Settings → Apps & tools → GitHub**. Register a JARVIS OAuth app once in the expandable setup section, save its client ID and write-only client secret, then use **Connect GitHub**. The account authorization persists and refreshes when needed; no PAT, native helper, Docker or server command is required. This first connection exposes only the fixed hosted read-only tool set. See [Connections](connections.md) for registration, permissions, Test, Disconnect and outstanding live verification. The daemon still asks for an explicit restart when its tool registry needs updating; there is no automatic restart. Other compatible services use the separate [pre-registered OAuth path](#a-remote-server-with-browser-sign-in) below, not this GitHub grant.
 
 The named-key path below remains available for local servers without OAuth.
 
@@ -75,7 +75,7 @@ GITHUB_PERSONAL_ACCESS_TOKEN = 'mcp:github:token'
 
 - Each reference is `mcp:SERVER:KEY`; components start with a lowercase ASCII letter and contain at most 64 lowercase letters/digits/`_`/`-`. A server cannot use another server's reference.
 - Repeat `--env-ref` for multiple credentials (up to 16). Values are never accepted here. Portable credential variable names must end in `_TOKEN`, `_KEY`, `_SECRET`, `_PASSWORD` or `_CREDENTIAL` (or be that word); operational/interpreter/loader/JARVIS control variables are refused.
-- Keys use private profile files, **not encryption or an OS keychain**. Status in `jarvis mcp list` and Settings → Advanced → Programs shows reference and `set`/`not set`, not a value or file path. Provisioning is through `jarvis keys`; the browser Test button preserves your references.
+- Keys use private profile files, **not encryption or an OS keychain**. Status in `jarvis mcp list` and Settings → Apps & tools → Custom tools (MCP) shows reference and `set`/`not set`, not a value or file path. Provisioning is through `jarvis keys`; the browser Test button preserves your references.
 - A missing, empty or unreadable required key prevents that server starting. Other servers and the assistant remain available. New tools still ask according to the ordinary permission policy; a credential is not an approval.
 - Replace a key with the same `keys set` command; remove it with `jarvis keys remove mcp:github:token`. JARVIS resolves it again when the child next starts. **Restart JARVIS to stop a running child using its old environment immediately.** Revoke the PAT at GitHub when appropriate. Removing a server does not silently delete its named keys.
 - Credential-bearing child stderr is suppressed, and known literal credentials are redacted from surfaced textual/structured results, tool descriptions, identity and peer errors. This is not a sandbox or a guarantee against a program encoding/exfiltrating a key. Add only trusted programs; keep the profile private. Windows hardlinks are not detected and file checks are not race-proof confinement.
@@ -104,7 +104,7 @@ endpoint = 'https://service.example/mcp'
 authorization = 'mcp:remote:token'
 ```
 
-**Settings → Advanced → Programs** also accepts an optional **Bearer key reference** for an HTTP(S) address. Provision the value through `jarvis keys set`; the browser form accepts references only. Test preserves the selected reference. Status shows `Authorization`, the reference and `set`/`not set`, not a value or key-file path. `set` describes stored metadata, not proof that the provider accepts it. GitHub browser sign-in remains a separate option under Connections.
+**Settings → Apps & tools → Custom tools (MCP)** also accepts an optional **Bearer key reference** for an HTTP(S) address. Provision the value through `jarvis keys set`; the browser form accepts references only. Test preserves the selected reference. Status shows `Authorization`, the reference and `set`/`not set`, not a value or key-file path. `set` describes stored metadata, not proof that the provider accepts it. GitHub browser sign-in remains a separate option under Connections.
 
 - The reference must belong to the same configured server. Token destinations must be query-free; HTTPS is required outside loopback. Put no token in a URL, command argument or chat. Values must fit the provider's bearer-token format (at most 4,096 bytes), not an entire `Bearer ...` header or JSON credential record.
 - The configuration explicitly binds the named key to the normalized server address. Every outbound request uses that connection's destination; redirects and ambient proxies are disabled. Editing trusted configuration and restarting explicitly selects a new destination, so verify the address before assigning the reference. These checks do not establish DNS/private-network confinement.
@@ -114,7 +114,7 @@ authorization = 'mcp:remote:token'
 
 ## A remote server with browser sign-in
 
-For a compatible public HTTPS MCP service, **Settings → Advanced → Programs** now offers **Remote authorization → Browser OAuth**. This path uses a one-time OAuth app registration with that service, then persistent browser sign-in. It does not reuse Claude, an editor's login or JARVIS's GitHub authorization.
+For a compatible public HTTPS MCP service, **Settings → Apps & tools → Custom tools (MCP)** now offers **Remote authorization → Browser OAuth**. This path uses a one-time OAuth app registration with that service, then persistent browser sign-in. It does not reuse Claude, an editor's login or JARVIS's GitHub authorization.
 
 1. Enter the server's name and documented MCP address, select **Browser OAuth**, then add it. The saved server card shows its exact **Callback URL**, including the daemon port and server name.
 2. Register an OAuth app with that provider using that exact callback. Follow its native/local application instructions. Obtain the issuer URL from its official documentation and choose the minimum scopes needed. Public clients may have no client secret; JARVIS also supports advertised client-secret Basic/post authentication.

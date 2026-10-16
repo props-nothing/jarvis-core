@@ -53,6 +53,7 @@ class Element {
   }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name) { this.attributes.delete(name); }
   addEventListener(type, listener) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(listener);
@@ -89,7 +90,15 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
     createElementNS(namespace, tag) { const node = this.createElement(tag); node.namespaceURI = namespace; return node; },
     createTextNode(text) { const node = this.createElement("#text"); node.textContent = text; return node; },
     getElementById(id) { return [this.documentElement, ...descendants(this.documentElement)].find(node => node.id === id) || null; },
-    addEventListener() {}
+    listeners: new Map(),
+    addEventListener(type, listener) {
+      if (!this.listeners.has(type)) this.listeners.set(type, []);
+      this.listeners.get(type).push(listener);
+    },
+    dispatch(type, values = {}) {
+      const event = { type, target: this.activeElement, preventDefault() {}, stopPropagation() {}, ...values };
+      for (const listener of this.listeners.get(type) || []) listener(event);
+    }
   };
   document.documentElement = document.createElement("html");
   const el = (tag, className = "", text = "") => {
@@ -102,7 +111,7 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
   for (const id of ["settings", "open-settings", "attention"]) {
     const node = el("div"); node.id = id; document.documentElement.appendChild(node);
   }
-  for (const id of ["settings-note", "settings-hint", "settings-restart", "settings-tabs", "settings-body", "settings-close", "settings-section-label", "settings-search", "settings-search-empty"]) {
+  for (const id of ["settings-note", "settings-hint", "settings-restart", "settings-discard", "settings-tabs", "settings-body", "settings-close", "settings-section-label", "settings-search", "settings-search-empty"]) {
     const node = el(id === "settings-search" ? "input" : "div"); node.id = id; $("settings").appendChild(node);
   }
   $("settings").hidden = true;
@@ -135,8 +144,10 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
     clearTimeout(id) { timers.delete(id); },
     setInterval() {}
   }, { filename: "settings.js" });
+  let controls;
+  function mountTasks() { return controls.mountCodingTasks($("settings-body"), () => !$("settings").hidden && selectedId({ $ }) === "settings-tab-files"); }
   function initialize() {
-    window.JarvisSettings({
+    controls = window.JarvisSettings({
       $, el,
       api(path) {
         apiCalls.push(path);
@@ -165,7 +176,7 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
     timers.delete(id);
     timer.callback();
   }
-  return { document, $, initialize, writes, entries, apiCalls, putCalls, settings, tools, confirmations, openedWindows, search, tab, open, select, timers, runTimer };
+  return { document, $, initialize, mountTasks, writes, entries, apiCalls, putCalls, settings, tools, confirmations, openedWindows, search, tab, open, select, timers, runTimer };
 }
 
 const defaultAppearance = { density: "comfortable", motion: "system", accent: "mint", atmosphere: "cinematic" };
@@ -207,10 +218,10 @@ async function loadFixture(h, reply = fixture) {
 
 async function openPrograms(h) {
   // Custom MCP servers live in Advanced; Connections is the GitHub account flow.
-  h.select("advanced");
+  h.select("programs");
   await flush();
-  assert.equal(selectedId(h), "settings-tab-advanced");
-  assert.ok(h.$("mcp-program-name"), "Advanced must expose the Programs form");
+  assert.equal(selectedId(h), "settings-tab-programs");
+  assert.ok(h.$("mcp-program-name"), "Custom tools must expose the Programs form");
 }
 
 test("coding agent setup offers normal sign-in without environment-name controls", async () => {
@@ -265,7 +276,7 @@ test("coding tasks expose durable review evidence as text, not markup or verifie
     ...configuredFixture,
     settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
   });
-  visibleTabs(h).find(node => /Folders/.test(node.textContent)).click(); await flush();
+  h.select("files"); h.mountTasks(); await flush();
   const reviews = classNodes(h, "code-task");
   assert.equal(reviews.length, 1);
   assert.equal(reviews[0].tagName, "DETAILS");
@@ -297,7 +308,7 @@ test("coding task defaults and independent evidence describe the Settings worksp
     ...configuredFixture,
     settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
   });
-  h.select("files"); await flush();
+  h.select("files"); h.mountTasks(); await flush();
   const setup = h.$("settings-body").textContent;
   assert.match(setup, /first folder by default/);
   assert.match(setup, /No Git repository, branch or automatic commit/);
@@ -325,7 +336,7 @@ test("coding task refresh preserves expanded reviews and focus, reports failures
     ...configuredFixture,
     settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
   });
-  h.select("files"); await flush();
+  h.select("files"); h.mountTasks(); await flush();
   classNodes(h, "code-task")[0].open = true;
   const refresh = descendants(h.$("settings-body")).find(node => node.getAttribute("aria-label") === "Refresh coding tasks");
   assert.ok(refresh);
@@ -364,7 +375,7 @@ test("live coding activity refreshes in place without executing work or losing f
   h.initialize(); h.open(); await loadFixture(h, {
     ...configuredFixture, settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
   });
-  h.select("files"); await flush();
+  h.select("files"); h.mountTasks(); await flush();
   const review = classNodes(h, "code-task")[0]; review.open = true; review.firstChild.focus();
   const event = classNodes(h, "code-task-event")[0];
   assert.ok(event, "persisted activity is visible during the task");
@@ -406,7 +417,7 @@ test("live coding activity retries a failed refresh and stops polling when Setti
   h.initialize(); h.open(); await loadFixture(h, {
     ...configuredFixture, settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
   });
-  h.select("files"); await flush();
+  h.select("files"); h.mountTasks(); await flush();
   const poll = [...h.timers].find(([, timer]) => timer.delay === 2000);
   assert.ok(poll);
   const failure = deferred(); responses["/code-agents/tasks"] = failure.promise;
@@ -434,7 +445,7 @@ test("interrupted coding tasks keep the missing-result state explicit without in
     ...configuredFixture,
     settings: [...configuredFixture.settings, savedSetting("daemon.code_agent", null, "words")]
   });
-  h.select("files"); await flush();
+  h.select("files"); h.mountTasks(); await flush();
   const review = classNodes(h, "code-task")[0];
   assert.match(review.textContent, /Interrupted; no final result was recorded/);
   assert.match(review.textContent, /The daemon stopped/);
@@ -538,7 +549,7 @@ test("navigation filters labels and descriptions without replacing unsaved field
   assert.equal(draftField(h), field);
   assert.equal(field.value, "unsaved-topic");
   const groups = h.$("settings-tabs").children.filter(node => node.className === "navgroup");
-  assert.deepEqual(groups.map(node => node.hidden), [true, true, true, false]);
+  assert.deepEqual(groups.map(node => node.hidden), [true, true, true, true, false]);
   h.search("no section matches this");
   assert.equal(visibleTabs(h).length, 0);
   assert.equal(h.$("settings-search-empty").hidden, false);
@@ -548,7 +559,7 @@ test("navigation filters labels and descriptions without replacing unsaved field
   h.search("voice");
   assert.ok(visibleTabs(h).some(node => node.id === "settings-tab-voice"));
   h.search("");
-  assert.equal(visibleTabs(h).length, 13);
+  assert.equal(visibleTabs(h).length, 15);
   assert.equal(h.$("settings-search-empty").hidden, true);
   assert.equal(h.tab("alerts").tabIndex, 0);
   h.select("alerts");
@@ -945,7 +956,7 @@ for (const action of ["Load models", "Test", "Save"]) {
     assert.equal(key.value, "");
     assert.equal(h.writes.length, 0);
     assert.equal(h.putCalls.length, 1);
-    assert.equal(h.putCalls[0][0], action === "Save" ? "/settings" : "/settings/models");
+    assert.equal(h.putCalls[0][0], action === "Save" ? "/settings/provider" : "/settings/models");
     if (action !== "Save") assert.equal(h.putCalls[0][2].key, "isolated-model-key");
   });
 }
@@ -993,9 +1004,10 @@ test("restart is disabled without pending changes or configuration, guarded in f
   assert.equal(restart.disabled, true);
   assert.deepEqual(h.putCalls.at(-1), ["/restart?force=true", "POST", undefined]);
   restarts[1].resolve({}); await flush();
-  assert.equal(restart.disabled, true);
+  assert.equal(restart.disabled, false);
   assert.equal(restart.textContent, "Restart to apply");
-  assert.equal(h.$("settings-hint").textContent, "Nothing is waiting for a restart.");
+  assert.equal(h.$("settings-hint").textContent, pendingHint);
+  assert.match(h.$("settings-note").textContent, /Restart requested/);
 });
 
 test("an ordinary restart failure re-enables the pending restart without adding force or losing the footer", async () => {
@@ -1544,8 +1556,8 @@ test("MCP OAuth controls are selected by the exact saved authorization and isola
 });
 
 for (const [tab, path, response, pendingName] of [
-  ["connect", "/mcp/access", { enabled: false, running: false, restart_needed: true }, "Connect apps"],
-  ["advanced", "/mcp", { abilities: [], servers: [], restart_needed: true }, "Programs"]
+  ["connect", "/mcp/access", { enabled: false, running: false, restart_needed: true }, "External access"],
+  ["programs", "/mcp", { abilities: [], servers: [], restart_needed: true }, "Programs"]
 ]) {
   test(`existing ${tab} restart banners register saved pending changes and still restart explicitly`, async () => {
     const restartRequest = deferred();
@@ -1560,8 +1572,8 @@ for (const [tab, path, response, pendingName] of [
     assert.deepEqual(h.putCalls, [["/restart", "POST", undefined]]);
     assert.equal(h.$("settings-restart").disabled, true);
     restartRequest.resolve({}); await flush();
-    assert.equal(h.$("settings-hint").textContent, "Nothing is waiting for a restart.");
-    assert.equal(h.$("settings-restart").disabled, true);
+    assert.match(h.$("settings-hint").textContent, /Waiting for a restart/);
+    assert.equal(h.$("settings-restart").disabled, false);
   });
 }
 
@@ -1582,13 +1594,148 @@ test("successful model saves send a replacement key once and never retain it in 
   buttonNamed(h, "Save").click();
   assert.equal(key.value, "");
   await flush(); await flush();
-  assert.equal(h.putCalls.length, 2);
-  assert.equal(h.putCalls[0][0], "/settings");
-  assert.deepEqual(h.putCalls[1], ["/settings/keys/model", "PUT", { key: "isolated-replacement-key" }]);
+  assert.equal(h.putCalls.length, 1);
+  assert.deepEqual(h.putCalls[0], ["/settings/provider", "PUT", { slot: "main", model: "isolated-model", base_url: "http://provider.invalid/v1", key: "isolated-replacement-key" }]);
   assert.equal(h.writes.length, 0);
   assert.match(h.$("settings-hint").textContent, /Waiting for a restart: Main model/);
   h.select("console");
   const accent = h.$("settings-console-accent"); accent.value = "ice"; accent.dispatch("change");
   assert.deepEqual(JSON.parse(h.writes[0][1]), { ...defaultAppearance, accent: "ice" });
   assert.doesNotMatch(h.writes[0][1], /isolated-replacement-key|model|provider|key/);
+});
+
+test("an unrelated save preserves a model draft across refresh and navigation without persisting it", async () => {
+  const h = harness(); h.initialize(); h.open();
+  const reply = { ...configuredFixture, restart_state_known: true, restart_changes: [], settings: [...configuredFixture.settings, savedSetting("daemon.workspace_daily_token_limit", "10000", "count")] };
+  await loadFixture(h, reply); h.select("brain");
+  const model = h.$("settings-model-main-name"); model.value = "unsaved-model"; model.dispatch("input");
+  const limit = h.$("setting-daemon.workspace_daily_token_limit"); limit.value = "50000"; limit.dispatch("input");
+  const save = h.$(limit.id + "-save"); save.focus(); save.click(); await flush();
+  await loadFixture(h, { ...reply, restart_changes: ["daemon.workspace_daily_token_limit"] });
+  assert.equal(h.$("settings-model-main-name").value, "unsaved-model");
+  assert.equal(h.document.activeElement.id, save.id);
+  h.select("voice"); h.select("brain");
+  assert.equal(h.$("settings-model-main-name").value, "unsaved-model");
+  assert.equal(h.writes.length, 0);
+});
+
+test("a fresh dialog uses server restart changes and a later reverted setting clears them", async () => {
+  const h = harness(); h.initialize(); h.open();
+  await loadFixture(h, { ...fixture, restart_state_known: true, restart_changes: ["daemon.workspace_daily_token_limit"] });
+  assert.match(h.$("settings-hint").textContent, /Daily token limit/);
+  assert.equal(h.$("settings-restart").disabled, false);
+  h.open(); await loadFixture(h, { ...fixture, restart_state_known: true, restart_changes: [] });
+  assert.equal(h.$("settings-restart").disabled, true);
+});
+
+test("search finds MCP and a concrete model setting instead of only section descriptions", async () => {
+  const h = harness(); h.initialize(); h.open();
+  await loadFixture(h, { ...configuredFixture, settings: [ { ...savedSetting("daemon.workspace_daily_token_limit", "10000"), group: "brain" } ] });
+  h.search("MCP"); assert.ok(visibleTabs(h).some(tab => tab.id === "settings-tab-programs"));
+  h.search("daily token"); assert.ok(visibleTabs(h).some(tab => tab.id === "settings-tab-brain"));
+});
+
+test("MCP trust is named as an approval decision and is off by default", async () => {
+  const h = harness(); h.initialize(); h.open(); await loadFixture(h); await openPrograms(h);
+  const trust = h.$("mcp-trust-read-only");
+  assert.equal(trust.checked, false);
+  assert.match(trust.getAttribute("aria-label"), /Trust this server/);
+  assert.match(h.$("settings-body").textContent, /does not prevent the server from changing data/);
+});
+
+test("Save and test saves the full provider once before probing the stored credential", async () => {
+  const request = deferred(); const h = harness({ putHandler(path) { return path === "/settings/provider" ? request.promise : Promise.resolve({ test: { ok: true }, models: [] }); } });
+  h.initialize(); h.open(); await loadFixture(h, configuredFixture); h.select("brain");
+  h.$("settings-model-main-key").value = "synthetic-new-key";
+  buttonNamed(h, "Save & test").click(); buttonNamed(h, "Save & test").click();
+  assert.equal(h.putCalls.length, 1); assert.equal(h.$("settings-model-main-key").value, "");
+  request.resolve({ saved: true }); await flush(); await flush();
+  assert.deepEqual(h.putCalls[1], ["/settings/models", "POST", { slot: "main", test_model: "isolated-model" }]);
+  assert.match(h.$("settings-note").textContent, /Model check passed/);
+});
+
+async function modelPickerFixture() {
+  const h = harness({ putHandler(path) {
+    assert.equal(path, "/settings/models");
+    return Promise.resolve({ models: [{ id: "alpha-model", likely_chat: true }, { id: "beta-model", likely_chat: true }] });
+  } });
+  h.initialize(); h.open(); await loadFixture(h, configuredFixture); h.select("brain");
+  return h;
+}
+
+test("model suggestions open only after discovery and keyboard selection keeps the draft across sections", async () => {
+  const h = await modelPickerFixture();
+  const input = h.$("settings-model-main-name");
+  input.focus(); input.dispatch("focus");
+  assert.equal(input.getAttribute("role"), "combobox");
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  const menu = h.$(input.getAttribute("aria-controls"));
+  assert.equal(menu.getAttribute("role"), "listbox");
+  assert.equal(classNodes(h, "combo-toggle")[0].disabled, true);
+  buttonNamed(h, "Load models").click(); await flush();
+  assert.equal(input.getAttribute("aria-expanded"), "true");
+  assert.equal(menu.children.length, 2);
+  const before = input.value;
+  input.dispatch("keydown", { key: "ArrowUp" });
+  assert.equal(input.value, before, "navigation must not overwrite the draft");
+  assert.equal(input.getAttribute("aria-activedescendant"), menu.children[1].id);
+  assert.equal(menu.children[1].getAttribute("aria-selected"), "true");
+  input.dispatch("keydown", { key: "Enter", isComposing: true });
+  assert.equal(input.value, before, "IME composition must not accept a suggestion");
+  input.dispatch("keydown", { key: "Enter" });
+  assert.equal(input.value, "beta-model");
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  assert.equal(input.getAttribute("aria-activedescendant"), null);
+  h.select("voice"); h.select("brain");
+  assert.equal(h.$(input.id).value, "beta-model");
+  assert.equal(h.putCalls.length, 1, "selecting a suggestion must not save or test a provider");
+});
+
+test("model picker click, filtering, Escape and focus dismissal preserve manual names", async () => {
+  const h = await modelPickerFixture();
+  buttonNamed(h, "Load models").click(); await flush();
+  const input = h.$("settings-model-main-name"), menu = h.$(input.getAttribute("aria-controls"));
+  const toggle = classNodes(h, "combo-toggle")[0];
+  menu.children[0].click();
+  assert.equal(input.value, "alpha-model");
+  assert.equal(h.document.activeElement, input);
+  toggle.click();
+  assert.equal(input.getAttribute("aria-expanded"), "true");
+  input.value = "my-manual-model"; input.dispatch("input");
+  assert.equal(menu.children.filter(item => item.getAttribute("role") === "option").length, 0);
+  input.dispatch("keydown", { key: "Enter" });
+  assert.equal(input.value, "my-manual-model");
+  h.document.dispatch("keydown", { key: "Escape" });
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  assert.equal(h.$("settings").hidden, false);
+  toggle.click(); h.document.dispatch("focusin", { target: h.$("settings-search") });
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  toggle.click(); h.document.dispatch("mousedown", { target: h.$("settings-note") });
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  h.document.dispatch("keydown", { key: "Escape" });
+  assert.equal(h.$("settings").hidden, true);
+  assert.equal(h.putCalls.length, 1);
+});
+
+test("rebuilding model forms closes stale lists without adding document listeners", async () => {
+  const h = await modelPickerFixture();
+  const count = () => [...h.document.listeners.values()].reduce((total, listeners) => total + listeners.length, 0);
+  const listeners = count();
+  buttonNamed(h, "Load models").click(); await flush();
+  const input = h.$("settings-model-main-name");
+  h.select("voice");
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  for (let i = 0; i < 4; i++) { h.select("brain"); h.select("voice"); }
+  assert.equal(count(), listeners);
+  h.document.dispatch("keydown", { key: "Escape" });
+  assert.equal(h.$("settings").hidden, true, "a detached picker must not swallow Escape");
+});
+
+test("immediate appearance preferences do not become unsaved settings drafts", async () => {
+  const h = harness(); h.initialize(); h.open(); await loadFixture(h, configuredFixture); h.select("console");
+  const density = h.$("settings-console-density");
+  density.value = "compact"; density.dispatch("change");
+  assert.equal(h.document.documentElement.dataset.density, "compact");
+  assert.equal(h.$("settings-discard").disabled, true);
+  assert.equal(h.putCalls.length, 0);
 });

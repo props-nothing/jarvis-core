@@ -32,7 +32,7 @@ for (const [state, expected] of [
     context.paintHeader();
     assert.equal(nodes.get('stage').dataset.state, expected);
     assert.equal(nodes.get('send').disabled, expected === 'offline');
-    assert.equal(nodes.get('pill-wait').lastChild.textContent, `${state.needYou || 0} waiting`);
+    assert.equal(nodes.get('pill-wait').lastChild.textContent, state.offline ? 'Decisions status unavailable' : `${state.needYou || 0} waiting`);
   });
 }
 
@@ -49,36 +49,47 @@ test('offline and busy messaging remains truthful, with decisions still visible'
   assert.equal(context.document.title, '(2) JARVIS');
 });
 
-test('presence rail never presents stale task counts as live while offline', () => {
+test('compact activity controls never present stale task counts as live while offline', () => {
   const { context, nodes, state } = headerContext({ offline: true, working: 4, needYou: 2 });
   context.paintHeader();
-  assert.equal(nodes.get('presence-work-value').textContent, '—');
-  assert.equal(nodes.get('presence-wait-value').textContent, '—');
-  assert.equal(nodes.get('presence-work-detail').textContent, 'Link unavailable');
+  assert.equal(nodes.get('pill-work').lastChild.textContent, 'Work status unavailable');
+  assert.equal(nodes.get('pill-wait').lastChild.textContent, 'Decisions status unavailable');
   state.offline = false;
   context.paintHeader();
-  assert.equal(nodes.get('presence-work-value').textContent, '04');
-  assert.equal(nodes.get('presence-wait-value').textContent, '02');
+  assert.equal(nodes.get('pill-work').lastChild.textContent, '4 working');
+  assert.equal(nodes.get('pill-wait').lastChild.textContent, '2 waiting');
   context.Recognition = null;
   context.paintHeader();
   assert.equal(nodes.get('stage-talk').disabled, true);
 });
 
-test('stage shortcuts focus or open existing controls without starting a run', () => {
+test('compact stage and activity controls open existing actions without starting a run', () => {
   const handlers = {}, calls = [];
-  const context = { $(id) { return { addEventListener(name, callback) { handlers[id] = callback; }, focus() { calls.push(`focus:${id}`); }, click() { calls.push(`click:${id}`); } }; }, setOps(value) { calls.push(`ops:${value}`); } };
-  vm.runInNewContext(section('  $("stage-write").addEventListener', '  function paintClock()'), context);
-  handlers['stage-write']();
+  const context = { $(id) { return { addEventListener(name, callback) { handlers[id] = callback; }, focus() { calls.push(`focus:${id}`); }, click() { calls.push(`click:${id}`); } }; }, setOps(value) { calls.push(`ops:${value}`); }, selectOpsSection(section) { calls.push(`section:${section}`); } };
+  vm.runInNewContext(section('  $("stage-talk").addEventListener', '  function paintClock()'), context);
   handlers['stage-talk']();
-  handlers['presence-wait']();
-  assert.deepEqual(calls, ['focus:input', 'click:mic', 'ops:true']);
+  handlers['pill-wait']();
+  assert.deepEqual(calls, ['click:mic', 'ops:true', 'section:activity']);
 });
 
 test('voice preparation exposes an accessible silence control', () => {
   const { context, nodes } = headerContext({ voiceBusy: true });
   context.paintHeader();
   assert.equal(nodes.get('quiet').hidden, false);
-  assert.equal(nodes.get('stage-state').textContent, 'Preparing voice');
+  assert.equal(nodes.get('caption').textContent, 'preparing voice');
+});
+
+test('idle HUD has no readiness caption, zero counters or composer footer', () => {
+  const { context, nodes, state } = headerContext();
+  context.paintHeader();
+  assert.equal(nodes.get('caption').textContent, '');
+  assert.equal(nodes.get('composer-status').textContent, '');
+  assert.equal(nodes.get('pill-work').hidden, true);
+  assert.equal(nodes.get('pill-wait').hidden, true);
+  state.needYou = 1;
+  context.paintHeader();
+  assert.equal(nodes.get('pill-wait').hidden, false);
+  assert.equal(nodes.get('caption').textContent, 'needs you');
 });
 
 function composerContext({ offline = false, busy = false, value = 'A draft' } = {}) {
@@ -104,16 +115,18 @@ test('connected submission sends once and clears the submitted draft', () => {
   assert.equal(fixture.input.value, '');
 });
 
-test('large multiline drafts are submitted intact and Shift Enter does not send', () => {
-  const value = 'paragraph\n'.repeat(10000) + 'TAIL';
+test('single-line composer preserves long drafts and does not send during IME composition', () => {
+  const value = 'paragraph '.repeat(10000) + 'TAIL';
   const fixture = composerContext({ value });
-  fixture.keydown({ key: 'Enter', shiftKey: true, preventDefault() { assert.fail('Shift Enter must insert a newline'); } });
-  assert.equal(fixture.sent.length, 0);
   fixture.keydown({ key: 'Enter', isComposing: true, preventDefault() { assert.fail('IME composition must not submit'); } });
+  assert.equal(fixture.sent.length, 0);
   fixture.keydown({ key: 'Enter', preventDefault() {} });
   assert.deepEqual(fixture.sent, [value]);
+  fixture.input.value = 'Second draft';
+  fixture.keydown({ key: 'Enter', shiftKey: true, preventDefault() {} });
+  assert.deepEqual(fixture.sent, [value, 'Second draft']);
   const html = fs.readFileSync(new URL('../apps/jarvisd/src/hud/index.html', import.meta.url), 'utf8');
-  assert.match(html, /<textarea id="input"/);
+  assert.match(html, /<input id="input" type="text"/);
   assert.doesNotMatch(html, /id="input"[^>]*maxlength/);
 });
 
@@ -220,7 +233,7 @@ test('accent choices do not change the approval, listening or offline state colo
 function orbitContext(calm = false) {
   const arcs = [];
   const context = { calm, TAU: Math.PI * 2, rgba(alpha) { return String(alpha); },
-    ctx: { save() {}, restore() {}, beginPath() {}, stroke() {}, fill() {}, moveTo() {}, lineTo() {}, arc(...args) { arcs.push(args); } } };
+    ctx: { save() {}, restore() {}, beginPath() {}, stroke() {}, fill() {}, moveTo() {}, lineTo() {}, arc(...args) { arcs.push(args); }, ellipse(...args) { arcs.push(args); } } };
   vm.runInNewContext(section('  function drawPresenceOrbit(', '  function draw(t, mode)'), context);
   return { context, arcs };
 }
@@ -230,7 +243,7 @@ test('quiet atmosphere removes the animated segments and orbiting markers', () =
   assert.equal(arcs.length, 1);
   arcs.length = 0;
   context.drawPresenceOrbit(100, 100, 80, 10, 1, false);
-  assert.equal(arcs.length, 17);
+  assert.equal(arcs.length, 21);
 });
 test('cinematic orbit positions stay fixed with reduced motion', () => {
   const { context, arcs } = orbitContext(true);
@@ -242,7 +255,7 @@ test('cinematic orbit positions stay fixed with reduced motion', () => {
 });
 
 test('reduced motion updates at runtime and stops ambient energy pulsing', () => {
-  const context = { document: { documentElement: { dataset: { motion: 'reduced' } } }, motionQuery: { matches: false },
+  const context = { $() { return { hidden: true }; }, window: { innerWidth: 1280 }, setTimeout() {}, document: { documentElement: { dataset: { motion: 'reduced' } } }, motionQuery: { matches: false },
     colorForState() { return [1, 2, 3]; }, current: [1, 2, 3], energy: 0, calm: false, uiState() { return 'idle'; },
     readLevel() {}, readVoiceLevel() {}, targetEnergy(mode, t) { context.energyTime = t; return 0; },
     draw() { context.drawCalm = context.calm; }, requestAnimationFrame() {} };

@@ -87,6 +87,7 @@ mod trigger_service;
 #[cfg(test)]
 mod approval_fixture;
 
+use settings_service::SettingsContext;
 use std::{fs, future::Future, io, path::Path, path::PathBuf, process::ExitCode, sync::Arc};
 
 use jarvis_core::{
@@ -509,7 +510,7 @@ struct Services {
 /// Everything the daemon must hold for its lifetime, constructed in startup order.
 struct Running {
     health: Arc<HealthState>,
-    paths: AppPaths,
+    settings_context: settings_service::SettingsContext,
     logging: Logging,
     singleton: SingletonGuard,
     database: Arc<SqliteDatabase>,
@@ -679,6 +680,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     paths.prepare()?;
 
     let loaded_config = load_config_migrating(&paths)?;
+    let settings_context = SettingsContext::new(paths.clone(), root.map(Path::to_path_buf));
 
     // The daemon is the sole issuer of the profile credential.
     let credential_store = CredentialStore::at(paths.config().join(LOCAL_CREDENTIAL_FILE_NAME));
@@ -786,7 +788,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
 
     Ok(Running {
         health,
-        paths,
+        settings_context,
         logging,
         singleton,
         database,
@@ -2113,7 +2115,7 @@ where
 {
     let Running {
         health,
-        paths,
+        settings_context,
         logging,
         singleton,
         database,
@@ -2137,7 +2139,7 @@ where
                 Arc::clone(&database),
                 credential.clone(),
                 services,
-                settings_service::SettingsContext::new(paths.clone(), root.clone()),
+                settings_context,
             )
             .await?;
             (Some(transport), Some(stop))

@@ -71,6 +71,7 @@ example/memory/long_term.json
 /artifacts/
 /test-results/
 playwright-report/
+node_modules/
 .coverage
 *.profraw
 *.profdata

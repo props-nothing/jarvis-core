@@ -2,7 +2,7 @@
 
 **Choose what JARVIS knows, reaches and may do.**
 
-[Documentation](../README.md) / [Quick start](quick-start.md) / [Google](google.md) / [Telegram](telegram.md) / [Phone](phone.md) / [Connect apps](connect-apps.md)
+[Documentation](../README.md) / [Quick start](quick-start.md) / [Google](google.md) / [Telegram](telegram.md) / [Phone](phone.md) / [External access](connect-apps.md)
 
 Everything you can change after setup, where it lives in the console (**Settings** in the header), and **why each one is off or
 unset by default**. A setting that is unset is never "missing" or "not built yet": each one below is either safe to leave off,
@@ -14,16 +14,28 @@ refused, leaving the file untouched, if it would not start. Keys are stored in a
 
 ## Finding settings
 
-**Settings** opens on **Overview**, a configuration dashboard with five cards: Model, Folders & code, Accounts & channels, Permissions and Console. Their shortcuts lead to the model, folders, Google, Telegram, Phone, permissions and appearance. The cards describe saved setup, not a successful provider connection. It groups its tabs into **JARVIS** (Overview, Brain, Voice & search, Folders & code, Permissions), **Accounts & channels** (Connections, Google, Telegram, Phone), **Connections** (Connect apps) and **System** (Console, Alerts, Advanced). **Find a section** searches tab names and descriptions without replacing an unsaved form. With a tab focused, use the arrow keys or Home/End to move between visible sections. Dialogs keep keyboard focus inside; Escape closes the current dialog and returns focus to its opener. In a model picker, Escape first closes the list.
+The main HUD gives the face most of the desktop, with a compact conversation panel alongside it. On phones, a compact face sits above the conversation; short viewports reserve the space for messages and controls. Approvals stay visible in the main view. **History** reveals saved conversations, retention information and **Clear history**. Storage failures remain visible even with History closed. Older unscoped browser history stays in storage without being assigned to the current profile or showing a migration banner.
 
-Tab dots describe saved configuration, **not a live connection test**. Their accessible labels and tooltips distinguish configured, setup needed and unknown. Each setting says what it does in one line; the rest is under **More**. On/off settings save when flipped, and the footer lists changes waiting for **Restart to apply**. Live settings (phone settings, permissions) never ask for a restart. Voice and web-search keys have a **Test** button that checks the saved key with its provider. A failing internet address, phone door or Telegram shows a banner under the console header leading to its settings.
+Type into the single-line **Message** input and press Enter to send. **Voice options**, beside New chat in the conversation header, contains **Speak answers** and **Wake word “Jarvis”**. Escape closes the options and returns focus to their control; clicking outside also closes them. Voice errors remain visible beneath the input. Idle readiness messages and the large activity footer have been removed.
+
+**Settings** opens on **Overview**. **Apps & tools** lists services JARVIS can use: GitHub, Google, voice/search, files/coding, built-in tools and custom MCP servers. Each row opens its setup and shows saved configuration status, not a live health check. GitHub and Google have their own details; custom servers live under **Custom tools (MCP)**. **Channels** contains Telegram and Phone. **External access** is the reverse direction: other apps calling JARVIS. Ports and uncommon system settings remain in Advanced. Close settings with the upper-right close button or Escape.
+
+Search matches section descriptions, setting names/help and integration terms such as MCP. On phones, choose a section from the native picker; searching also reveals matching navigation buttons. Desktop tabs support arrows and Home/End. Escape closes the dialog and returns focus to its opener; in a model picker it first closes the list.
+
+Settings use the same field, label, help and action styles in every section. Labels sit beside fields on desktop and above them on phones. Fixed choices use native dropdowns. Model actions sit below the provider fields, and providers that need no key do not show an unused key field. Read-only connection snippets keep monospace text for copying.
+
+Unsaved ordinary fields and model drafts stay in memory across section changes and unrelated saves. **Discard drafts** resets them to saved values. Reloading discards unsaved drafts. Appearance preferences apply immediately and do not count as unsaved drafts. Password fields are cleared on submission, section changes, close and redraw; they are never stored in browser preferences.
+
+The daemon compares saved settings and credential fingerprints with its startup snapshot. The restart footer therefore survives page reloads and sees CLI changes. Reverting a setting removes its pending change. If the comparison fails, the footer reports unknown status. The comparison describes saved changes, not provider health; existing environment overrides and live-service semantics still apply. A restart request is not proof that the new process started; reopen settings after reconnection to verify the footer.
+
+Tab dots describe saved configuration, **not a live connection test**. Their accessible labels and tooltips distinguish configured, setup needed and unknown. Each setting says what it does in one line; the rest is under **More**. On/off settings save when flipped, and the footer lists changes waiting for **Restart to apply**. Live policy changes and the phone policy switches are excluded from the startup comparison; other phone setup can require service initialization. Voice and web-search keys have a **Test** button that checks the saved key with its provider. A failing internet address, phone door or Telegram shows a banner under the console header leading to its settings.
 
 ## Console appearance
 
 **Settings → Console** controls the look of this browser only:
 
 - **Accent:** Mint matches the public site; Ice and Amethyst offer cooler and violet palettes. Approval, listening and offline colors remain meaningful and do not change with the accent.
-- **Atmosphere:** Cinematic adds segmented orbits, markers, particles and soft illumination. Quiet keeps a minimal presence without those decorative effects.
+- **Atmosphere:** Cinematic adds intersecting orbital rings, segmented arcs, markers, particles and soft illumination. Quiet keeps a minimal presence without those decorative effects.
 - **Density:** Comfortable gives controls more room; Compact fits more messages, cards and settings on screen.
 - **Motion:** Use system preference respects the device's reduced-motion setting; Reduce motion keeps the orbit stationary and disables interface transitions and preview animation.
 
@@ -31,17 +43,19 @@ The live preview illustrates your choices without contacting any provider. **Res
 
 Changes apply immediately and are saved in this browser's local storage, with no daemon restart. Console preferences remain available while the daemon is offline. If storage is blocked, the change applies only to the current page and the console says so. These controls do not change models, permissions or provider settings.
 
-The charcoal surfaces and default mint accents match the public site. Amber still means a decision needs you; offline, working, listening and speaking remain distinct, named states. The presence rail opens Operations and shows live run/decision counts; when disconnected, it shows an unknown value rather than presenting stale counts as live. The stage's Write, Talk and Operations buttons use the same controls as the keyboard shortcuts. **Restart to apply** is unavailable unless there are pending changes and saved configuration is available. Starting-point cards prepare an editable message rather than starting a run. Sending is unavailable while offline or while the current answer is running, but a draft can still be edited and is not cleared by an unavailable submission.
+Deep blue surfaces and mint accents frame the face. Amber still means a decision needs you; offline, working, listening and speaking remain distinct, named states. The header shows run/decision counters only when there is activity; clicking either opens **Operations → Activity**. When disconnected, any retained counters report unavailable status rather than presenting stale counts as live. **Talk to JARVIS** sits beneath the desktop face, and the microphone beside Message is available on every layout. **Restart to apply** is unavailable unless there are pending changes and saved configuration is available. Starting-point suggestions prepare an editable message rather than starting a run. Sending is unavailable while offline or while the current answer is running, but a draft can still be edited and is not cleared by an unavailable submission.
 
 ## Connections
 
-**Settings → Connections → GitHub** uses persistent browser sign-in rather than a PAT or server command. Expand **One-time JARVIS app setup**, register the OAuth app with the callback URL shown, save its client ID/write-only secret, then press **Connect GitHub**. Private repository access is opt-in; the initial remote tools remain read-only. **Test GitHub tools** is a separate live connection check and **Disconnect GitHub** removes local authorization even if provider revocation fails. The app settings stay for the next sign-in. A first tool registration still needs the explicit restart footer; connecting never silently restarts the daemon. See [setup, privacy and verification limits](connections.md).
+**Settings → Apps & tools → GitHub** uses persistent browser sign-in rather than a PAT or server command. Expand **One-time JARVIS app setup**, register the OAuth app with the callback URL shown, save its client ID/write-only secret, then press **Connect GitHub**. Private repository access is opt-in; the initial remote tools remain read-only. **Test GitHub tools** is a separate live connection check and **Disconnect GitHub** removes local authorization even if provider revocation fails. The app settings stay for the next sign-in. A first tool registration still needs the explicit restart footer; connecting never silently restarts the daemon. See [setup, privacy and verification limits](connections.md).
 
-For a compatible remote service with browser sign-in, **Advanced → Programs → Remote authorization → Browser OAuth** offers one-time app setup and Connect/Check sign-in/Test tools/Disconnect. Register the provider app with the displayed callback, enter its expected issuer, client ID/optional write-only secret and minimal scopes, then connect. A saved grant is not a verified account name or live health check; automatic registration is not included. See [generic OAuth setup and limits](mcp.md#a-remote-server-with-browser-sign-in).
+For a compatible remote service with browser sign-in, **Apps & tools → Custom tools (MCP) → Remote authorization → Browser OAuth** offers one-time app setup and Connect/Check sign-in/Test tools/Disconnect. Register the provider app with the displayed callback, enter its expected issuer, client ID/optional write-only secret and minimal scopes, then connect. A saved grant is not a verified account name or live health check; automatic registration is not included. See [generic OAuth setup and limits](mcp.md#a-remote-server-with-browser-sign-in).
 
-For another remote MCP server that accepts a bearer token, **Advanced → Programs** has an optional **Bearer key reference** field for HTTP(S). Set the value privately with `jarvis keys set mcp:NAME:KEY`, then enter only that same-server reference in Settings. Test lists tools; status reports set/not set, not a token or provider health. Rotation/removal applies to the next outbound request; registration changes still need restart. See [remote token setup and limits](mcp.md#a-remote-server-that-needs-a-token).
+For another remote MCP server that accepts a bearer token, **Apps & tools → Custom tools (MCP)** has an optional **Bearer key reference** field for HTTP(S). Set the value privately with `jarvis keys set mcp:NAME:KEY`, then enter only that same-server reference in Settings. Test lists tools; status reports set/not set, not a token or provider health. Rotation/removal applies to the next outbound request; registration changes still need restart. See [remote token setup and limits](mcp.md#a-remote-server-that-needs-a-token).
 
 ## Brain
+
+You can always type a model name. **Load models** requests suggestions from the selected provider and enables the list arrow. Arrow Down selects the first suggestion; Arrow Up selects the last. Enter accepts the highlighted model, while Escape closes the list without changing the name. Tab or clicking outside dismisses it. Selecting a suggestion keeps it as an unsaved draft across section changes; it does not save or test the provider.
 
 **Settings, Brain** has one card for the **main model** and one for the **fallback**. Pick a provider (Ollama on this computer, Ollama Cloud, OpenAI, Google Gemini, Anthropic, or any other OpenAI-compatible server), paste its key, press **Load models** to choose from what that provider actually offers (you can still type a name), press **Test** to see that the model answers, then **Save** and restart. JARVIS asks the provider itself, so a key you saved is never sent to the page, and a saved key is only ever used with the address it was saved for: changing the address means pasting that provider's key. Test checks that the model answers, not that it uses tools well. Anthropic and Gemini are reached through their OpenAI-compatible endpoints; Anthropic describes its as a way to try Claude rather than a production route (no prompt caching, thinking not returned). Under the cards, **Thinking effort** is a list, and a cheaper model for sub-agents and scheduled runs can be set. The web-search key is in **Voice & search**, beside the ElevenLabs key (which the Phone tab also uses). The table below is the same settings by name, for `jarvis config`.
 
@@ -97,7 +111,7 @@ For another remote MCP server that accepts a bearer token, **Advanced → Progra
 | `push_topic` | none | Set a long, unguessable [ntfy](https://ntfy.sh) topic and JARVIS also pushes to your phone when no console is open: that an approval is waiting (and for which tool), or that a scheduled task finished. **It never sends an answer, a question or an argument.** The topic name is the only secret, so make it random. Try it with `jarvis push test`. |
 | `push_server` | `https://ntfy.sh` | The ntfy server. Use your own (`https://` only) to keep even the metadata off a third party. |
 | `http_port` | 8765 | The default port. |
-| `mcp_serve_port` | none | **Off by design.** Switch it on from the **Connect apps** tab (or `jarvis mcp access on`); it then listens on 127.0.0.1 only, and only a program holding your key can use it (`ADR-0170`). |
+| `mcp_serve_port` | none | **Off by design.** Switch it on from the **External access** tab (or `jarvis mcp access on`); it then listens on 127.0.0.1 only, and only a program holding your key can use it (`ADR-0170`). |
 
 ## Not settings yet (and why)
 
@@ -109,8 +123,23 @@ feature exists.
 - **The memory and project tools** (`project.create`, `project.update`, `project.assign_schedule`, `memory.correct`, `memory.forget`) ask by default and **can** be set to "Run without asking" here, one at a time (`ADR-0177`); the approval card never offers a one-click "Always allow" for them.
 - **"Run without asking" is honoured for tools from programs you added** (the browser, documentation lookup, your own), one tool at a time. It is honoured for **every** tool, including the ones that send mail or add calendar events (`ADR-0178`): choosing it for a tool that reaches other people asks you to confirm once, and any tool can be set back to "Always ask first".
 - **Browsing and documentation lookup** come with JARVIS and are listed under **Permissions** like every other tool ([abilities.md](abilities.md)). Your own tool programs (for developers) are under Advanced: [mcp.md](mcp.md). Local programs can receive explicitly mapped named credentials provisioned with `jarvis keys set mcp:SERVER:KEY`; their cards show reference and set/not set, never the value ([setup and limits](mcp.md#a-local-server-that-needs-a-key)).
-- **Let other apps use JARVIS (port)** in Advanced is the reverse: it lets *another* program use JARVIS's tools. It is now the **Connect apps** tab; it is off until you switch it on ([connect-apps.md](connect-apps.md)).
+- **Let other apps use JARVIS (port)** in Advanced is the reverse: it lets *another* program use JARVIS's tools. It is now the **External access** tab; it is off until you switch it on ([connect-apps.md](connect-apps.md)).
 - **Local (non-cloud) speech recognition and synthesis, telephony, an always-on wake word**: Phase 8.
 - **Coding-agent runtimes, and routing sub-agents to a cheaper model**: Phase 7 and the order-of-work list.
 - **Scheduling, memory and skills** have their own commands and panels, not settings: `jarvis schedule`, `jarvis memory`,
   `jarvis skills`.
+
+
+## Provider saves and activity
+
+**Brain → Save** commits the model, address and replacement key together. Rotated model keys use new private files; old files remain for existing readers. A changed address cannot silently reuse a key belonging to the previous provider. **Save & test** commits first and then performs the explicit provider check; a failed check is reported separately from a successful save. No provider test occurs just by opening Settings. Load models remains optional; a key submitted only for that probe is cleared and must be entered again to save.
+
+Operations has **Activity** (approvals, runs, projects, coding tasks and recent work), **Automations** (schedules and triggers), **Knowledge** (contacts and the memory inspector), and **Tools & diagnostics**. Coding results have moved from agent configuration to Activity; Folders & code links there. On phones, the conversation and composer occupy the screen, with pending decisions above them. Desktop conversation gets most of the available width. Hidden/reduced-motion presence rendering is throttled; polling is bounded, backs off on failures and reports stale optional panels without disabling conversation.
+
+## Browser history
+
+History is scoped to the daemon profile, with up to 30 chats and the latest 60 messages per chat. It is a browser cache, not the complete durable daemon transcript. **Clear history** clears this profile's browser cache and leaves daemon records intact. Storage failures are visible. If profile identity cannot be loaded, the page runs without persistent history until reloaded after reconnection. Older unscoped browser history is retained in storage but is not automatically attached to an arbitrary profile.
+
+## UI implementation
+
+The integration catalog uses pinned React and TypeScript, built with Vite and embedded in the Rust binary. Installed users need no Node runtime. Legacy voice, approval, settings and canvas adapters are retained for incremental migration. See [the frontend developer guide](../../apps/jarvisd/ui/README.md) and [ADR-0225](../adr/0225-hud-controls-use-explicit-state-and-task-navigation.md).
