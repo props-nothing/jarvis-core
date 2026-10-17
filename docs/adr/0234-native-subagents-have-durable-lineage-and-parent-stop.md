@@ -91,3 +91,7 @@ cross-runtime child cancellation is claimed.
 ## Policy amendment
 
 [ADR-0235](0235-delegation-declares-work-and-its-execution-authority.md) defines the shared delegation effect and execution boundary, and withholds both native and coding management scopes from native children. Broader coordination remains P7-011.
+
+## Cross-runtime coordination amendment
+
+[ADR-0237](0237-delegation-dispatch-and-family-stop-are-durable.md) adds durable coding ownership and Stop, per-call dispatch identity for both runtimes, and restart adoption without automatic relaunch. Earlier remaining-work notes above describe the preceding slice; broader audit, isolation and shutdown draining acceptance remain open.

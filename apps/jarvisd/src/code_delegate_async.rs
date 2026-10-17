@@ -151,7 +151,15 @@ impl AsyncCodeDelegateTool {
             )?,
         ])
     }
+    #[cfg(test)]
     async fn start(&self, v: &Value) -> Result<Value, AdapterError> {
+        self.start_for_call(v, None).await
+    }
+    async fn start_for_call(
+        &self,
+        v: &Value,
+        call_id: Option<&str>,
+    ) -> Result<Value, AdapterError> {
         let mut args = Arguments::parse(v).map_err(|reason| refused(&reason))?;
         args.repository = self
             .inner
@@ -160,37 +168,55 @@ impl AsyncCodeDelegateTool {
             .into_owned();
         let now = UtcTimestamp::now(&SystemClock);
         let request = serde_json::to_string(&args).map_err(|error| refused(&error.to_string()))?;
-        let stored = jarvis_storage::create_delegated_task_with_request(
-            &self.db,
-            &NewDelegatedTask {
-                workspace_id: &self.workspace,
-                repository: &args.repository,
-                task: &args.task,
-                allow_commands: args.allow_commands,
-                minutes: args.minutes,
-                now,
-            },
-            Some(&request),
-        )
-        .await
-        .map_err(|e| {
+        let new = NewDelegatedTask {
+            workspace_id: &self.workspace,
+            repository: &args.repository,
+            task: &args.task,
+            allow_commands: args.allow_commands,
+            minutes: args.minutes,
+            now,
+        };
+        let (stored, created) = match call_id {
+            Some(call_id) => {
+                jarvis_storage::create_delegated_task_for_call(&self.db, &new, &request, call_id)
+                    .await
+            }
+            None => {
+                jarvis_storage::create_delegated_task_with_request(&self.db, &new, Some(&request))
+                    .await
+                    .map(|task| (task, true))
+            }
+        }
+        .map_err(|error| {
             refused(&format!(
-                "a background coding task could not be recorded: {e}"
+                "a background coding task could not be recorded: {error}"
             ))
         })?;
+        if !created {
+            return Ok(
+                json!({"outcome":"existing","task_id":stored.id,"status":stored.status,
+                "parent_run_id":stored.parent_run_id,"origin_call_id":stored.origin_call_id,
+                "next":"This call already dispatched a task. Inspect its status; it was not launched again."}),
+            );
+        }
+        self.spawn_task(stored.id.clone(), args)?;
+        Ok(
+            json!({"outcome":"started","task_id":stored.id,"parent_run_id":stored.parent_run_id,"origin_call_id":stored.origin_call_id,"status":"queued","next":"Use jarvis.code.delegate_wait with this task_id (30 seconds per wait). Quiet progress or a failed individual command is not job failure. Let the agent recover; do not stop it to take over. The owner will also get a desktop notification when it ends."}),
+        )
+    }
+    fn spawn_task(&self, id: String, args: Arguments) -> Result<(), AdapterError> {
         let cancel = Arc::new(Notify::new());
         self.cancellations
             .lock()
             .map_err(|_| refused("the coding task manager is not available"))?
-            .insert(stored.id.clone(), Arc::clone(&cancel));
-        let id = stored.id.clone();
+            .insert(id.clone(), Arc::clone(&cancel));
         let db = Arc::clone(&self.db);
         let inner = Arc::clone(&self.inner);
         let workspace = self.workspace.clone();
         let active = Arc::clone(&self.cancellations);
         let notifications = self.notifications;
         tokio::spawn(async move {
-            let result = run_recorded_task(&db, &workspace, &id, &inner, &args, &cancel).await;
+            let result = run_with_cancellation(&db, &workspace, &id, &inner, &args, &cancel).await;
             let Completion {
                 status,
                 branch,
@@ -234,6 +260,9 @@ impl AsyncCodeDelegateTool {
                 return;
             }
             if notifications {
+                let status = jarvis_storage::find_delegated_task(&db, &workspace, &id)
+                    .await
+                    .map_or_else(|_| "unknown".to_owned(), |task| task.status);
                 crate::notify::show(
                     "JARVIS coding task",
                     if status == "completed" {
@@ -246,9 +275,7 @@ impl AsyncCodeDelegateTool {
                 );
             }
         });
-        Ok(
-            json!({"outcome":"started","task_id":stored.id,"status":"queued","next":"Use jarvis.code.delegate_wait with this task_id (30 seconds per wait). Quiet progress or a failed individual command is not job failure. Let the agent recover; do not stop it to take over. The owner will also get a desktop notification when it ends."}),
-        )
+        Ok(())
     }
     async fn status(&self, v: &Value) -> Result<Value, AdapterError> {
         let id = id(v)?;
@@ -273,7 +300,7 @@ impl AsyncCodeDelegateTool {
                     .result_json
                     .as_deref()
                     .and_then(|text| serde_json::from_str::<Value>(text).ok());
-                json!({"task_id":task.id,"status":task.status,
+                json!({"task_id":task.id,"parent_run_id":task.parent_run_id,"origin_call_id":task.origin_call_id,"cancellation_requested_at":task.cancellation_requested_at.map(|time|time.to_string()),"status":task.status,
                 "verification":result.as_ref().map(|v|&v["verification"]["status"]),
                 "created_at":task.created_at.to_string()})
             })
@@ -308,25 +335,40 @@ impl AsyncCodeDelegateTool {
             .await;
         }
     }
-    fn stop(&self, v: &Value) -> Result<Value, AdapterError> {
+    async fn stop(&self, v: &Value) -> Result<Value, AdapterError> {
         let id = id(v)?;
-        let found = self
-            .cancellations
-            .lock()
-            .map_err(|_| refused("the coding task manager is not available"))?
-            .get(id)
-            .cloned();
-        if let Some(cancel) = found {
+        let requested = jarvis_storage::request_delegated_task_cancellation(
+            &self.db,
+            &self.workspace,
+            id,
+            UtcTimestamp::now(&SystemClock),
+        )
+        .await
+        .map_err(|_| refused("the coding task cancellation could not be recorded"))?;
+        if !requested {
+            return Err(refused("the coding task is already finished"));
+        }
+        self.signal_stop(id);
+        Ok(
+            json!({"outcome":"stop_requested","task_id":id,"note":"Cancellation is recorded. Existing files are kept; queued work starts no agent."}),
+        )
+    }
+    fn signal_stop(&self, id: &str) {
+        if let Ok(active) = self.cancellations.lock()
+            && let Some(cancel) = active.get(id)
+        {
             cancel.notify_one();
-            Ok(
-                json!({"outcome":"stop_requested","task_id":id,"note":"Existing files are kept. A queued task starts no agent."}),
-            )
-        } else {
-            Err(refused("that coding task is not running"))
         }
     }
-
-    async fn resume(&self, value: &Value) -> Result<Value, AdapterError> {
+    #[cfg(test)]
+    async fn resume(&self, v: &Value) -> Result<Value, AdapterError> {
+        self.resume_for_call(v, None).await
+    }
+    async fn resume_for_call(
+        &self,
+        value: &Value,
+        call_id: Option<&str>,
+    ) -> Result<Value, AdapterError> {
         let previous = jarvis_storage::find_delegated_task(&self.db, &self.workspace, id(value)?)
             .await
             .map_err(|_| refused("no coding task has that id"))?;
@@ -356,7 +398,7 @@ impl AsyncCodeDelegateTool {
         request["task"] = json!(format!(
             "Continue an earlier task that stopped. First inspect existing files, installed dependencies and verification results; do not replay completed installs, external effects or overwrite user edits. Repair and complete only remaining work. Original brief: {original}"
         ));
-        let mut result = self.start(&request).await?;
+        let mut result = self.start_for_call(&request, call_id).await?;
         result["continued_from"] = json!(previous.id);
         result["recovery"] = json!(
             "A new agent inspects existing files. This is not restoration of the old process or conversation; previously completed effects are not automatically replayed by JARVIS."
@@ -415,6 +457,37 @@ fn bounded_result(value: Value) -> Value {
         "next":"Detailed agent output exceeded storage limits. Inspect the files and rerun checks; no browser verification is implied."})
 }
 
+async fn run_with_cancellation(
+    db: &Arc<SqliteDatabase>,
+    workspace: &str,
+    id: &str,
+    inner: &CodeDelegateTool,
+    args: &Arguments,
+    cancel: &Notify,
+) -> Result<Value, AdapterError> {
+    // The row is authoritative. Polling also closes the persist/register gap and
+    // reaches workers launched through other manager instances. Never drop the
+    // running future to cancel it: the existing driver owns process-tree cleanup.
+    let run = run_recorded_task(db, workspace, id, inner, args, cancel);
+    tokio::pin!(run);
+    let mut poll = tokio::time::interval(std::time::Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            result = &mut run => return result,
+            _ = poll.tick() => {
+                match jarvis_storage::delegated_task_cancellation_requested(db, workspace, id).await {
+                    Ok(false) => {}
+                    Ok(true) => cancel.notify_one(),
+                    Err(error) => {
+                        tracing::warn!(task_id = id, %error, "coding cancellation state unreadable; stopping the worker");
+                        cancel.notify_one();
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn run_recorded_task(
     db: &Arc<SqliteDatabase>,
     workspace: &str,
@@ -432,12 +505,27 @@ async fn run_recorded_task(
         .work_admission()
         .admit()
         .map_err(|_| refused("the daemon is stopping; no coding agent was started"))?;
-    jarvis_storage::mark_delegated_task_running(db, workspace, id, UtcTimestamp::now(&SystemClock))
-        .await
-        .map_err(|error| {
-            tracing::error!(task_id = %id, %error, "coding task could not be marked running");
-            refused("the coding task could not be marked running; no agent was started")
-        })?;
+    if let Err(error) = jarvis_storage::mark_delegated_task_running(
+        db,
+        workspace,
+        id,
+        UtcTimestamp::now(&SystemClock),
+    )
+    .await
+    {
+        if matches!(
+            jarvis_storage::delegated_task_cancellation_requested(db, workspace, id).await,
+            Ok(true)
+        ) {
+            return Ok(
+                json!({"outcome":"cancelled","next":"Cancelled before dispatch; no agent started."}),
+            );
+        }
+        tracing::error!(task_id = %id, %error, "coding task could not be marked running");
+        return Err(refused(
+            "the coding task could not be marked running; no agent was started",
+        ));
+    }
     let (sender, updates) = mpsc::channel(32);
     let recorder = tokio::spawn(record_activity(
         Arc::clone(db),
@@ -528,7 +616,7 @@ pub(crate) fn render_console(task: &StoredDelegatedTask) -> Value {
     let activity: Vec<Value> = task.activity.iter().map(|entry| {
         json!({"sequence":entry.sequence,"summary":entry.summary,"created_at":entry.created_at.to_string()})
     }).collect();
-    json!({"task_id":task.id,"repository":task.repository,"task":task.task,"allow_commands":task.allow_commands,"minutes":task.minutes,"mode":request.as_ref().map(|request|&request["mode"]),"status":task.status,"branch":task.branch,"worktree":task.worktree,"summary":task.summary,"result":result,"error":task.error,"created_at":task.created_at.to_string(),"updated_at":task.updated_at.to_string(),"finished_at":task.finished_at.map(|time|time.to_string()),"activity":activity,"activity_limited":limited})
+    json!({"task_id":task.id,"parent_run_id":task.parent_run_id,"origin_call_id":task.origin_call_id,"cancellation_requested_at":task.cancellation_requested_at.map(|time|time.to_string()),"repository":task.repository,"task":task.task,"allow_commands":task.allow_commands,"minutes":task.minutes,"mode":request.as_ref().map(|request|&request["mode"]),"status":task.status,"branch":task.branch,"worktree":task.worktree,"summary":task.summary,"result":result,"error":task.error,"created_at":task.created_at.to_string(),"updated_at":task.updated_at.to_string(),"finished_at":task.finished_at.map(|time|time.to_string()),"activity":activity,"activity_limited":limited})
 }
 
 fn render(task: &StoredDelegatedTask) -> Value {
@@ -617,12 +705,18 @@ impl ToolExecutor for AsyncCodeDelegateTool {
             return Err(refused("the call was already past its deadline"));
         }
         let body = match r.tool().to_string().as_str() {
-            DELEGATE_TOOL | START => self.start(r.arguments()).await?,
+            DELEGATE_TOOL | START => {
+                self.start_for_call(r.arguments(), Some(r.call_id()))
+                    .await?
+            }
             STATUS => self.status(r.arguments()).await?,
             WAIT => self.wait_for_task(r.arguments()).await?,
             LIST => self.list(r.arguments()).await?,
-            STOP => self.stop(r.arguments())?,
-            RESUME => self.resume(r.arguments()).await?,
+            STOP => self.stop(r.arguments()).await?,
+            RESUME => {
+                self.resume_for_call(r.arguments(), Some(r.call_id()))
+                    .await?
+            }
             _ => {
                 return Err(AdapterError::NotImplemented {
                     tool: r.tool().to_string(),

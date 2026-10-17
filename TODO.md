@@ -6,6 +6,41 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
+## Completed acceptance slice: cross-runtime cancellation and dispatch (2026-10-17)
+
+Owner-selected `P7-011`: coordinate native/coding parent Stop and prevent repeated
+worker launches for one durable tool call.
+
+- [x] Add migration 0031 with immutable per-call dispatch identity, coding ownership and durable cancellation intent; preserve unknown legacy provenance and verified upgrade backups.
+- [x] Atomically cancel linked native/coding work, block late family admission, preserve completed parent history and keep individual Stop local.
+- [x] Adopt duplicate dispatches without respawning, preserve cancellation on settlement/restart, and exclude delegated parents from automatic continuation.
+- [x] Pass adapter/process races, guard falsification, full workspace formatting/lint/tests and documentation/dependency checks.
+
+Design: [ADR-0237](docs/adr/0237-delegation-dispatch-and-family-stop-are-durable.md).
+Broader audit/crash-isolation acceptance and coordinated shutdown draining remain
+open under `P7-011`; per-call admission does not promise exactly-once external
+effects, duplicate HTTP request handling or automatic crash takeover.
+
+Windows validation: **3,215 workspace tests passed**, zero failures and six existing
+opt-in tests ignored. Binaries and examples were rebuilt; the full suite ran with
+`ACCEPTANCE_REQUIRE_BINARIES=1`. All Phase 1-4 and coding lifecycle process gates
+passed. Focused coverage includes nine coordination tests, the schema-30 upgrade,
+18 coding-manager tests and 13 native delegation end-to-end tests. Cleanup failures
+and unavailable execution results remain failed even when Stop was recorded.
+
+Removing queued cancellation protection failed the no-launch assertion. Removing
+submitted-call checks admitted invalid origins and failed their guards. Removing
+dispatch lookup and uniqueness produced distinct native and coding identities for
+one call; restored source passed. The native race uses independent proposed run
+and session IDs. Exact byte restoration and mutation logs are retained under
+`artifacts/p7-011/coordination/`, alongside the final workspace evidence.
+
+Formatting, strict all-target/all-feature Clippy, six documentation tests, local
+links and advisory/dependency/license checks passed. Native hosted CI and fresh
+live-provider acceptance remain separate; the new cases run in the existing
+Windows/macOS/Linux suites and process gates. This completes the selected
+cancellation/dispatch slice, not the broader P7-011 acceptance item.
+
 ## Completed acceptance slice: shutdown work admission (2026-10-17)
 
 Continue `P7-011` after committing and pushing the existing P7-009/P7-010 and HUD
@@ -315,9 +350,9 @@ See [P5–P8 historical evidence](docs/history/todo-p5-p8-evidence-through-2026-
 - [~] `P7-008` Adversarial Stop/timeout, agent error/exit, authentication retry, late permissions, owned descendant cleanup and setup-refusal tests are implemented, with cancellation and ownership falsification. Complete capability-skew, abrupt-crash and broader audit coverage for the supported ACP surface; native tools are not all intercepted.
 - [x] `P7-009` Replaced native objective-text identity with immutable parent/child records, conservative legacy migration, restart handling and parent Stop. Run/agent replies and CLI listings expose lineage; the completed acceptance slice above and [ADR-0234](docs/adr/0234-native-subagents-have-durable-lineage-and-parent-stop.md) record evidence and limits.
 - [x] `P7-010` Shared delegation effects and native/host execution contracts, per-tool trust and risk floors, and stored-child refusal on direct/approval-resumed launches are implemented. The completed acceptance slice above and [ADR-0235](docs/adr/0235-delegation-declares-work-and-its-execution-authority.md) record verification and upgrade behavior.
-- [ ] `P7-011` Complete broader depth/concurrency, duplicate-delivery, isolation, audit and cancellation coordination acceptance. ADR-0228 covers atomic native capacity; ADR-0234 adds stored one-level lineage, parent-admission falsification and native parent Stop/restart checks. ADR-0236 reserves admission before the stop/restart snapshot and closes it on acceptance. Coordinated cancellation of already admitted work, cross-runtime families and broader duplicate-dispatch/audit/isolation acceptance remain open.
+- [ ] `P7-011` Complete broader depth/concurrency, duplicate-delivery, isolation, audit and cancellation coordination acceptance. ADR-0228 covers atomic native capacity; ADR-0234 adds stored one-level lineage, parent-admission falsification and native parent Stop/restart checks. ADR-0236 reserves admission before the stop/restart snapshot and closes it on acceptance. ADR-0237 adds cross-runtime family Stop and at-most-one dispatch per durable call. Broader child-audit/crash-isolation acceptance, coordinated shutdown draining and native-platform acceptance remain open.
 
-The disposable Windows Codex website gate above is verified through actual approval, independent checks, a managed loopback preview, desktop/mobile-emulated interactions and explicit cleanup. Fresh sign-in, notification reception and other-provider/platform acceptance remain separate. Native parent/child identity, restart and parent Stop are implemented in the acceptance slice above. Native/coding delegation policy alignment is complete in `P7-010`; broader coordination and cancellation of already admitted work remain `P7-011`.
+The disposable Windows Codex website gate above is verified through actual approval, independent checks, a managed loopback preview, desktop/mobile-emulated interactions and explicit cleanup. Fresh sign-in, notification reception and other-provider/platform acceptance remain separate. Native parent/child identity, restart and parent Stop are implemented in the acceptance slice above. Native/coding delegation policy alignment is complete in `P7-010`; ADR-0237 adds cross-runtime family cancellation and dispatch identity. Remaining audit/isolation and shutdown draining acceptance stays in `P7-011`.
 
 ### Voice and channels (P8)
 

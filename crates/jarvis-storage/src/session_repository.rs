@@ -145,6 +145,7 @@ pub struct RunAdmissionLimits {
     parent_run_id: String,
     max_working: u32,
     max_unsettled: u32,
+    origin_call_id: Option<String>,
 }
 
 impl RunAdmissionLimits {
@@ -170,7 +171,20 @@ impl RunAdmissionLimits {
             parent_run_id: parent_run_id.to_owned(),
             max_working,
             max_unsettled,
+            origin_call_id: None,
         })
+    }
+
+    /// Binds native admission to a durable launch call, not a model-supplied key.
+    ///
+    /// # Errors
+    /// Refuses malformed call identifiers.
+    pub fn with_origin_call(mut self, call_id: &str) -> Result<Self, DatabaseError> {
+        if call_id.len() != ID_LENGTH {
+            return Err(DatabaseError::DelegationOriginRefused);
+        }
+        self.origin_call_id = Some(call_id.to_owned());
+        Ok(self)
     }
 }
 
@@ -386,6 +400,7 @@ impl StoredSession {
 /// The run produced by [`start_run`], together with its first event's position.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartedRun {
+    created: bool,
     parent_run_id: Option<String>,
     session_id: String,
     run_id: String,
@@ -399,6 +414,12 @@ pub struct StartedRun {
 }
 
 impl StartedRun {
+    /// Only the transaction winner may dispatch a new driver.
+    #[must_use]
+    pub const fn was_created(&self) -> bool {
+        self.created
+    }
+
     /// Returns the immutable parent, if this is a newly delegated run.
     #[must_use]
     pub fn parent_run_id(&self) -> Option<&str> {
@@ -602,6 +623,18 @@ pub async fn start_run(
             source,
         })?;
 
+    if let Some(existing) = check_native_dispatch(&mut transaction, input).await? {
+        transaction
+            .commit()
+            .await
+            .map_err(|source| DatabaseError::Sqlite {
+                operation: "read native dispatch",
+                source,
+            })?;
+        let mut run = read_started_run(database, &existing).await?;
+        run.created = false;
+        return Ok(run);
+    }
     check_delegated_admission(&mut transaction, input).await?;
 
     // The identity is checked before writes so an unseeded profile reports its specific cause. The
@@ -633,8 +666,8 @@ pub async fn start_run(
     sqlx::query(
         "INSERT INTO agent_runs (\
             id, session_id, workspace_id, user_id, objective, state, \
-                started_at, updated_at, correlation_id, version, full_objective, parent_run_id, delegation_kind\
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1, ?8, ?9, ?10)",
+                started_at, updated_at, correlation_id, version, full_objective, parent_run_id, delegation_kind, origin_call_id\
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1, ?8, ?9, ?10, ?11)",
     )
     .bind(&input.run_id)
     .bind(&input.session_id)
@@ -646,6 +679,7 @@ pub async fn start_run(
     .bind(&input.objective)
     .bind(input.admission_limits.as_ref().map(|limits| limits.parent_run_id.as_str()))
     .bind(if input.admission_limits.is_some() { "native" } else { "none" })
+    .bind(input.admission_limits.as_ref().and_then(|limits| limits.origin_call_id.as_deref()))
     .execute(&mut *transaction)
     .await
     .map_err(|source| map_write_error("create a run", source))?;
@@ -687,6 +721,37 @@ pub async fn start_run(
         })?;
 
     read_started_run(database, &input.run_id).await
+}
+
+async fn check_native_dispatch(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    input: &StartRunInput,
+) -> Result<Option<String>, DatabaseError> {
+    let Some(limits) = &input.admission_limits else {
+        return Ok(None);
+    };
+    let Some(call_id) = &limits.origin_call_id else {
+        return Ok(None);
+    };
+    let error = |source| DatabaseError::Sqlite {
+        operation: "validate native dispatch",
+        source,
+    };
+    let existing: Option<(String, String)> = sqlx::query_as("SELECT id,COALESCE(full_objective,objective) FROM agent_runs WHERE workspace_id=?1 AND user_id=?2 AND parent_run_id=?3 AND origin_call_id=?4")
+        .bind(&input.workspace_id).bind(&input.user_id).bind(&limits.parent_run_id).bind(call_id)
+        .fetch_optional(&mut **transaction).await.map_err(error)?;
+    if let Some((id, objective)) = existing {
+        if objective != input.objective {
+            return Err(DatabaseError::DelegationOriginRefused);
+        }
+        return Ok(Some(id));
+    }
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tool_calls WHERE id=?1 AND workspace_id=?2 AND run_id=?3 AND tool='jarvis.agent.delegate' AND outcome='submitted')")
+        .bind(call_id).bind(&input.workspace_id).bind(&limits.parent_run_id).fetch_one(&mut **transaction).await.map_err(error)?;
+    if !valid {
+        return Err(DatabaseError::DelegationOriginRefused);
+    }
+    Ok(None)
 }
 
 /// Checks lineage and capacity while the caller holds the immediate start transaction.
@@ -883,6 +948,7 @@ async fn read_started_run(
     })?;
 
     Ok(StartedRun {
+        created: true,
         parent_run_id: row.get("parent_run_id"),
         session_id: row.get("session_id"),
         run_id: row.get("id"),

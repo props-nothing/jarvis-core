@@ -75,7 +75,7 @@ struct CancelOnDrop<'a> {
 }
 impl Drop for CancelOnDrop<'_> {
     fn drop(&mut self) {
-        let _ = self.manager.stop(&json!({"task_id":self.task_id}));
+        self.manager.signal_stop(self.task_id);
     }
 }
 
@@ -117,7 +117,7 @@ async fn verify_live_stop(manager: &AsyncCodeDelegateTool, id: &str, root: &Path
     let folder = root.join("work");
     let marker = folder.join("work-started.json");
     let mut processes = wait_for_work(&marker, manager, id).await;
-    manager.stop(&json!({"task_id":id})).unwrap();
+    manager.stop(&json!({"task_id":id})).await.unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let task = manager.status(&json!({"task_id":id})).await.unwrap();
@@ -222,7 +222,7 @@ async fn live_codex_stop_terminates_started_work_and_retains_durable_cancellatio
     )
     .await;
     if acceptance.is_err() {
-        let _ = manager.stop(&json!({"task_id":id}));
+        let _ = manager.stop(&json!({"task_id":id})).await;
     }
     assert!(
         acceptance.is_ok(),

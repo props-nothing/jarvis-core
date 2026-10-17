@@ -44,11 +44,26 @@ Both jarvis.code.delegate and jarvis.code.delegate_start return a durable task I
 
 Use jarvis.code.delegate_wait with the task ID to wait up to 30 seconds per call. Repeat while the job is queued/running; a wait timeout or quiet progress does not cancel it or mean failure. A failed individual setup command gives the agent a chance to recover. Use delegate_status for an immediate snapshot, delegate_list for compact identities and delegate_stop when cancellation is intended. A queued Stop starts no agent. Startup Stop terminates the agent and its child tree; active prompts receive cancellation and termination. Files remain available for review.
 
-After daemon restart, unfinished jobs become interrupted, not silently replayed. jarvis.code.delegate_resume asks for approval and starts a **new** in-place agent using the saved directory, brief, capabilities and checks. The continuation brief instructs the new agent to inspect existing files and avoid replaying completed effects; this is guidance to the agent, not deterministic deduplication of its actions. It does not restore an ACP conversation, rerun a previous process automatically or resume legacy worktree tasks blindly. Provider limits and sign-in can still interrupt a job.
+After daemon restart, unfinished jobs become cancelled when Stop was recorded, otherwise interrupted; they are never silently replayed. jarvis.code.delegate_resume asks for approval and starts a **new** in-place agent using the saved directory, brief, capabilities and checks. The continuation brief instructs the new agent to inspect existing files and avoid replaying completed effects; this is guidance to the agent, not deterministic deduplication of its actions. It does not restore an ACP conversation, rerun a previous process automatically or resume legacy worktree tasks blindly. Provider limits and sign-in can still interrupt a job.
 
 Stop also interrupts a sign-in retry during a task. An agent's error or exit while stopping cannot restart the prompt or turn the cancellation into ordinary task failure. Sign-in and retry share any deadline you explicitly selected. If OS cleanup fails or root exit cannot be confirmed, the result reports `cleanup_failed` and the durable job is `failed`: verification is skipped and JARVIS does not claim the task stopped. Files and earlier effects are not rolled back.
 
 An ordinary stop or Settings restart refuses while native runs, queued/running coding jobs or managed preview processes would be interrupted, even after the parent conversation has finished. The reply lists the counts. An unreadable database or process registry also leaves the daemon running and reports that work state is unavailable. Wait for work to finish or explicitly use `jarvis stop|restart --force` to interrupt it; native runs parked for an owner approval remain durable and do not block a restart. An accepted stop/restart closes admission to new work, including queued coding dispatch and approval resumes. A refused check leaves admission open; force can interrupt already admitted work. See [ADR-0236](../adr/0236-shutdown-reserves-work-admission-before-checking-idleness.md).
+
+New coding jobs record their parent run and originating launch call. `jarvis cancel
+<parent-run-id>` stops that parent's unfinished native children and linked coding
+jobs, including after the parent finishes. Individual coding Stop leaves siblings
+and the parent alone. Stop is stored before notification; queued jobs do not start
+when cancellation wins admission. Running jobs use the existing process cleanup
+path. Task status exposes the cancellation timestamp while cleanup is pending.
+
+Re-delivering one stored launch call returns its existing task; it never starts a
+second worker. A new explicit launch or approved continuation creates a new task.
+Restart preserves cancellation intent and does not replay jobs or automatically
+continue a parent with coding jobs. Older jobs have unknown parents and remain
+individually stoppable. Direct inbound MCP calls without durable run/call history
+cannot launch or resume coding jobs; use the native conversation or authenticated
+run/tool API. See [durable coordination](../adr/0237-delegation-dispatch-and-family-stop-are-durable.md).
 
 ## Skills, dependencies and integrations are different
 

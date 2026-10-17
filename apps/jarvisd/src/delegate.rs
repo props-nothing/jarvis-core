@@ -519,7 +519,7 @@ impl AgentTool {
             .map_err(|_| refused("the parent tool call could not be read"))?;
         let started = self
             .runs
-            .start_delegated(
+            .start_delegated_once(
                 &StartRunRequest {
                     objective: format!("{DELEGATED_NOTICE}{task}"),
                     session_id: None,
@@ -527,9 +527,10 @@ impl AgentTool {
                     project_id,
                 },
                 call.run_id(),
+                Some(call_id),
             )
             .await;
-        let started = match started {
+        let (started, created) = match started {
             Ok(started) => started,
             Err(error) if error.is_at_capacity() => {
                 return Ok(json!({
@@ -540,31 +541,34 @@ impl AgentTool {
             Err(_) => return Err(refused("the sub-agent could not be started")),
         };
 
-        let database = Arc::clone(&self.database);
-        let executor = Arc::clone(&self.executor);
-        let run_id = started.run_id.clone();
-        let model_id = executor
-            .model_id_for(&started.objective, started.is_delegated)
-            .clone();
-        tokio::spawn(async move {
-            if let Err(error) = crate::executor::execute_run_with_limits(
-                &database,
-                executor.model(),
-                &model_id,
-                Some(&pipeline),
-                executor.workspace_daily_token_limit(),
-                &run_id,
-            )
-            .await
-            {
-                tracing::error!(run_id, error = %error, "a sub-agent could not persist its progress");
-                crate::executor::fail_if_unfinished(&database, &run_id, &error.to_string()).await;
-            }
-        });
+        if created {
+            let database = Arc::clone(&self.database);
+            let executor = Arc::clone(&self.executor);
+            let run_id = started.run_id.clone();
+            let model_id = executor
+                .model_id_for(&started.objective, started.is_delegated)
+                .clone();
+            tokio::spawn(async move {
+                if let Err(error) = crate::executor::execute_run_with_limits(
+                    &database,
+                    executor.model(),
+                    &model_id,
+                    Some(&pipeline),
+                    executor.workspace_daily_token_limit(),
+                    &run_id,
+                )
+                .await
+                {
+                    tracing::error!(run_id, error = %error, "a sub-agent could not persist its progress");
+                    crate::executor::fail_if_unfinished(&database, &run_id, &error.to_string())
+                        .await;
+                }
+            });
+        }
 
         if background {
             return Ok(
-                json!({ "outcome": "started", "run_id": started.run_id, "parent_run_id": started.parent_run_id }),
+                json!({ "outcome": if created { "started" } else { "existing" }, "origin_call_id": call_id, "run_id": started.run_id, "parent_run_id": started.parent_run_id }),
             );
         }
         self.wait_and_describe(&started.run_id, WAIT_LIMIT, 0).await

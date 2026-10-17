@@ -16,6 +16,133 @@ impl Drop for Scratch {
 fn fake() -> PathBuf {
     crate::code_agents::test_agent_executable()
 }
+
+async fn launch_origin(db: &Arc<SqliteDatabase>) -> (String, String) {
+    use jarvis_core::{CorrelationId, ToolOutcome};
+    use jarvis_storage::{CallBinding, CallOrigin, CallTarget, NewToolCall};
+    let parent = crate::run_service::RunService::new(Arc::clone(db))
+        .start(&jarvis_protocol::StartRunRequest {
+            objective: "parent".into(),
+            session_id: None,
+            idempotency_key: None,
+            project_id: None,
+        })
+        .await
+        .unwrap();
+    let id = jarvis_core::RunId::new().to_string();
+    let now = UtcTimestamp::now(&SystemClock);
+    let call = NewToolCall::new(
+        &id,
+        CallOrigin::new(&parent.workspace_id, &parent.run_id, None),
+        CallTarget::new(START, "1.1.0"),
+        CallBinding::new("a".repeat(64), id.replace('-', ""), "{}", "policy-1", None),
+        CorrelationId::new(),
+        now,
+    )
+    .unwrap();
+    jarvis_storage::admit_tool_call(db, &call).await.unwrap();
+    for state in [ToolOutcome::Authorized, ToolOutcome::Submitted] {
+        jarvis_storage::advance_tool_call(db, &id, state, now)
+            .await
+            .unwrap();
+    }
+    (parent.run_id, id)
+}
+
+#[tokio::test]
+async fn duplicate_coding_dispatch_returns_one_worker_and_durable_stop_crosses_managers() {
+    let (scratch, db, manager) = rig("write:{cwd}/once.txt,progress,wait").await;
+    let (_parent, call) = launch_origin(&db).await;
+    let args = json!({"repository":"repo","task":"one worker","mode":"in_place"});
+    let (a, b) = tokio::join!(
+        manager.start_for_call(&args, Some(&call)),
+        manager.start_for_call(&args, Some(&call))
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!(a["task_id"], b["task_id"]);
+    assert_ne!(a["outcome"], b["outcome"]);
+    assert_eq!(manager.cancellations.lock().unwrap().len(), 1);
+    let id = a["task_id"].as_str().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !scratch.0.join("repo/once.txt").exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // A second manager has no in-memory Notify for the running worker.
+    let other = AsyncCodeDelegateTool::new(
+        Arc::clone(&manager.inner),
+        Arc::clone(&db),
+        manager.workspace.clone(),
+    )
+    .without_notifications();
+    assert!(other.cancellations.lock().unwrap().is_empty());
+    other.stop(&json!({"task_id":id})).await.unwrap();
+    assert_eq!(wait(&manager, id).await["status"], "cancelled");
+    std::fs::remove_file(scratch.0.join("repo/once.txt")).unwrap();
+    let replay = other.start_for_call(&args, Some(&call)).await.unwrap();
+    assert_eq!(replay["outcome"], "existing");
+    assert!(other.cancellations.lock().unwrap().is_empty());
+    assert!(!scratch.0.join("repo/once.txt").exists());
+    assert_eq!(
+        jarvis_storage::list_delegated_tasks(&db, &manager.workspace, 50)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn parent_stop_cancels_queued_coding_without_an_agent_or_local_notification() {
+    let (scratch, db, manager) = rig("write:{cwd}/should-not-exist.txt").await;
+    let cancel = Notify::new();
+    let held = manager.inner.acquire(&cancel).await.unwrap().unwrap();
+    let (parent, call) = launch_origin(&db).await;
+    let started = manager
+        .start_for_call(
+            &json!({"repository":"repo","task":"queued child"}),
+            Some(&call),
+        )
+        .await
+        .unwrap();
+    jarvis_storage::request_run_cancellation(&db, &parent, UtcTimestamp::now(&SystemClock))
+        .await
+        .unwrap();
+    let done = wait(&manager, started["task_id"].as_str().unwrap()).await;
+    assert_eq!(done["status"], "cancelled");
+    assert_eq!(done["parent_run_id"], parent);
+    drop(held);
+    assert!(!scratch.0.join("trees").exists());
+    assert!(!scratch.0.join("repo/should-not-exist.txt").exists());
+    db.close().await;
+}
+
+#[tokio::test]
+async fn unreadable_cancellation_state_stops_the_queued_worker_without_dispatch() {
+    let (scratch, db, manager) = rig("write:{cwd}/should-not-exist.txt").await;
+    let cancel = Notify::new();
+    let held = manager.inner.acquire(&cancel).await.unwrap().unwrap();
+    manager
+        .start(&json!({"repository":"repo","task":"unreadable Stop state"}))
+        .await
+        .unwrap();
+    db.close().await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if manager.cancellations.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(held);
+    assert!(!scratch.0.join("repo/should-not-exist.txt").exists());
+}
 fn git(dir: &Path, args: &[&str]) {
     let o = Command::new("git")
         .arg("-C")
@@ -155,7 +282,7 @@ async fn live_activity_is_persisted_before_completion_and_fenced_for_models() {
             .render()
     );
     assert_eq!(console["activity"][0]["sequence"], 1);
-    manager.stop(&json!({"task_id":id})).unwrap();
+    manager.stop(&json!({"task_id":id})).await.unwrap();
     let done = wait(&manager, id).await;
     assert_eq!(done["status"], "cancelled");
     assert!(!done["activity"].as_array().unwrap().is_empty());
@@ -191,12 +318,12 @@ async fn stop_cancels_the_agent_and_keeps_a_durable_record() {
     let id = started["task_id"].as_str().unwrap().to_owned();
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     assert_eq!(
-        m.stop(&json!({"task_id":id})).unwrap()["outcome"],
+        m.stop(&json!({"task_id":id})).await.unwrap()["outcome"],
         "stop_requested"
     );
     let done = wait(&m, &id).await;
     assert_eq!(done["status"], "cancelled");
-    assert!(m.stop(&json!({"task_id":id})).is_err());
+    assert!(m.stop(&json!({"task_id":id})).await.is_err());
 }
 
 #[tokio::test]
@@ -225,7 +352,7 @@ async fn agent_exit_or_error_during_stop_keeps_durable_cancellation() {
         })
         .await
         .unwrap();
-        manager.stop(&json!({"task_id":id})).unwrap();
+        manager.stop(&json!({"task_id":id})).await.unwrap();
         let done = wait(&manager, id).await;
         assert_eq!(done["status"], "cancelled", "{ending}: {done}");
         assert_eq!(done["result"]["outcome"], "cancelled", "{ending}: {done}");
@@ -243,7 +370,7 @@ async fn stop_before_the_worker_starts_creates_no_worktree() {
         .unwrap();
     let id = started["task_id"].as_str().unwrap();
     assert_eq!(
-        manager.stop(&json!({"task_id":id})).unwrap()["outcome"],
+        manager.stop(&json!({"task_id":id})).await.unwrap()["outcome"],
         "stop_requested"
     );
     let done = wait(&manager, id).await;
@@ -256,7 +383,7 @@ async fn stop_before_the_worker_starts_creates_no_worktree() {
     assert!(done["worktree"].is_null());
     assert!(done["finished_at"].is_string());
     assert!(done["activity"].as_array().unwrap().is_empty());
-    assert!(manager.stop(&json!({"task_id":id})).is_err());
+    assert!(manager.stop(&json!({"task_id":id})).await.is_err());
     db.close().await;
 }
 
@@ -291,7 +418,7 @@ async fn stop_during_initialization_terminates_the_agent_and_its_child() {
     };
     assert!(process_running(pid));
     assert!(process_running(child_pid));
-    manager.stop(&json!({"task_id":id})).unwrap();
+    manager.stop(&json!({"task_id":id})).await.unwrap();
     let done = wait(&manager, id).await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while process_running(pid) || process_running(child_pid) {
@@ -385,10 +512,10 @@ async fn queued_tasks_can_be_cancelled_without_starting_an_agent() {
         manager.status(&json!({"task_id":second_id})).await.unwrap()["status"],
         "queued"
     );
-    manager.stop(&json!({"task_id":second_id})).unwrap();
+    manager.stop(&json!({"task_id":second_id})).await.unwrap();
     assert_eq!(wait(&manager, second_id).await["status"], "cancelled");
     assert!(!scratch.0.join("repo/must-not-exist.txt").exists());
-    manager.stop(&json!({"task_id":first_id})).unwrap();
+    manager.stop(&json!({"task_id":first_id})).await.unwrap();
     assert_eq!(wait(&manager, first_id).await["status"], "cancelled");
     drop(held);
     db.close().await;
@@ -479,7 +606,7 @@ async fn wait_timeout_leaves_quiet_agents_running_until_explicit_stop() {
         ));
         assert_eq!(view["minutes"], 0);
     }
-    manager.stop(&json!({"task_id":id})).unwrap();
+    manager.stop(&json!({"task_id":id})).await.unwrap();
     let done = manager
         .wait_for_task(&json!({"task_id":id,"seconds":30}))
         .await

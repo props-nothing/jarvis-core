@@ -29,3 +29,7 @@ A separate process gate starts the real daemon with a scripted ACP peer in a dis
 A separately enabled real Codex cancellation check uses an isolated project and existing agent authentication. Its result must be recorded separately from scripted acceptance and whole-website delivery. Exact executed checks and outstanding platform/provider gates belong in [TODO](../../TODO.md).
 
 Controlling external contracts and limits: [ACP](../research/integrations/acp.md) and [process lifetime](../research/integrations/process-lifetime.md).
+
+## Cross-runtime coordination amendment
+
+[ADR-0237](0237-delegation-dispatch-and-family-stop-are-durable.md) adds durable coding ownership and Stop, per-call dispatch identity for both runtimes, and restart adoption without automatic relaunch. Earlier remaining-work notes above describe the preceding slice; broader audit, isolation and shutdown draining acceptance remain open.

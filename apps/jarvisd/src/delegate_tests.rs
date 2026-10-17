@@ -566,7 +566,26 @@ async fn a_delegated_task_runs_as_a_sub_agent_and_its_answer_is_fenced() {
         .await
         .unwrap_or_else(|error| panic!("{error:?}"));
     assert!(reply.is_delegated);
-    assert_eq!(reply.parent_run_id, Some(parent.run_id));
+    assert_eq!(reply.parent_run_id, Some(parent.run_id.clone()));
+    let calls = jarvis_storage::read_run_tool_calls(&fixture.database, &parent.run_id)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let agent = AgentTool::new(Arc::clone(&fixture.database), Arc::clone(&fixture.executor));
+    agent.bind(&fixture.pipeline);
+    let adopted = agent
+        .delegate(
+            calls[0].id(),
+            &json!({"task":"say hello","background":true}),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(adopted["outcome"], "existing");
+    assert_eq!(adopted["run_id"], children[0].id());
+    let after = jarvis_storage::read_delegated_runs(&fixture.database, &parent.workspace_id, 10)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(after.len(), 1);
+    assert_eq!(&after[0], children[0]);
 }
 
 /// **Delegation is one level deep: a sub-agent is offered no delegation tool and is refused one it names anyway.**

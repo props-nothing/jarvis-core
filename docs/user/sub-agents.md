@@ -22,7 +22,7 @@ unknown parent; JARVIS does not guess one. Stop those legacy children by their o
 run IDs.
 
 A parent can finish while a background child continues. To stop the parent and
-its unfinished native children, use `jarvis cancel <parent-run-id>`. This also
+its unfinished native children and linked coding jobs, use `jarvis cancel <parent-run-id>`. This also
 works when the parent has already finished but its children are still working.
 Stopping a child by its own ID leaves its parent and siblings alone. Child
 approvals are withdrawn on Stop. Work already submitted to an external service
@@ -33,6 +33,8 @@ and approval waits remain available with the same child identity. JARVIS does no
 automatically replay children or restart a parent that already delegated work.
 Inspect the saved results and pending approvals before asking for a new attempt.
 
-These rules cover native sub-agents. External [coding agents](code-agents.md)
-have their own task IDs and Stop controls. The durable lifecycle is specified in
-[ADR-0234](../adr/0234-native-subagents-have-durable-lineage-and-parent-stop.md).
+External [coding agents](code-agents.md) keep their own task IDs and individual
+Stop controls. New coding jobs also record their parent; older jobs with unknown
+parents must be stopped individually. Re-delivering the same stored launch call
+returns its existing task without starting another worker. A new explicit launch
+call creates a new task. See [durable coordination](../adr/0237-delegation-dispatch-and-family-stop-are-durable.md).

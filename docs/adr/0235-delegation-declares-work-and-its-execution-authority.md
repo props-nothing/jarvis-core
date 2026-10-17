@@ -83,3 +83,7 @@ Native parent Stop and coding Stop retain their separate lifecycle contracts.
 Cross-runtime cancellation, broader concurrency/duplicate-dispatch coordination
 and shutdown draining remain P7-011; the scoped ACP bridge and sandbox remain
 P7-003.
+
+## Cross-runtime coordination amendment
+
+[ADR-0237](0237-delegation-dispatch-and-family-stop-are-durable.md) adds durable coding ownership and Stop, per-call dispatch identity for both runtimes, and restart adoption without automatic relaunch. Earlier remaining-work notes above describe the preceding slice; broader audit, isolation and shutdown draining acceptance remain open.

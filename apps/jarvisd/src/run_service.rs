@@ -96,20 +96,39 @@ impl RunService {
         &self,
         request: &StartRunRequest,
     ) -> impl std::future::Future<Output = Result<RunReply, RunServiceError>> + '_ {
-        self.start_with_admission(request, None)
+        let future = self.start_with_admission(request, None);
+        async move { future.await.map(|(reply, _)| reply) }
     }
 
+    #[cfg(test)]
     pub(crate) async fn start_delegated(
         &self,
         request: &StartRunRequest,
         parent_run_id: &str,
     ) -> Result<RunReply, RunServiceError> {
+        self.start_delegated_once(request, parent_run_id, None)
+            .await
+            .map(|(reply, _)| reply)
+    }
+
+    pub(crate) async fn start_delegated_once(
+        &self,
+        request: &StartRunRequest,
+        parent_run_id: &str,
+        call_id: Option<&str>,
+    ) -> Result<(RunReply, bool), RunServiceError> {
         let limits = RunAdmissionLimits::new(
             parent_run_id,
             crate::delegate::MAX_ACTIVE_SUBAGENTS,
             crate::delegate::MAX_UNSETTLED_SUBAGENTS,
         )
         .map_err(|error| map_database_error(&error))?;
+        let limits = match call_id {
+            Some(call_id) => limits
+                .with_origin_call(call_id)
+                .map_err(|error| map_database_error(&error))?,
+            None => limits,
+        };
         self.start_with_admission(request, Some(limits)).await
     }
 
@@ -117,7 +136,7 @@ impl RunService {
         &self,
         request: &StartRunRequest,
         admission_limits: Option<RunAdmissionLimits>,
-    ) -> impl std::future::Future<Output = Result<RunReply, RunServiceError>> + '_ {
+    ) -> impl std::future::Future<Output = Result<(RunReply, bool), RunServiceError>> + '_ {
         let objective = request.objective.trim().to_owned();
         let idempotency_key = request.idempotency_key.clone();
         // Bound before the `async move` so the future owns its input rather than borrowing the
@@ -207,7 +226,9 @@ impl RunService {
             let started = start_run(&self.database, &input)
                 .await
                 .map_err(|error| map_database_error(&error))?;
-            if let Some(project) = project {
+            if let Some(project) = project
+                && started.was_created()
+            {
                 link_project(
                     &self.database,
                     LinkKind::Session,
@@ -217,7 +238,7 @@ impl RunService {
                 .await
                 .map_err(|error| map_database_error(&error))?;
             }
-            Ok(reply::from_started(&started))
+            Ok((reply::from_started(&started), started.was_created()))
         }
     }
 
@@ -233,7 +254,7 @@ impl RunService {
         Ok(reply::from_stored(&run))
     }
 
-    /// Requests cancellation of a run and its unfinished native children.
+    /// Requests cancellation of a run, its native children and linked coding tasks.
     ///
     /// Takes no expected version, deliberately, and `request_run_cancellation` documents why: a
     /// cancellation is **operator intent**, and every progress write advances a running run's version,

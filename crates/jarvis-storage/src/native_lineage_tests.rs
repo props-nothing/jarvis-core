@@ -298,7 +298,13 @@ async fn parent_stop_withdraws_pending_and_approved_child_effects_only() {
     let unrelated = root(&database, "unrelated approval").await;
     park(&database, child.run_id()).await;
     let mut approvals = Vec::new();
-    for (run, approved) in [(&child, false), (&child, true), (&unrelated, false)] {
+    for (run, approved) in [
+        (&child, false),
+        (&child, true),
+        (&parent, false),
+        (&parent, true),
+        (&unrelated, false),
+    ] {
         let request = must(jarvis_core::ApprovalRequest::new(
             jarvis_core::ApprovalRequestParts {
                 id: jarvis_core::ApprovalId::new(),
@@ -333,6 +339,7 @@ async fn parent_stop_withdraws_pending_and_approved_child_effects_only() {
         }
         approvals.push(id);
     }
+    finish_fixture(&database, parent.run_id()).await;
     must(crate::request_run_cancellation(&database, parent.run_id(), at(2)).await);
     let state: String = must(
         sqlx::query_scalar("SELECT state FROM approvals WHERE id = ?1")
@@ -341,11 +348,11 @@ async fn parent_stop_withdraws_pending_and_approved_child_effects_only() {
             .await,
     );
     assert_eq!(state, "expired");
-    for id in &approvals[..2] {
+    for id in &approvals[..4] {
         assert!(must(crate::read_approval_arguments(&database, id).await).is_none());
     }
     assert_eq!(
-        must(crate::read_approval_arguments(&database, &approvals[2]).await),
+        must(crate::read_approval_arguments(&database, &approvals[4]).await),
         Some("{}".to_owned())
     );
     assert_eq!(
@@ -354,3 +361,6 @@ async fn parent_stop_withdraws_pending_and_approved_child_effects_only() {
     );
     database.close().await;
 }
+
+#[path = "delegation_coordination_tests.rs"]
+mod coordination;

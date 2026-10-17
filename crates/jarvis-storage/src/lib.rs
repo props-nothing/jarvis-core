@@ -61,9 +61,10 @@ pub use database::{
 pub use delegated_task_repository::{
     DelegatedTaskFinish, MAX_TASK_ACTIVITY_CHARS, MAX_TASK_ACTIVITY_RETAINED,
     MAX_TASK_ACTIVITY_SHOWN, NewDelegatedTask, StoredDelegatedTask, StoredDelegatedTaskActivity,
-    append_delegated_task_activity, create_delegated_task, create_delegated_task_with_request,
-    find_delegated_task, finish_delegated_task, interrupt_delegated_tasks, list_delegated_tasks,
-    mark_delegated_task_running,
+    append_delegated_task_activity, create_delegated_task, create_delegated_task_for_call,
+    create_delegated_task_with_request, delegated_task_cancellation_requested, find_delegated_task,
+    finish_delegated_task, interrupt_delegated_tasks, list_delegated_tasks,
+    mark_delegated_task_running, request_delegated_task_cancellation,
 };
 pub use digest_repository::{
     FailedRun, ModelUsage, ProjectActivity, RunTotals, StoredDigest, digest_since,

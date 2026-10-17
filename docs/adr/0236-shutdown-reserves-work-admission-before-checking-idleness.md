@@ -79,3 +79,7 @@ across native/coding families, broader duplicate-dispatch/audit/isolation
 acceptance and other P7-011 work remain open. ACP host execution remains the
 ADR-0222 boundary, not an OS sandbox. No external API, dependency, provider
 contract or live-provider acceptance changes here.
+
+## Cross-runtime coordination amendment
+
+[ADR-0237](0237-delegation-dispatch-and-family-stop-are-durable.md) adds durable coding ownership and Stop, per-call dispatch identity for both runtimes, and restart adoption without automatic relaunch. Earlier remaining-work notes above describe the preceding slice; broader audit, isolation and shutdown draining acceptance remain open.

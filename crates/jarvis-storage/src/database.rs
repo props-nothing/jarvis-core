@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Current application-owned SQLite schema version.
-pub const CURRENT_SCHEMA_VERSION: i64 = 30;
+pub const CURRENT_SCHEMA_VERSION: i64 = 31;
 /// Default filename for the canonical local database.
 pub const DEFAULT_DATABASE_FILENAME: &str = "jarvis.sqlite3";
 
@@ -108,6 +108,9 @@ impl DaemonStopReason {
 /// Errors produced while opening, checking, backing up, or migrating SQLite.
 #[derive(Debug, Error)]
 pub enum DatabaseError {
+    /// A delegation has no valid durable origin, or repeats an origin with different input.
+    #[error("the delegation origin is invalid, cancelled, or conflicts with an existing dispatch")]
+    DelegationOriginRefused,
     /// This daemon incarnation has closed work admission.
     #[error(transparent)]
     WorkAdmission(#[from] jarvis_core::WorkAdmissionError),
@@ -1927,6 +1930,63 @@ mod tests {
             drop(connections);
             database.close().await;
         }
+    }
+
+    #[tokio::test]
+    async fn delegation_migration_preserves_unknown_legacy_provenance_and_backup() {
+        let directory = TestDirectory::new();
+        let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
+        let mut connection = must(connection_options(&path, true).connect().await);
+        let mut old = sqlx::migrate!("./migrations/sqlite");
+        old.migrations =
+            std::borrow::Cow::Owned(old.iter().filter(|m| m.version <= 30).cloned().collect());
+        must(old.run(&mut connection).await);
+        must(sqlx::query("INSERT INTO delegated_tasks (id,workspace_id,repository,task,allow_commands,minutes,status,created_nanos,created_at,updated_at,request_json) VALUES (?1,?2,'repo','legacy task',0,1,'queued',0,?3,?3,'{}')")
+            .bind(RUN).bind(crate::LOCAL_WORKSPACE_ID).bind(AT).execute(&mut connection).await);
+        must(connection.close().await);
+        let db = must(SqliteDatabase::open(&path).await);
+        let task = must(crate::find_delegated_task(&db, crate::LOCAL_WORKSPACE_ID, RUN).await);
+        assert_eq!(task.task, "legacy task");
+        assert_eq!(task.request_json.as_deref(), Some("{}"));
+        assert!(task.parent_run_id.is_none());
+        assert!(task.origin_call_id.is_none());
+        assert!(task.cancellation_requested_at.is_none());
+        let backup = db
+            .pre_migration_backup()
+            .unwrap_or_else(|| panic!("verified backup required"));
+        let mut old = read_only_connection(backup).await;
+        assert_eq!(
+            must(
+                sqlx::query_scalar::<_, i64>("PRAGMA user_version")
+                    .fetch_one(&mut old)
+                    .await
+            ),
+            30
+        );
+        assert_eq!(
+            must(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM delegated_tasks")
+                    .fetch_one(&mut old)
+                    .await
+            ),
+            1
+        );
+        must(old.close().await);
+        assert!(must(
+            crate::request_delegated_task_cancellation(
+                &db,
+                crate::LOCAL_WORKSPACE_ID,
+                RUN,
+                must(AT.parse())
+            )
+            .await
+        ));
+        must(crate::interrupt_delegated_tasks(&db, must(AT.parse())).await);
+        assert_eq!(
+            must(crate::find_delegated_task(&db, crate::LOCAL_WORKSPACE_ID, RUN).await).status,
+            "cancelled"
+        );
+        db.close().await;
     }
 
     #[tokio::test]

@@ -253,6 +253,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0234](0234-native-subagents-have-durable-lineage-and-parent-stop.md) | Native subagents have durable lineage and parent Stop | Accepted |
 | [0235](0235-delegation-declares-work-and-its-execution-authority.md) | Delegation declares work and its execution authority | Accepted |
 | [0236](0236-shutdown-reserves-work-admission-before-checking-idleness.md) | Shutdown reserves work admission before checking idleness | Accepted |
+| [0237](0237-delegation-dispatch-and-family-stop-are-durable.md) | Delegation dispatch and family Stop are durable | Accepted |
 
 ## Historical identifier aliases
 

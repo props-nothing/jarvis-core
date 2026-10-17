@@ -445,6 +445,7 @@ pub async fn continuable_interrupted_runs(
              WHERE id = ?1 AND state = 'failed' AND error_code = ?2 AND started_at >= ?3 \
                AND delegation_kind = 'none' \
                AND NOT EXISTS (SELECT 1 FROM agent_runs AS child WHERE child.parent_run_id = run.id) \
+               AND NOT EXISTS (SELECT 1 FROM delegated_tasks AS task WHERE task.parent_run_id = run.id) \
                AND NOT EXISTS (SELECT 1 FROM agent_runs AS later \
                                WHERE later.session_id = run.session_id AND later.id > run.id)",
         )
@@ -945,11 +946,16 @@ pub async fn request_run_cancellation(
         operation: "read unfinished child runs",
         source,
     })?;
-    if targets.is_empty() {
+    let coding =
+        crate::delegated_task_repository::cancel_coding_family(&mut transaction, id, at).await?;
+    if targets.is_empty() && coding == 0 {
         return Err(DatabaseError::RunTransitionRefused {
             source: jarvis_core::RunTransitionError::TerminalStateImmutable { from: state },
         });
     }
+    sqlx::query("INSERT INTO run_family_stops (run_id,requested_at) VALUES (?1,?2) ON CONFLICT(run_id) DO NOTHING")
+        .bind(id).bind(at.to_string()).execute(&mut *transaction).await
+        .map_err(|source| DatabaseError::Sqlite { operation: "record family Stop", source })?;
     // A completed parent may still own background work. Its outcome stays immutable;
     // Stop records intent on each unfinished child. New children cannot race past this lock.
     sqlx::query(
@@ -962,7 +968,7 @@ pub async fn request_run_cancellation(
     sqlx::query(
         "UPDATE approvals SET state = CASE WHEN state = 'pending' THEN 'expired' ELSE state END, arguments_json = NULL \
          WHERE state IN ('pending', 'approved') AND run_id IN \
-         (SELECT id FROM agent_runs WHERE (id = ?1 OR parent_run_id = ?1) AND cancellation_requested_at IS NOT NULL)",
+         (SELECT id FROM agent_runs WHERE id = ?1 OR parent_run_id = ?1)",
     ).bind(id).execute(&mut *transaction).await
         .map_err(|source| DatabaseError::Sqlite { operation: "withdraw run family approvals", source })?;
     transaction

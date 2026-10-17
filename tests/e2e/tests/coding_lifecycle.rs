@@ -195,10 +195,15 @@ impl Api {
                 201,
             )
             .await;
+        self.tool_for_run(&run["run_id"], tool, args, approval)
+            .await;
+    }
+
+    async fn tool_for_run(&self, run: &Value, tool: &str, args: Value, approval: bool) {
         let call = self
             .post(
                 &format!("/tools/{tool}/calls"),
-                json!({"run_id":run["run_id"],"arguments":args}),
+                json!({"run_id":run,"arguments":args}),
                 if approval { 202 } else { 200 },
             )
             .await;
@@ -367,6 +372,49 @@ async fn verify_owner_stop(api: &Api, marker: &Path) {
     assert!(marker.is_file(), "cancellation must retain work evidence");
 }
 
+async fn verify_parent_stop(api: &Api, marker: &Path) {
+    let parent = api
+        .post(
+            "/runs",
+            json!({"objective":"family cancellation acceptance"}),
+            201,
+        )
+        .await;
+    for task in ["family running", "family queued"] {
+        api.tool_for_run(
+            &parent["run_id"],
+            "jarvis.code.delegate_start",
+            json!({"task":task,"allow_commands":false,"allow_network":false}),
+            true,
+        )
+        .await;
+    }
+    let active = api.task("family running", "running").await;
+    let queued = api.task("family queued", "queued").await;
+    assert_eq!(active["parent_run_id"], parent["run_id"]);
+    assert_eq!(queued["parent_run_id"], parent["run_id"]);
+    assert!(active["origin_call_id"].is_string());
+    assert_ne!(active["origin_call_id"], queued["origin_call_id"]);
+    let mut processes = FixtureProcesses::ready(marker).await;
+    let before = std::fs::read(marker).unwrap();
+    api.post(
+        &format!("/runs/{}/cancel", parent["run_id"].as_str().unwrap()),
+        json!({}),
+        200,
+    )
+    .await;
+    for task in ["family running", "family queued"] {
+        let stopped = api.task(task, "cancelled").await;
+        assert!(stopped["cancellation_requested_at"].is_string());
+    }
+    processes.assert_stopped().await;
+    assert_eq!(
+        std::fs::read(marker).unwrap(),
+        before,
+        "queued cancellation must not start another process"
+    );
+}
+
 async fn verify_approved_continuation(
     api: &Api,
     paths: &AppPaths,
@@ -447,6 +495,19 @@ async fn coding_stop_and_daemon_restart_preserve_files_without_replaying_jobs() 
     let mut running = Daemon::start(&daemon, &root.0, &paths).await;
     let api = Api::new(&paths, port);
     verify_owner_stop(&api, &first_marker).await;
+
+    let family_marker = folder.join("family.json");
+    configure(
+        &paths,
+        &folder,
+        &agent,
+        &format!(
+            "initialize_wait:{},initialize_child",
+            family_marker.display()
+        ),
+        port,
+    );
+    verify_parent_stop(&api, &family_marker).await;
 
     let restart_marker = folder.join("restart.json");
     configure(
