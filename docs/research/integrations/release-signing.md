@@ -1,7 +1,7 @@
 ---
 integration: release-signing
 status: implemented
-last_verified: 2026-10-17
+last_verified: 2026-10-18
 owners: []
 selected_spec_version: "Sigstore bundle; GitHub Actions OIDC"
 selected_sdk: "Cosign v3.1.3 (11926fa5bbbbde47e88fc006b625a17769b743b2), standalone executable"
@@ -105,8 +105,8 @@ deadlines, bounded manifests/bundles/verifier size, and fail closed on outages.
   fail. The production Windows installer rejects that valid foreign publisher
   with its own exact GitHub workflow identity. Public bundle/certificates stay in
   temporary/ignored artifacts, not the repository.
-- Native CI runs this network acceptance on Linux/macOS/Windows. Repository OIDC
-  signing and installation from its published bundle still require a hosted run;
+- Native CI runs this network acceptance on Linux/macOS/Windows. At this point,
+  repository OIDC signing and installation from its published bundle required a hosted run;
   fixture signers do not establish that acceptance.
 - Owner confirmed no native signing credentials. Authenticode and Apple
   notarization remain open; no credentials or self-signed substitute are created.
@@ -125,8 +125,8 @@ Intel macOS remains cross-built. This harness does not claim clean-host or
 live-provider onboarding. Windows subprocesses explicitly hide windows and retain
 PATHEXT/ComSpec in the isolated OS environment. Its first local prototype lacked
 PATHEXT and failed before curl; no passing install is claimed from that attempt.
-The corrected harness is pending hosted acceptance; do not run interactive native
-installer probes on the owner's desktop while they use another application.
+At this point, the corrected harness was pending hosted acceptance. Keep native
+installer acceptance on hosted runners without disturbing the owner's desktop.
 
 ## Hosted follow-up (2026-10-18)
 
@@ -144,7 +144,7 @@ timed out in the initial PowerShell application-discovery probe, before install.
 These failures do not establish complete installation acceptance. The harness now
 creates an empty portable root, reports empty diagnostic output clearly, and
 checks Windows PATH/PATHEXT filesystem entries without PowerShell module discovery.
-Native rerun acceptance remains open; no local installer launch is used to disturb
+These repairs required a native rerun; no local installer launch was used to disturb
 the owner's foreground application.
 
 CI now also runs the current bootstrap against that exact pinned public release
@@ -152,3 +152,15 @@ on all four installation targets. This compatibility fixture catches harness and
 installer regressions without rebuilding a release first; it does not substitute
 for Release's post-publication check of the newly built executable. Both paths
 are read-only toward GitHub and use the same production signature verification.
+
+[CI 39076425958](https://github.com/props-nothing/jarvis-core/actions/runs/39076425958)
+subsequently passed all 14 jobs for `40fc573`, including all four signed-install
+compatibility jobs. The production bootstrap accepted the public `70cfc6e`
+repository-signed release on Linux x86_64/ARM64, macOS ARM64 and Windows x86_64;
+both version commands, fresh-profile diagnosis and existing-install preservation
+passed with Git/Rust/Node/Python/GitHub CLI absent from the subprocess PATH.
+This closes repository publication/public-install acceptance for the keyless
+signing path. The tested executable is the pinned `70cfc6e` release; this does not
+claim publication or post-publication installation of `40fc573`. Intel macOS
+runtime acceptance, native certificate signing, binary updates and clean-machine
+live-provider onboarding remain separate gates.

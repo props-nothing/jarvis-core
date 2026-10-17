@@ -1,6 +1,6 @@
 ---
 integration: offline-database-recovery
-status: implemented-locally-native-acceptance-pending
+status: implemented-native-accepted
 last_verified: 2026-10-18
 selected_sdk: "Rust 1.98.1 std; atomic-write-file 0.3.1; existing pinned SQLx/SQLite"
 ---
@@ -92,4 +92,15 @@ workspace passed 3,241 tests across 62 targets, with zero failures and six exist
 opt-in ignores. The CLI was rechecked after adding absolute output paths; diagnostic
 code/remediation tests passed with both new findings included. All 66 release tests,
 six documentation tests, 381-document/1,174-link checks and workflow lint pass.
-Native CI evidence remains tracked separately in the active backlog.
+
+## Native evidence (2026-10-18)
+
+[CI 39076425958](https://github.com/props-nothing/jarvis-core/actions/runs/39076425958)
+passed all 14 jobs for `40fc573c8dc4018131bbfd52fe251ae6515e7dfc`.
+Windows storage, daemon and remaining-workspace partitions all passed; Linux and
+macOS passed their complete workspace suites, including recovery and the Unix
+symlink guards. Native strict Clippy, dependency policy, documentation checks and
+freshly rebuilt phase/coding-lifecycle process gates passed. This closes the
+offline database recovery slice's native gate. Binary update/health rollback,
+schema downgrade, whole-profile disaster recovery and clean-machine onboarding
+remain separate work.

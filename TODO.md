@@ -6,7 +6,19 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
-## Current acceptance slice: offline database recovery (2026-10-18)
+## Current acceptance slice: signed binary update and rollback (2026-10-18)
+
+Continue owner-selected `P12-001` / `P9-006` from the accepted signed first-install
+and offline database recovery foundations below.
+
+- [ ] Define and implement verified binary staging/activation, retained previous-version recovery and health checks, with an ADR for durable update state and service ownership.
+- [ ] Prove failed/interrupted activation preserves a recoverable installation and database; define schema compatibility before supporting a downgrade.
+- [ ] Verify service reconciliation and update/rollback on Windows, macOS and Linux, then complete clean-machine onboarding/install/repair/uninstall acceptance (`P9-007`, `P9-022`).
+
+Native certificate signing still needs owner-provided credentials. Database
+snapshots alone do not complete binary rollback or whole-profile recovery.
+
+## Completed acceptance slice: offline database recovery (2026-10-18)
 
 Owner-selected `P12-001` / `P9-006` continuation: establish a verified database
 recovery path before binary activation. Full updates and clean-machine onboarding
@@ -15,14 +27,13 @@ remain separate acceptance work.
 - [x] Add owner-invoked `backup create|verify ID|restore ID|recover`, actual daemon-lock exclusion, current-schema/sidecar guards and retained pre-restore snapshots.
 - [x] Persist a pending restore before atomic replacement; block daemon SQLite access until explicit recovery reconciles the before/after image without guessing. Doctor diagnoses pending/malformed journals before inspecting SQLite.
 - [x] Pass real-value restore/undo, corruption/schema/foreign-key/sidecar refusal, actual process-death recovery, daemon-start refusal and guard falsification; 3,241 Windows workspace tests pass (six existing opt-in ignores), plus formatting, strict Clippy, 66 release tests, workflow lint, docs and dependency policy.
-- [ ] Native CI acceptance on Windows, macOS and Linux for this recovery revision.
-- [ ] Continue signed binary activation/health rollback, service reconciliation and clean-machine onboarding; snapshots alone do not complete these gates.
+- [x] Native CI acceptance on Windows, macOS and Linux for `40fc573`: all 14 jobs passed in [CI 39076425958](https://github.com/props-nothing/jarvis-core/actions/runs/39076425958), including recovery tests, strict lint and rebuilt process gates.
 
 [Design](docs/adr/0241-database-restores-require-offline-ownership-and-a-recovery-journal.md),
 [research/evidence](docs/research/integrations/offline-database-recovery.md),
 [recovery runbook](docs/operations/database-recovery.md).
 
-## Signed release manifest acceptance (2026-10-17)
+## Completed acceptance slice: signed release manifests (2026-10-18)
 
 Owner-selected `P12-001` continuation. The owner confirmed no native signing
 credentials yet; Authenticode/notarization remain open without blocking keyless
@@ -32,8 +43,7 @@ publisher verification.
 - [x] Sign and verify before publication; verify twelve uploaded assets. Installer signed mode checks publisher identity before archive download/execution and never falls back to unsigned mode.
 - [x] Exercise real upstream signature acceptance and tamper/wrong issuer/wrong identity rejection on Windows, plus rejection through the production installer. Add native Linux/macOS/Windows CI coverage.
 - [x] Pass 66 release/manifest tests, native Windows/Git Bash installer fixtures, real verifier tests, signature-guard falsification, 3,228 workspace tests (six existing opt-in ignores), formatting, strict Clippy, documentation and dependency policy.
-- [ ] Hosted repository-identity publication and public signed installation acceptance on Linux x86_64/ARM64, macOS ARM64 and Windows; restricted PATH/fresh-profile checks do not establish a clean VM or live-provider onboarding.
-- [ ] Continue atomic update/rollback and fresh-machine onboarding acceptance; no completion claim follows from signing alone.
+- [x] Hosted repository-identity publication at `70cfc6e`, followed by public signed installation acceptance using the `40fc573` bootstrap/harness on Linux x86_64/ARM64, macOS ARM64 and Windows. All four compatibility jobs passed in [CI 39076425958](https://github.com/props-nothing/jarvis-core/actions/runs/39076425958); restricted PATH/fresh-profile checks do not establish a clean VM or live-provider onboarding.
 
 [Design](docs/adr/0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md),
 [research/evidence](docs/research/integrations/release-signing.md),
@@ -44,8 +54,11 @@ assets in [Release 39074537468](https://github.com/props-nothing/jarvis-core/act
 Post-publish installation acceptance failed in the harness: Linux/macOS reached
 doctor with a nonexistent portable root; Windows timed out discovering absent
 tools through PowerShell. The corrected harness creates the empty root and checks
-Windows executable search paths directly. All four complete acceptance jobs still
-need a passing rerun; publication success is not that evidence.
+Windows executable search paths directly. All four compatibility jobs subsequently
+passed at `40fc573`, verifying the pinned public `70cfc6e` release, both version
+commands, fresh-profile diagnosis and existing-install preservation without
+Git/Rust/Node/Python/GitHub CLI on PATH. This does not establish publication or
+post-publication installation of `40fc573`; each new release retains that gate.
 
 ## Completed local slice: pinned prebuilt first installation (2026-10-17)
 
@@ -478,7 +491,7 @@ Order: `P8-018`–`P8-020` first (backup voice with no new account); `P8-022` ne
 
 - [~] `P9-002` Browser chat, settings, activity, approvals, memory and tool navigation exist. Continue user-flow/accessibility verification, canonical transcript browsing across browsers/devices and the remaining provider-specific setup work. A Tauri rewrite is not required.
 - [~] `P9-003` User service install/uninstall exists. Resolve documented service/manual-daemon ownership cases and verify native lifecycle; system-wide modes remain optional.
-- [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Signed manifests are implemented in the opt-in path (ADR-0240); hosted publisher acceptance, default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
+- [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Signed manifests and hosted publisher/public-install acceptance pass in the opt-in path (ADR-0240); default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
 - [ ] `P9-005` Signed native artifacts, complete dependency notices/SBOM, provenance, checksums and release notes.
 - [~] `P9-006` Offline database snapshots, guarded same-schema restore/undo and interrupted-restore reconciliation are implemented (ADR-0241; acceptance above). Atomic binary updates, schema-change rollback, health checks, channels and version/split-brain diagnosis remain.
 - [ ] `P9-007` Clean native install/update/rollback/repair/uninstall without a development toolchain.
