@@ -6,7 +6,7 @@
 
 ## At a glance
 
-Reviewed 2026-10-17. The [active backlog](TODO.md) controls current acceptance order. Earlier test transcripts and original phase wording remain in dated history; they do not override later accepted ADRs or represent current test failures.
+Reviewed 2026-10-18. The [active backlog](TODO.md) controls current acceptance order. Earlier test transcripts and original phase wording remain in dated history; they do not override later accepted ADRs or represent current test failures.
 
 | Area | Built now | Remaining acceptance or capability |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ Reviewed 2026-10-17. The [active backlog](TODO.md) controls current acceptance o
 | MCP accounts | Named stdio/HTTP secrets, persistent GitHub OAuth and generic pre-registered OAuth | Real provider/browser acceptance, durable direct-call history, automatic client registration, per-client credentials and hot registration |
 | Coding | Settings-first in-place queued jobs, opt-in worktrees, full skill bundles, independent checks, managed previews, Windows Codex cancellation and a verified disposable website with explicit continuation | Fresh sign-in and other-provider/platform acceptance, scoped integration bridge and optional enforceable sandbox |
 | Voice | Browser voice/optional runtime synthesis; owner-reported working outbound calls | New setup requires ElevenLabs per owner choice; browser-independent local speech and broader telephony remain |
-| Distribution | Apache-2.0, user installation/services, verified automatic public unsigned prereleases and source-building website scripts | Complete notices/SBOM, signed public packages, update/rollback and clean-machine verification |
+| Distribution | Apache-2.0, user installation/services, signed release manifests, opt-in prebuilt bootstrap, offline database snapshots/restore and source-building website scripts | Native signing credentials, hosted install/recovery acceptance, complete notices/SBOM, binary update/rollback and clean-machine verification |
 | Scale | Local SQLite profile | Server, PostgreSQL parity, multiple devices and roles only for a named requirement |
 
 <a id="current-acceptance-slice"></a>

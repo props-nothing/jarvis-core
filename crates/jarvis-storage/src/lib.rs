@@ -1,5 +1,6 @@
 //! Storage adapters and migration infrastructure for JARVIS.
 
+mod backup;
 mod config;
 mod credential;
 mod database;
@@ -34,6 +35,12 @@ mod workspace_repository;
 
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;
+
+pub use backup::{
+    BackupError, DatabaseBackup, DatabaseRestore, RestoreState, create_database_backup,
+    database_restore_status, recover_database_restore, require_settled_database_restore,
+    restore_database_backup, verify_database_backup,
+};
 
 pub use approval_repository::{
     MAX_APPROVAL_ARGUMENTS_BYTES, attach_approval_arguments, clear_approval_arguments,

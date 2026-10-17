@@ -22,6 +22,7 @@
 | Teach an approved procedure | [Skills](user/skills.md) |
 | Delegate a coding task | [Coding agents and current limits](user/code-agents.md) |
 | Track or stop delegated native work | [Native sub-agents](user/sub-agents.md) |
+| Save or restore a stopped profile's database | [Database recovery](operations/database-recovery.md) |
 | Measure whether a change helped | [Evaluations](user/evals.md) |
 | Build and contribute | [Development setup](development/getting-started.md) / [contributing](../CONTRIBUTING.md) |
 

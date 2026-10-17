@@ -420,6 +420,25 @@ fn world_accessible(_path: &Path) -> Option<String> {
 
 async fn check_database(paths: &AppPaths) -> CheckResult {
     const NAME: &str = "database";
+    // Ordinary read-only SQLite may create WAL/SHM files. Report unresolved
+    // recovery without opening it. This observation does not grant maintenance
+    // ownership; the owner must close other database inspectors for maintenance.
+    let recovery_finding = match jarvis_storage::database_restore_status(paths) {
+        Ok(Some(record)) if record.state == jarvis_storage::RestoreState::Pending => {
+            Some(Finding::new(
+                FindingCode::DatabaseRestorePending,
+                safe("a database restore requires explicit recovery before startup"),
+            ))
+        }
+        Err(_) => Some(Finding::new(
+            FindingCode::DatabaseRestoreInvalid,
+            safe("database restore evidence could not be validated"),
+        )),
+        _ => None,
+    };
+    if let Some(finding) = recovery_finding {
+        return CheckResult::from_findings(NAME, vec![finding]);
+    }
     let path = paths.data().join(jarvis_storage::DEFAULT_DATABASE_FILENAME);
     let inspection = match inspect_database(&path).await {
         Ok(inspection) => inspection,
@@ -891,6 +910,54 @@ pub const fn runtime_source_name(source: jarvis_storage::RuntimePathSource) -> &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn restore_diagnosis_preserves_evidence_without_opening_sqlite() {
+        let root = std::env::temp_dir().join(format!(
+            "jarvis-restore-doctor-{}",
+            jarvis_core::scratch_tag()
+        ));
+        let paths = AppPaths::from_root(&root).unwrap_or_else(|error| panic!("{error}"));
+        fs::create_dir_all(paths.data()).unwrap_or_else(|error| panic!("{error}"));
+        fs::create_dir_all(paths.state()).unwrap_or_else(|error| panic!("{error}"));
+        let database = paths.data().join(jarvis_storage::DEFAULT_DATABASE_FILENAME);
+        fs::write(&database, b"preserve evidence").unwrap_or_else(|error| panic!("{error}"));
+        let pending = serde_json::json!({"format": 1, "selected": jarvis_core::BackupId::new(),
+            "previous": jarvis_core::BackupId::new(), "before_sha256": "a".repeat(64),
+            "after_sha256": "b".repeat(64), "state": "pending"})
+        .to_string();
+        for (record, expected) in [
+            (pending.as_str(), FindingCode::DatabaseRestorePending),
+            ("{}", FindingCode::DatabaseRestoreInvalid),
+        ] {
+            fs::write(paths.state().join("database-restore.json"), record)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let check = check_database(&paths).await;
+            assert_eq!(check.findings[0].code(), expected);
+            assert_eq!(check.outcome, Outcome::Failed);
+            assert_eq!(
+                fs::read(&database).unwrap_or_else(|error| panic!("{error}")),
+                b"preserve evidence"
+            );
+            assert_eq!(
+                fs::read_to_string(paths.state().join("database-restore.json"))
+                    .unwrap_or_else(|error| panic!("{error}")),
+                record
+            );
+            for suffix in ["-wal", "-shm", "-journal"] {
+                assert!(
+                    !paths
+                        .data()
+                        .join(format!(
+                            "{}{suffix}",
+                            jarvis_storage::DEFAULT_DATABASE_FILENAME
+                        ))
+                        .exists()
+                );
+            }
+        }
+        jarvis_core::remove_scratch_dir(&root);
+    }
 
     #[test]
     fn log_diagnosis_checks_sizes_and_sample_without_mutating_evidence() {

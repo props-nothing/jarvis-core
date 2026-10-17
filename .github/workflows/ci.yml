@@ -21,6 +21,25 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  published-install:
+    name: Signed install compatibility (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - name: Check out bootstrap under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify against a pinned public signed release
+        # An immutable compatibility fixture, not this commit's binary. Release
+        # separately verifies the newly published packages after CI succeeds.
+        shell: bash
+        run: node scripts/test-published-install.mjs ci-70cfc6eecb4eb2c69e227fc4599e73234b4a630d 0.1.0
+
   source-checks:
     name: Formatting and HUD
     runs-on: ubuntu-latest

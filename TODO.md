@@ -6,7 +6,23 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
-## Current acceptance slice: signed release manifests (2026-10-17)
+## Current acceptance slice: offline database recovery (2026-10-18)
+
+Owner-selected `P12-001` / `P9-006` continuation: establish a verified database
+recovery path before binary activation. Full updates and clean-machine onboarding
+remain separate acceptance work.
+
+- [x] Add owner-invoked `backup create|verify ID|restore ID|recover`, actual daemon-lock exclusion, current-schema/sidecar guards and retained pre-restore snapshots.
+- [x] Persist a pending restore before atomic replacement; block daemon SQLite access until explicit recovery reconciles the before/after image without guessing. Doctor diagnoses pending/malformed journals before inspecting SQLite.
+- [x] Pass real-value restore/undo, corruption/schema/foreign-key/sidecar refusal, actual process-death recovery, daemon-start refusal and guard falsification; 3,241 Windows workspace tests pass (six existing opt-in ignores), plus formatting, strict Clippy, 66 release tests, workflow lint, docs and dependency policy.
+- [ ] Native CI acceptance on Windows, macOS and Linux for this recovery revision.
+- [ ] Continue signed binary activation/health rollback, service reconciliation and clean-machine onboarding; snapshots alone do not complete these gates.
+
+[Design](docs/adr/0241-database-restores-require-offline-ownership-and-a-recovery-journal.md),
+[research/evidence](docs/research/integrations/offline-database-recovery.md),
+[recovery runbook](docs/operations/database-recovery.md).
+
+## Signed release manifest acceptance (2026-10-17)
 
 Owner-selected `P12-001` continuation. The owner confirmed no native signing
 credentials yet; Authenticode/notarization remain open without blocking keyless
@@ -22,6 +38,14 @@ publisher verification.
 [Design](docs/adr/0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md),
 [research/evidence](docs/research/integrations/release-signing.md),
 [usage](docs/operations/install-and-release.md#pinned-prebuilt-first-install).
+
+Hosted follow-up: `70cfc6e` passed all native CI jobs and published twelve signed
+assets in [Release 39074537468](https://github.com/props-nothing/jarvis-core/actions/runs/39074537468).
+Post-publish installation acceptance failed in the harness: Linux/macOS reached
+doctor with a nonexistent portable root; Windows timed out discovering absent
+tools through PowerShell. The corrected harness creates the empty root and checks
+Windows executable search paths directly. All four complete acceptance jobs still
+need a passing rerun; publication success is not that evidence.
 
 ## Completed local slice: pinned prebuilt first installation (2026-10-17)
 
@@ -456,7 +480,7 @@ Order: `P8-018`–`P8-020` first (backup voice with no new account); `P8-022` ne
 - [~] `P9-003` User service install/uninstall exists. Resolve documented service/manual-daemon ownership cases and verify native lifecycle; system-wide modes remain optional.
 - [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Signed manifests are implemented in the opt-in path (ADR-0240); hosted publisher acceptance, default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
 - [ ] `P9-005` Signed native artifacts, complete dependency notices/SBOM, provenance, checksums and release notes.
-- [ ] `P9-006` Atomic update, schema preflight/backup, health checks, rollback, channels and version/split-brain diagnosis.
+- [~] `P9-006` Offline database snapshots, guarded same-schema restore/undo and interrupted-restore reconciliation are implemented (ADR-0241; acceptance above). Atomic binary updates, schema-change rollback, health checks, channels and version/split-brain diagnosis remain.
 - [ ] `P9-007` Clean native install/update/rollback/repair/uninstall without a development toolchain.
 - [ ] `P9-008` Legacy data importer only if the owner has a named surviving source and requests migration; dry-run, excluded keys/certificates, provenance, backup, rollback and explicit finalization. Removed prototype source is not a live data location.
 - [~] `P9-009` Prototype removal is already complete (2026-10-13). Preserve historical license/provenance; resolve any requested legacy-data migration under `P9-008` rather than deleting the prototype again.

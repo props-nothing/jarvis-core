@@ -124,6 +124,21 @@ pub struct DatabaseInspection {
 /// as an unusable path. A corrupt, foreign, or newer database is reported as a
 /// [`DatabaseState`] rather than an error.
 pub async fn inspect_database(path: &Path) -> Result<DatabaseInspection, DatabaseError> {
+    inspect_with_mode(path, false).await
+}
+
+/// Only for closed, sidecar-free images. The caller must prevent concurrent writes;
+/// canonical images require the daemon profile lock. Never use for live diagnostics.
+pub(crate) async fn inspect_standalone_database(
+    path: &Path,
+) -> Result<DatabaseInspection, DatabaseError> {
+    inspect_with_mode(path, true).await
+}
+
+async fn inspect_with_mode(
+    path: &Path,
+    immutable: bool,
+) -> Result<DatabaseInspection, DatabaseError> {
     if !path.is_absolute() {
         return Err(DatabaseError::RelativePath);
     }
@@ -156,6 +171,7 @@ pub async fn inspect_database(path: &Path) -> Result<DatabaseInspection, Databas
         .filename(path)
         .create_if_missing(false)
         .read_only(true)
+        .immutable(immutable)
         .disable_statement_logging();
 
     let mut connection = match options.connect().await {
@@ -204,7 +220,10 @@ async fn describe(
     };
 
     let integrity_ok = integrity_ok(connection).await.unwrap_or(false);
-    let foreign_key_violations = has_foreign_key_violation(connection).await.unwrap_or(false);
+    let foreign_key_violations = match has_foreign_key_violation(connection).await {
+        Ok(violations) => violations,
+        Err(reason) => return Ok(unreadable(path, size_bytes, reason)),
+    };
     let journal_mode = query_text(connection, "PRAGMA journal_mode").await.ok();
     let daemon_instances = read_daemon_instances(connection).await.unwrap_or_default();
 

@@ -97,6 +97,14 @@ policy defined in [OS application directories](../research/integrations/os-appli
 
 Local backup uses SQLite's consistent backup mechanism, not a live file copy, plus an artifact manifest and checksums. Server backup coordinates PostgreSQL and object-storage retention. Secret material follows its provider's export policy and is never silently placed in a plaintext archive.
 
+The implemented offline `jarvis backup` path (ADR-0241) copies a stopped,
+sidecar-free current-schema image while holding the daemon profile lock, then
+independently verifies the copy. It is separate from the existing consistent
+pre-migration snapshot path. Restore retains an undo snapshot and a pending
+journal; unresolved evidence blocks daemon database access. See the
+[recovery runbook](../operations/database-recovery.md) for limits, including
+database-only scope, personal-data handling and no schema downgrade.
+
 Before upgrading a recognized local schema, JARVIS creates a new compact
 snapshot with `VACUUM INTO`. Migration begins only after that snapshot
 independently passes `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, and

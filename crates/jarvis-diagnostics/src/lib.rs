@@ -6,7 +6,7 @@
 //!
 //! It depends on adapters (`jarvis-storage`, `jarvis-observability`, and
 //! `jarvis-protocol`) because a finding must cite real state. `jarvis-cli` cannot
-//! own this code: the CLI is forbidden from touching the database, yet doctor
+//! own this code: the CLI delegates SQL inspection/maintenance to adapters, yet doctor
 //! must inspect it offline, before a daemon exists.
 
 mod doctor;

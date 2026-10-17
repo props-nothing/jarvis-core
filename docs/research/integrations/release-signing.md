@@ -127,3 +127,28 @@ PATHEXT/ComSpec in the isolated OS environment. Its first local prototype lacked
 PATHEXT and failed before curl; no passing install is claimed from that attempt.
 The corrected harness is pending hosted acceptance; do not run interactive native
 installer probes on the owner's desktop while they use another application.
+
+## Hosted follow-up (2026-10-18)
+
+[CI 39073460721](https://github.com/props-nothing/jarvis-core/actions/runs/39073460721)
+passed for `70cfc6e`, including real upstream verification on all three native OSes.
+[Release 39074537468](https://github.com/props-nothing/jarvis-core/actions/runs/39074537468)
+built all five packages and successfully signed, verified and published the twelve
+assets with the repository workflow identity. The public release is
+[ci-70cfc6eecb4eb2c69e227fc4599e73234b4a630d](https://github.com/props-nothing/jarvis-core/releases/tag/ci-70cfc6eecb4eb2c69e227fc4599e73234b4a630d).
+
+Post-publication acceptance failed: both Linux architectures and native macOS
+installed the signed archive and passed both versions, then the harness supplied
+a nonexistent `--root` to doctor and attempted to parse empty output. Windows
+timed out in the initial PowerShell application-discovery probe, before install.
+These failures do not establish complete installation acceptance. The harness now
+creates an empty portable root, reports empty diagnostic output clearly, and
+checks Windows PATH/PATHEXT filesystem entries without PowerShell module discovery.
+Native rerun acceptance remains open; no local installer launch is used to disturb
+the owner's foreground application.
+
+CI now also runs the current bootstrap against that exact pinned public release
+on all four installation targets. This compatibility fixture catches harness and
+installer regressions without rebuilding a release first; it does not substitute
+for Release's post-publication check of the newly built executable. Both paths
+are read-only toward GitHub and use the same production signature verification.

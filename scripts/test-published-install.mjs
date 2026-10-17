@@ -57,10 +57,20 @@ try {
     if (explicitHistoricalDigest) installArgs.push(explicitHistoricalDigest);
     installArgs.push('--dir', destination, '--no-path');
   }
-  const probe = windows
-    ? run(shell, ['-NoProfile', '-NonInteractive', '-Command', "foreach ($tool in @('git','rustc','cargo','node','python','python3','gh')) { if (Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue) { throw ('Development tool visible: ' + $tool) } }"])
-    : run(shell, ['-c', 'for tool in git rustc cargo node python python3 gh; do if command -v "$tool"; then exit 1; fi; done; exit 0']);
-  assert.equal(probe.status, 0, probe.stdout + probe.stderr);
+  if (windows) {
+    // Inspect the exact application search path without PowerShell module
+    // discovery, which can scan unrelated runner modules for absent commands.
+    for (const tool of ['git', 'rustc', 'cargo', 'node', 'python', 'python3', 'gh']) {
+      for (const directory of env.PATH.split(path.delimiter)) {
+        for (const extension of env.PATHEXT.split(';')) {
+          assert.equal(fs.existsSync(path.join(directory, tool + extension)), false, `Development tool visible: ${tool}`);
+        }
+      }
+    }
+  } else {
+    const probe = run(shell, ['-c', 'for tool in git rustc cargo node python python3 gh; do if command -v "$tool"; then exit 1; fi; done; exit 0']);
+    assert.equal(probe.status, 0, probe.stdout + probe.stderr);
+  }
   const installed = run(shell, installArgs, 600000);
   assert.equal(installed.status, 0, installed.stdout + installed.stderr);
   assert.match(installed.stdout, /Setup has not run/);
@@ -72,8 +82,11 @@ try {
     assert.ok(result.stdout.includes(version), result.stdout);
   }
   const profile = path.join(dir, 'fresh-profile');
+  // --root selects an existing directory; diagnosis must not create that root.
+  fs.mkdirSync(profile);
   const doctor = run(program, ['doctor', '--json', '--root', profile]);
   assert.notEqual(doctor.status, 0, 'fresh unconfigured profile must not be reported healthy');
+  assert.ok(doctor.stdout.trim(), `doctor returned no JSON (exit ${doctor.status}): ${doctor.stderr}`);
   const report = JSON.parse(doctor.stdout);
   assert.ok(report.checks.length > 0, 'doctor returns actionable findings without a toolchain');
   assert.match(doctor.stdout, /config|configuration/);

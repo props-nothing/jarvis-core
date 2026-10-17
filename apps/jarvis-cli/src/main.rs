@@ -11,6 +11,7 @@
 
 mod api_client;
 mod approvals;
+mod backup;
 mod cancel;
 mod chat;
 mod checks;
@@ -143,6 +144,10 @@ async fn client_main(arguments: Vec<String>) -> ExitCode {
         Some("skills") => skills_command(&arguments).await,
         Some("connector") => connector::run(&arguments),
         Some("doctor") => doctor(&arguments).await,
+        Some("backup") => match resolve_paths(&arguments) {
+            Ok(paths) => backup::run(&paths, &arguments).await,
+            Err(status) => status,
+        },
         Some("service") => service(&arguments),
         // `path` puts `jarvis` on the search path, so the commands JARVIS suggests work from any terminal.
         Some("path") => shell_path::run(&arguments),
@@ -208,7 +213,7 @@ async fn launch_command(arguments: &[String]) -> ExitStatus {
 }
 
 const fn usage() -> &'static str {
-    "usage: jarvis [launch] | jarvis <init|start|stop|restart|config|keys|service|status|health|ask|chat|logs|memory|tools|mcp|approvals|cancel|watch|hud|schedule|trigger|runs|project|digest|eval|contacts|push|skills|connector|doctor|path|version> [--json] [--lines N] [--repair] [--root DIR]\n       jarvis ask <objective...> [--root DIR]\n       jarvis chat [--root DIR]\n       jarvis start [--no-open] [--root DIR]\n       jarvis memory <list|show|search|remember|correct|confirm|forget|export> [...]\n       jarvis mcp <list|add|test|remove> [...]   # other programs' tools JARVIS can use: `jarvis mcp add files -- npx -y @modelcontextprotocol/server-filesystem DIR`\n       jarvis tools <list|preview> [...]\n       jarvis approvals <list|approve|deny|resume> [...]
+    "usage: jarvis [launch] | jarvis <init|start|stop|restart|config|keys|service|status|health|ask|chat|logs|memory|tools|mcp|approvals|cancel|watch|hud|schedule|trigger|runs|project|digest|eval|contacts|push|skills|connector|backup|doctor|path|version> [--json] [--lines N] [--repair] [--root DIR]\n       jarvis ask <objective...> [--root DIR]\n       jarvis chat [--root DIR]\n       jarvis start [--no-open] [--root DIR]\n       jarvis memory <list|show|search|remember|correct|confirm|forget|export> [...]\n       jarvis mcp <list|add|test|remove> [...]   # other programs' tools JARVIS can use: `jarvis mcp add files -- npx -y @modelcontextprotocol/server-filesystem DIR`\n       jarvis tools <list|preview> [...]\n       jarvis approvals <list|approve|deny|resume> [...]
        jarvis schedule <add|list|pause|resume|remove> [...]
        jarvis trigger <add|list|pause|resume|remove> [...]   # start a run when a new mail matches a Gmail search: `jarvis trigger add --mail \"is:unread from:acme.example\" note each subject`
        jarvis project <add|list|show|set|pause|resume|done|note|remove> [...]   # long-running work with its own goal, guidance and journal; `jarvis ask --project NAME ...`

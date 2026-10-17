@@ -12,6 +12,7 @@
 | Install for your user | `jarvis install` copies the program and sets up PATH; no administrator rights required. |
 | Start at login | `jarvis service install` / `uninstall`; native platform details are in the [platform guide](../user/platforms.md). |
 | Portable profile | `--root` keeps managed state in an explicit directory and does not install a service. |
+| Database recovery | `jarvis backup create`, `verify ID`, `restore ID` and `recover`; stopped-profile, same-schema snapshots and undo. See the [runbook](database-recovery.md). |
 | Pinned prebuilt first install | Opt-in scripts below verify a signed manifest for an exact release/version before downloading the selected archive. Explicit SHA-256 mode supports historical unsigned releases. No development toolchain; curl 8.4+ required. |
 | CI archives | Platform workflow artifacts and automatically published prereleases with a Sigstore-signed manifest after all five packages pass; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
 | Native OS signing and updates | Authenticode/notarization credentials are not configured. Clean-machine evidence and update/rollback remain open. |
@@ -58,7 +59,7 @@ A subsequent macOS run (`38738538886`, job `116433947041`) found the remaining g
 
 ## Target Release Contract
 
-The target/future sections specify required product behavior and retain the original planning design where identified. The source bootstrap below is available today; signed downloads, complete service reconciliation and deployment profiles remain release goals, not implementation claims.
+The target/future sections specify required product behavior and retain the original planning design where identified. Source bootstrap and opt-in signed downloads are available today; complete service reconciliation and deployment profiles remain release goals.
 
 ## Artifact Matrix
 

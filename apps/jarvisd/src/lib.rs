@@ -116,6 +116,8 @@ const LOCAL_CREDENTIAL_FILE_NAME: &str = "client.credential";
 #[derive(Debug, Error)]
 enum DaemonError {
     #[error(transparent)]
+    Backup(#[from] jarvis_storage::BackupError),
+    #[error(transparent)]
     Path(#[from] PathError),
     #[error(transparent)]
     Singleton(#[from] SingletonError),
@@ -683,6 +685,16 @@ fn shutdown_grace(daemon: &jarvis_storage::DaemonConfig) -> std::time::Duration 
     std::time::Duration::from_secs(u64::from(daemon.shutdown_timeout_seconds()))
 }
 
+/// Own the profile and require settled recovery evidence before logs or SQLite.
+fn acquire_ready_profile(
+    paths: &AppPaths,
+    build: BuildInfo,
+) -> Result<SingletonGuard, DaemonError> {
+    let singleton = SingletonGuard::acquire(&paths.runtime().join(DAEMON_LOCK_FILE_NAME), build)?;
+    jarvis_storage::require_settled_database_restore(paths)?;
+    Ok(singleton)
+}
+
 async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonError> {
     let health = Arc::new(HealthState::new());
     let paths = resolve_paths(root)?;
@@ -704,8 +716,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
         .collect();
     // Logging may rotate a partial record left by a previous process. A second
     // startup must establish ownership before touching the active writer's file.
-    let lock_path = paths.runtime().join(DAEMON_LOCK_FILE_NAME);
-    let singleton = SingletonGuard::acquire(&lock_path, build)?;
+    let singleton = acquire_ready_profile(&paths, build)?;
     let logging = Logging::init(
         paths.logs(),
         config.logging().level(),
@@ -2279,6 +2290,69 @@ fn signal_event(event: Option<()>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unresolved_database_restore_prevents_start_before_database_or_log_access() {
+        for malformed in [false, true] {
+            let scratch = std::env::temp_dir().join(format!(
+                "jarvis-restore-start-{}",
+                jarvis_core::scratch_tag()
+            ));
+            fs::create_dir_all(&scratch).unwrap_or_else(|error| panic!("{error}"));
+            let root = fs::canonicalize(&scratch).unwrap_or_else(|error| panic!("{error}"));
+            let paths = AppPaths::from_root(&root).unwrap_or_else(|error| panic!("{error}"));
+            paths.prepare().unwrap_or_else(|error| panic!("{error}"));
+            // A database open would fail differently. Startup must reach neither
+            // SQLite nor log initialization when recovery evidence is unresolved.
+            let database = paths.data().join(jarvis_storage::DEFAULT_DATABASE_FILENAME);
+            fs::write(&database, b"untouched database evidence")
+                .unwrap_or_else(|error| panic!("{error}"));
+            let pending = serde_json::json!({"format": 1, "selected": jarvis_core::BackupId::new(),
+                "previous": jarvis_core::BackupId::new(), "before_sha256": "a".repeat(64),
+                "after_sha256": "b".repeat(64), "state": "pending"});
+            let record = if malformed {
+                "{}".to_owned()
+            } else {
+                pending.to_string()
+            };
+            fs::write(paths.state().join("database-restore.json"), &record)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let rejected = start(BuildInfo::current(), Some(&root))
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("startup must refuse"));
+            assert!(
+                if malformed {
+                    matches!(
+                        rejected,
+                        DaemonError::Backup(jarvis_storage::BackupError::InvalidRecord)
+                    )
+                } else {
+                    matches!(
+                        rejected,
+                        DaemonError::Backup(jarvis_storage::BackupError::Pending)
+                    )
+                },
+                "{rejected}"
+            );
+            assert_eq!(
+                fs::read(database).unwrap_or_else(|error| panic!("{error}")),
+                b"untouched database evidence"
+            );
+            assert!(
+                !paths
+                    .logs()
+                    .join(jarvis_observability::LOG_FILE_NAME)
+                    .exists()
+            );
+            assert_eq!(
+                fs::read_to_string(paths.state().join("database-restore.json"))
+                    .unwrap_or_else(|error| panic!("{error}")),
+                record
+            );
+            jarvis_core::remove_scratch_dir(&root);
+        }
+    }
 
     #[tokio::test]
     async fn duplicate_start_does_not_rotate_or_modify_the_owners_partial_log() {

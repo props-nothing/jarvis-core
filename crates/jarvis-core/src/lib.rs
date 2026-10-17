@@ -59,8 +59,8 @@ pub use endpoint::{
 pub use error::{DomainError, ErrorCode, SafeMessage, UnsafeMessage, UnsafeMessageReason};
 pub use escalation::{EscalationSignal, InvalidEscalationSignal};
 pub use id::{
-    ApprovalId, ClientId, ContactId, CorrelationId, DaemonRunId, DelegatedTaskId, EntityId,
-    IdGenerator, InvalidId, InvalidIdReason, MemoryId, PhoneCallId, ProfileId, ProjectId,
+    ApprovalId, BackupId, ClientId, ContactId, CorrelationId, DaemonRunId, DelegatedTaskId,
+    EntityId, IdGenerator, InvalidId, InvalidIdReason, MemoryId, PhoneCallId, ProfileId, ProjectId,
     ProjectNoteId, RequestId, RunId, ScheduleId, SessionId, SkillId, SystemIdGenerator, TriggerId,
     WorkspaceId,
 };

@@ -181,6 +181,10 @@ typed_id!(
     DaemonRunId
 );
 typed_id!(
+    /// Identifies one retained canonical database snapshot.
+    BackupId
+);
+typed_id!(
     /// Identifies one conversation session.
     ///
     /// Distinct from [`DaemonRunId`]: a session is a conversation, while a daemon run is one

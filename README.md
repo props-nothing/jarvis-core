@@ -88,7 +88,7 @@ macOS / Linux:
 
 For a new setup, the first run guides provider/model selection, requires a working **ElevenLabs text-to-speech API key**, and offers optional folder grants. Interactive secret entry is hidden; model access and speech synthesis must pass tests before configuration is saved. The speech test sends a short sentence to ElevenLabs and may use credits. Setup then starts the assistant and opens its signed-in browser console. Existing configurations are not re-prompted; later runs reopen the console. Use `jarvis install` to install the built program for your user; `jarvis hud` reopens the console.
 
-> **Release status:** JARVIS is open source under [Apache-2.0](LICENSE). CI automatically publishes unsigned platform prereleases; [the verified `dd65479` release](https://github.com/props-nothing/jarvis-core/releases/tag/ci-dd65479d988ebf7caa9bddfb803c13cae1b0ddbf) includes the coding lifecycle repairs, five archives and matching checksums. Complete dependency notices, signing/notarization and clean-machine verification remain stable-release work. The separate product website offers source-building bootstrap scripts requiring a development toolchain. [Platform notes](docs/user/platforms.md) distinguish tested behavior from targets.
+> **Release status:** JARVIS is open source under [Apache-2.0](LICENSE). CI publishes platform prereleases with signed manifests; [release `70cfc6e`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-70cfc6eecb4eb2c69e227fc4599e73234b4a630d) contains five archives, checksums and a verified repository-workflow signature. The [opt-in prebuilt bootstrap](docs/operations/install-and-release.md#pinned-prebuilt-first-install) checks that signature before execution. Its full hosted install acceptance, native signing/notarization, dependency notices and clean-machine verification remain open. The separate product website still offers source-building scripts requiring a development toolchain. [Platform notes](docs/user/platforms.md) distinguish tested behavior from targets.
 
 ## Built, Experimental, Next
 
@@ -96,7 +96,9 @@ For a new setup, the first run guides provider/model selection, requires a worki
 
 **Limited first slices:** outbound calls to listed owner numbers through an ElevenLabs agent have been run live by the owner. ACP coding has recorded ordinary/background Codex tasks, a dependency-install/check smoke, real Windows Codex cancellation, and a disposable website verified through explicit continuation, independent checks, desktop/mobile-emulated browser interactions and preview cleanup. Fresh console sign-in, other-agent/platform acceptance, notification reception and physical-device checks remain open. Jobs default to in-place work without automatic commits or an imposed total deadline. Independent checks report their own outcome; an agent's completion alone is not delivery proof, and host execution is **not a sandbox**. See [coding agents](docs/user/code-agents.md) and [the roadmap](ROADMAP.md).
 
-**Not shipped:** a Tauri desktop client, browser-independent local voice, general telephony, signed public installers and the complete server/multi-device profile. The multi-step durable workflow engine is parked until a named requirement needs more than ordinary runs and schedules.
+**Database recovery:** explicit offline snapshots, verified same-schema restore/undo and interrupted-restore reconciliation are available through `jarvis backup`. They are database-only; binary update/rollback remains open. See the [runbook](docs/operations/database-recovery.md) and [acceptance backlog](TODO.md).
+
+**Not shipped:** a Tauri desktop client, browser-independent local voice, general telephony, native OS-signed installers, automatic binary updates and the complete server/multi-device profile. The multi-step durable workflow engine is parked until a named requirement needs more than ordinary runs and schedules.
 
 ## How It Fits Together
 

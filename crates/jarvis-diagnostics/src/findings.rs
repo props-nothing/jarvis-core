@@ -65,6 +65,10 @@ pub enum FindingCode {
     DatabaseSchemaInconsistent,
     /// The database reported integrity or foreign-key violations.
     DatabaseIntegrityFailed,
+    /// A database restore was interrupted and has not been reconciled.
+    DatabaseRestorePending,
+    /// Restore evidence is malformed or unavailable and must be preserved.
+    DatabaseRestoreInvalid,
     /// No local client credential exists for this profile.
     CredentialMissing,
     /// The profile credential exists and is well formed.
@@ -138,6 +142,8 @@ impl FindingCode {
             Self::DatabaseMigrationPending => "database.migration_pending",
             Self::DatabaseSchemaInconsistent => "database.schema_inconsistent",
             Self::DatabaseIntegrityFailed => "database.integrity_failed",
+            Self::DatabaseRestorePending => "database.restore_pending",
+            Self::DatabaseRestoreInvalid => "database.restore_invalid",
             Self::CredentialMissing => "credential.missing",
             Self::CredentialPresent => "credential.present",
             Self::CredentialInvalid => "credential.invalid",
@@ -196,6 +202,8 @@ impl FindingCode {
             | Self::DatabaseSchemaTooNew
             | Self::DatabaseSchemaInconsistent
             | Self::DatabaseIntegrityFailed
+            | Self::DatabaseRestorePending
+            | Self::DatabaseRestoreInvalid
             | Self::CredentialInvalid
             | Self::ProtocolMismatch
             | Self::ProtocolUnreachable
@@ -255,6 +263,12 @@ impl FindingCode {
             }
             Self::DatabaseIntegrityFailed => {
                 "Restore the database from a verified backup; do not continue using this file."
+            }
+            Self::DatabaseRestorePending => {
+                "Keep JARVIS stopped and run `jarvis backup recover` for this profile, with the same --root if portable."
+            }
+            Self::DatabaseRestoreInvalid => {
+                "Keep JARVIS stopped. Preserve the database, snapshots and state/database-restore.json for diagnosis; do not delete recovery evidence."
             }
             Self::CredentialMissing => {
                 "Start `jarvisd` once to issue the profile credential, then run `jarvis doctor` again."
@@ -390,6 +404,8 @@ mod tests {
         FindingCode::DatabaseMigrationPending,
         FindingCode::DatabaseSchemaInconsistent,
         FindingCode::DatabaseIntegrityFailed,
+        FindingCode::DatabaseRestorePending,
+        FindingCode::DatabaseRestoreInvalid,
         FindingCode::CredentialMissing,
         FindingCode::CredentialPresent,
         FindingCode::CredentialInvalid,

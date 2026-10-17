@@ -103,7 +103,7 @@ tools, while a registry or filesystem-grant failure refuses to start.
 
 ### `apps/jarvis-cli`
 
-Parses commands, discovers the daemon, authenticates, sends protocol requests, renders results, and maps machine-readable errors to exit codes. Direct database or provider access is forbidden.
+Parses commands, discovers the daemon, authenticates, sends protocol requests, renders results, and maps machine-readable errors to exit codes. Direct SQL or provider access is forbidden. The explicit offline `backup` commands delegate database maintenance to `jarvis-storage` under the daemon's profile lock (ADR-0241); they contain no SQL and expose no model tool or remote endpoint.
 
 ### `apps/jarvis-desktop`
 

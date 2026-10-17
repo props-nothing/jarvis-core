@@ -259,6 +259,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0239](0239-prebuilt-installation-pins-the-release-and-digest.md) | Prebuilt installation pins the release and digest | Accepted |
 
 | [0240](0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md) | Release manifests bind artifacts to the publishing workflow | Accepted |
+| [0241](0241-database-restores-require-offline-ownership-and-a-recovery-journal.md) | Database restores require offline ownership and a recovery journal | Accepted |
 
 ## Historical identifier aliases
 
