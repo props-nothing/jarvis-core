@@ -32,7 +32,7 @@ The owner-selected [runtime and guide follow-up](TODO.md#current-acceptance-slic
 
 The earlier atomic memory/sub-agent admission and bounded/redacted logging repairs remain complete. Their [original evidence](TODO.md#current-acceptance-slice-review-corrections-2026-10-16) is preserved, with a correction noting that structural documentation checks did not establish complete semantic freshness. Native CI/release and real-provider acceptance remain separate from local validation.
 
-The next work after those corrections is evidence-led: close the chosen MCP/provider/browser checks, coding delivery and native installation gates before expanding the provider list. Credential configuration and offline tests are not live account acceptance. The [capability wishlist](docs/product/capability-wishlist.md) contains residual opportunities, not a second execution queue.
+The next work after those corrections is evidence-led: close the chosen MCP/provider/browser checks, coding delivery and native installation gates before expanding the provider list. Credential configuration and offline tests are not live account acceptance. The [capability wishlist](docs/product/capability-wishlist.md) contains residual opportunities, not a second execution queue. The owner-requested [Phase 12 competitive catch-up](#phase-12-competitive-catch-up) orders the gaps found against Hermes Agent and OpenClaw.
 
 Coding defaults are controlled by [ADR-0222](docs/adr/0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md) and [ADR-0224](docs/adr/0224-coding-waits-and-verification-preserve-real-task-outcomes.md): use the first permitted folder in place, require Git only for explicit worktrees, do not automatically commit, and impose no total deadline unless requested. Host processes and worktrees are not an OS sandbox. See [the guide](docs/user/code-agents.md).
 
@@ -209,3 +209,18 @@ Deliver only when demanded by evidence:
 MCP management, tool discovery, browser tools, owner-approved skills, Telegram, time-zone triggers, model routing and spend guards are implemented. Current credential, memory and coding follow-ups extend those paths. Close each slice with the kind of evidence it requires; fixture success does not substitute for owner-account acceptance.
 
 Use the [active residual tasks](TODO.md#capability-and-reach-p11) and [wishlist](docs/product/capability-wishlist.md): account verification and hot registration, authenticated browsing, owner-file recall evaluation, keychain storage, remaining document/media output, notification budgets and named additional channels. Managed host processes and complete skill bundles are already built; confinement, private/global catalogs and safe updates remain distinct work.
+
+## Phase 12: Competitive Catch-Up
+
+**Outcome:** JARVIS matches Hermes Agent and OpenClaw on ease of install, learning, memory and reach, while keeping the authority boundary that both of them lack.
+
+Owner-requested on 2026-10-17 after the [competitive gap review](docs/research/competitive-gap-2026-10-17.md). This phase orders existing demand-gated work (Phases 4, 6, 7, 9 and 11) and adds a few new items; it does not reopen delivered slices. The [P12 backlog](TODO.md#competitive-catch-up-p12) holds acceptance for each item.
+
+Deliver, in order:
+
+1. Signed, toolchain-free installation and updates (`P12-001`), and an owner decision on whether guided setup still requires a voice key (`P12-002`)
+2. Skills chosen by meaning, skills that improve after use, an always-loaded owner profile and semantic memory (`P12-003` to `P12-006`)
+3. Discord, Slack and WhatsApp channels, an enforceable execution sandbox and a native Anthropic adapter (`P12-007` to `P12-009`)
+4. Image generation, PowerPoint and charts; restart-safe proactive delivery; skill ecosystem import with scanning; completed live acceptance (`P12-010` to `P12-013`)
+
+**Exit gate:** a non-developer installs JARVIS on a clean machine without a toolchain, reaches it from at least three chat platforms, gets an approved skill selected for a paraphrased request, and runs a coding job inside an enforced sandbox, while every effect still passes deterministic policy and approval.
