@@ -252,6 +252,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0233](0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) | Coding cancellation is final and process ownership outlives the root | Accepted |
 | [0234](0234-native-subagents-have-durable-lineage-and-parent-stop.md) | Native subagents have durable lineage and parent Stop | Accepted |
 | [0235](0235-delegation-declares-work-and-its-execution-authority.md) | Delegation declares work and its execution authority | Accepted |
+| [0236](0236-shutdown-reserves-work-admission-before-checking-idleness.md) | Shutdown reserves work admission before checking idleness | Accepted |
 
 ## Historical identifier aliases
 

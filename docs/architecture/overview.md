@@ -215,3 +215,13 @@ sequenceDiagram
 - Keep public protocols narrower and more stable than internal events.
 - Use adapters for provider quirks; do not generalize a one-provider anomaly into every domain type.
 - Record material changes as ADRs and retain migration compatibility tests.
+
+## Shutdown admission
+
+The single local daemon shares a process-local work-admission gate through its
+database handle. Stop/restart reserves admission before checking durable work and
+managed processes, then commits closed before acceptance or reopens on refusal.
+Native creation/execution, coding queue/dispatch, tool calls/resumes and automation
+claims use the same gate. Already admitted effects can still be interrupted by
+force or OS shutdown; coordinated cancellation remains separate.
+See [ADR-0236](../adr/0236-shutdown-reserves-work-admission-before-checking-idleness.md).

@@ -590,6 +590,7 @@ pub async fn start_run(
     database: &SqliteDatabase,
     input: &StartRunInput,
 ) -> Result<StartedRun, DatabaseError> {
+    let _admission = database.work_admission().admit()?;
     // Immediate, not deferred: this transaction reads before it writes, and a deferred one whose snapshot another writer has since
     // advanced is refused at once (`SQLITE_BUSY_SNAPSHOT`) without waiting. Two runs starting together would then fail one of them.
     let mut transaction = database

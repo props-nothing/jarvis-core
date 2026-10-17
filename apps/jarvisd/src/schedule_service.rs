@@ -310,6 +310,7 @@ async fn announce(state: &GatewayState, run: &jarvis_storage::StoredRun, task: &
 /// Returns [`DatabaseError`] when due tasks cannot be claimed. A single task that cannot start is counted in the
 /// report and does not stop the others.
 pub async fn tick(state: &GatewayState, now: UtcTimestamp) -> Result<TickReport, DatabaseError> {
+    let _admission = state.database().work_admission().admit()?;
     let mut report = TickReport::default();
     let due =
         jarvis_storage::claim_due_schedules(state.database(), now, MAX_FIRES_PER_PASS).await?;

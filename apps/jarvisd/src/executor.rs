@@ -886,6 +886,7 @@ async fn drive_run(
     }
 
     let mut current = run;
+    let _admission = database.work_admission().admit()?;
     let correlation_id = CorrelationId::new();
 
     loop {
@@ -5725,6 +5726,79 @@ mod tests {
         .unwrap_or_else(|error| panic!("compose the pipeline: {error}"));
         (Arc::new(tools), adapter)
     }
+    #[tokio::test]
+    async fn shutdown_admission_prevents_parked_resume_from_calling_tools_or_model() {
+        let (profile, database) = database().await;
+        let (tools, adapter) = readable_approval_pipeline(&profile, &database);
+        let run = start(&database, "ask before doing work").await;
+        let first = model(vec![Turn::ToolCall {
+            calls: vec![jarvis_models::ToolCall::new(
+                "held",
+                crate::approval_fixture::APPROVAL_TOOL,
+                r#"{"path":"notes.txt"}"#,
+            )],
+            text: "Requesting approval".to_owned(),
+        }]);
+        let parked = execute_run_with_tools(
+            &database,
+            &first,
+            &fixture_model_id(),
+            Some(&tools),
+            run.id(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(parked.state(), RunState::AwaitingApproval);
+        let held = jarvis_storage::read_run_tool_calls(&database, run.id())
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        let call = held
+            .iter()
+            .find(|call| call.approval_id().is_some())
+            .unwrap_or_else(|| panic!("held call"));
+        let decision = jarvis_core::ApprovalDecision::new(
+            jarvis_core::ApprovalDecisionOutcome::Approve,
+            jarvis_core::ApprovalChannel::Cli,
+            UtcTimestamp::now(&SystemClock),
+            jarvis_storage::LOCAL_USER_ID,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        jarvis_storage::record_decision(
+            &database,
+            call.approval_id().unwrap_or_else(|| panic!("approval")),
+            &decision,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+        database
+            .work_admission()
+            .prepare_shutdown(false)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .unwrap_or_else(|| panic!("open gate"))
+            .commit();
+        let second = model(vec![Turn::answer("must not run")]);
+        let result = resume_run_with_tools(
+            &database,
+            &second,
+            &fixture_model_id(),
+            Some(&tools),
+            run.id(),
+            call.id(),
+        )
+        .await;
+        assert!(matches!(result, Err(DatabaseError::WorkAdmission(_))));
+        assert!(second.seen_messages().is_empty());
+        assert_eq!(adapter.calls(), 0);
+        assert_eq!(
+            find_run(&database, run.id())
+                .await
+                .unwrap_or_else(|error| panic!("{error}"))
+                .state(),
+            RunState::AwaitingApproval
+        );
+        database.close().await;
+    }
+
     /// **A run that parks on an approval resumes in the middle of its task, not at the start.**
     ///
     /// The resume path used to re-assemble the stored conversation and append only the approved result, so the model had

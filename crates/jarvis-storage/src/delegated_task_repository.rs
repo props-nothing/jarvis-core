@@ -132,6 +132,7 @@ pub async fn create_delegated_task_with_request(
     new: &NewDelegatedTask<'_>,
     request: Option<&str>,
 ) -> Result<StoredDelegatedTask, DatabaseError> {
+    let _admission = db.work_admission().admit()?;
     let id = DelegatedTaskId::new().to_string();
     sqlx::query("INSERT INTO delegated_tasks (id,workspace_id,repository,task,allow_commands,minutes,request_json,status,created_nanos,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'queued',?8,?9,?9)")
         .bind(&id).bind(new.workspace_id).bind(new.repository).bind(new.task).bind(i64::from(new.allow_commands))

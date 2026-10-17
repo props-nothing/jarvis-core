@@ -155,6 +155,7 @@ pub fn spawn(state: GatewayState) -> tokio::task::JoinHandle<()> {
 ///
 /// Returns [`DatabaseError`] when the due triggers cannot be read or claimed.
 pub async fn tick(state: &GatewayState, now: UtcTimestamp) -> Result<TickReport, DatabaseError> {
+    let _admission = state.database().work_admission().admit()?;
     let mut report = TickReport::default();
     for trigger in
         jarvis_storage::claim_due_triggers(state.database(), now, MAX_POLLS_PER_PASS).await?
@@ -823,6 +824,12 @@ pub async fn hook(
         );
     }
     // Without a delivery id every request is its own event: there is nothing to tell a retry from a second request by.
+    let Ok(_admission) = state.database().work_admission().admit() else {
+        return hook_answer(
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":"not accepting requests now"}"#,
+        );
+    };
     let key =
         delivery_key(&headers).unwrap_or_else(|| format!("hook:{}", jarvis_core::TriggerId::new()));
     match jarvis_storage::claim_webhook_event(

@@ -108,6 +108,9 @@ impl DaemonStopReason {
 /// Errors produced while opening, checking, backing up, or migrating SQLite.
 #[derive(Debug, Error)]
 pub enum DatabaseError {
+    /// This daemon incarnation has closed work admission.
+    #[error(transparent)]
+    WorkAdmission(#[from] jarvis_core::WorkAdmissionError),
     /// The transaction could not reserve a working or unfinished run slot.
     #[error("the run admission capacity has been reached")]
     RunCapacityExceeded,
@@ -705,6 +708,7 @@ pub enum DatabaseError {
 /// An initialized local SQLite database owned by JARVIS.
 #[derive(Debug)]
 pub struct SqliteDatabase {
+    work_admission: jarvis_core::WorkAdmission,
     pool: SqlitePool,
     path: PathBuf,
     sqlite_version: String,
@@ -774,6 +778,7 @@ impl SqliteDatabase {
 
         Ok(Self {
             pool,
+            work_admission: jarvis_core::WorkAdmission::default(),
             path: path.to_path_buf(),
             sqlite_version,
             pre_migration_backup,
@@ -784,6 +789,12 @@ impl SqliteDatabase {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The shared process-local admission gate for services using this database handle.
+    #[must_use]
+    pub fn work_admission(&self) -> &jarvis_core::WorkAdmission {
+        &self.work_admission
     }
 
     /// Returns the SQLite runtime version verified during startup.

@@ -587,10 +587,22 @@ async fn restart_if_ready(
         Ok(context) => context,
         Err(response) => return response,
     };
-    if let Some(refusal) = crate::stop::refusal_if_working(state, force).await {
-        return refusal;
+    let permit = match crate::stop::prepare_shutdown(state, force).await {
+        Ok(Some(permit)) => permit,
+        Ok(None) => return crate::stop::shutdown_in_progress(),
+        Err(refusal) => return *refusal,
+    };
+    let mut response = crate::stop::shutdown_in_progress();
+    if permit
+        .commit_if(|| {
+            response = launch(context.root.as_deref(), force);
+            response.status().is_success()
+        })
+        .is_err()
+    {
+        return crate::stop::shutdown_in_progress();
     }
-    launch(context.root.as_deref(), force)
+    response
 }
 
 fn sibling_cli(daemon: &Path) -> Option<PathBuf> {

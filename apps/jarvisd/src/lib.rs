@@ -2177,6 +2177,7 @@ where
     );
 
     let outcome = wait_for_exit(shutdown, accept_loop, http_stop, mcp_stop).await;
+    database.work_admission().close();
     stop_transports(http, serving_mcp, http_port, &outcome).await;
 
     let shutdown_result = outcome.shutdown;

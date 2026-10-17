@@ -83,3 +83,27 @@ async fn unreadable_state_does_not_launch_restart_and_only_explicit_force_bypass
     assert_eq!(forced.status(), StatusCode::ACCEPTED);
     assert_eq!(calls.get(), 1);
 }
+
+#[tokio::test]
+async fn shutdown_admission_restart_failure_reopens_and_success_allows_only_stop_handshake() {
+    let (_scratch, state) = fixture().await;
+    let failed = restart_if_ready(&state, false, |_, _| {
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    })
+    .await;
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    drop(state.database().work_admission().admit().unwrap());
+    let accepted =
+        restart_if_ready(&state, false, |_, _| StatusCode::ACCEPTED.into_response()).await;
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    assert!(state.database().work_admission().admit().is_err());
+    let duplicate = restart_if_ready(&state, true, |_, _| panic!("must not launch twice")).await;
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert!(
+        crate::stop::prepare_shutdown(&state, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    state.database().close().await;
+}

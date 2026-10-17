@@ -17,6 +17,7 @@ mod testkit;
 mod timestamp;
 #[cfg(any(unix, windows))]
 mod transport;
+mod work_admission;
 
 mod approval;
 mod approval_policy;
@@ -129,3 +130,4 @@ pub use tool_outcome::{
 };
 #[cfg(any(unix, windows))]
 pub use transport::{LocalListener, LocalStream, TransportError, connect};
+pub use work_admission::{ShutdownPermit, WorkAdmission, WorkAdmissionError, WorkPermit};

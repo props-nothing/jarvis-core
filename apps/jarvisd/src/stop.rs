@@ -9,7 +9,8 @@
 //! A task the daemon is driving is lost to a stop (it is settled as interrupted on the next start). So a stop or a restart that
 //! would interrupt native runs, queued/running coding jobs or managed processes is **refused with counts** unless the caller says
 //! `force=true`. An unreadable work state also refuses the stop, without claiming the daemon is idle. A native run waiting for an
-//! approval is not counted: that wait is durable and survives. This is a preflight snapshot, not an atomic admission/drain barrier.
+//! approval is not counted: that wait is durable and survives. Admission is frozen before checking
+//! work and remains closed after acceptance; a refused or cancelled check reopens it (ADR-0236).
 
 use std::time::Duration;
 
@@ -39,6 +40,14 @@ pub(crate) fn wants_force(raw: Option<&str>) -> bool {
 
 /// The refusal to give when tasks are working and the caller did not force, or `None` to go ahead.
 pub(crate) async fn refusal_if_working(state: &GatewayState, force: bool) -> Option<Response> {
+    refusal_with_operations(state, force, 0).await
+}
+
+async fn refusal_with_operations(
+    state: &GatewayState,
+    force: bool,
+    active_operations: u32,
+) -> Option<Response> {
     if force {
         return None;
     }
@@ -62,19 +71,23 @@ pub(crate) async fn refusal_if_working(state: &GatewayState, force: bool) -> Opt
     let working = work
         .runs
         .saturating_add(work.coding_jobs)
-        .saturating_add(managed_processes);
+        .saturating_add(managed_processes)
+        .saturating_add(active_operations);
     if working == 0 {
         return None;
     }
     let message = format!(
-        "Stopping now would interrupt unfinished work (agent runs: {}, coding jobs: {}, managed processes: {managed_processes}). The daemon was left running.",
+        "Stopping now would interrupt unfinished work (agent runs: {}, coding jobs: {}, managed processes: {managed_processes}, active operations: {active_operations}). The daemon was left running.",
         work.runs, work.coding_jobs
     );
     Some(
         (
             StatusCode::CONFLICT,
-            Json(json!({ "code": "runs_in_flight", "in_flight": working, "agent_runs": work.runs,
-                "coding_jobs": work.coding_jobs, "managed_processes": managed_processes, "message": message })),
+            Json(
+                json!({ "code": "runs_in_flight", "in_flight": working, "agent_runs": work.runs,
+                "coding_jobs": work.coding_jobs, "managed_processes": managed_processes,
+                "active_operations": active_operations, "message": message }),
+            ),
         )
             .into_response(),
     )
@@ -90,10 +103,50 @@ fn work_state_unavailable() -> Response {
     ).into_response()
 }
 
+/// Freezes admission through preflight and the caller's stop/restart decision.
+/// An already committed shutdown is returned as `None` so the restart CLI can send Stop.
+pub(crate) async fn prepare_shutdown(
+    state: &GatewayState,
+    force: bool,
+) -> Result<Option<jarvis_core::ShutdownPermit>, Box<Response>> {
+    let permit = match state.database().work_admission().prepare_shutdown(force) {
+        Ok(permit) => permit,
+        Err(jarvis_core::WorkAdmissionError::Busy { active }) => {
+            // Keep the existing per-kind counts for clients. This path only refuses; it
+            // never treats a snapshot taken with open admission as permission to stop.
+            return Err(Box::new(
+                refusal_with_operations(state, false, u32::try_from(active).unwrap_or(u32::MAX))
+                    .await
+                    .unwrap_or_else(work_state_unavailable),
+            ));
+        }
+        Err(jarvis_core::WorkAdmissionError::Stopping) => {
+            return Err(Box::new(shutdown_in_progress()));
+        }
+        Err(jarvis_core::WorkAdmissionError::Unavailable) => {
+            return Err(Box::new(work_state_unavailable()));
+        }
+    };
+    if permit.is_some()
+        && let Some(refusal) = refusal_if_working(state, force).await
+    {
+        return Err(Box::new(refusal));
+    }
+    Ok(permit)
+}
+
+pub(crate) fn shutdown_in_progress() -> Response {
+    (StatusCode::CONFLICT, Json(json!({
+        "code": "shutdown_in_progress", "message": "The daemon is already stopping or restarting."
+    }))).into_response()
+}
+
 /// `POST /api/v1/shutdown[?force=true]`
 pub async fn request(State(state): State<GatewayState>, RawQuery(raw): RawQuery) -> Response {
-    if let Some(refusal) = refusal_if_working(&state, wants_force(raw.as_deref())).await {
-        return refusal;
+    match prepare_shutdown(&state, wants_force(raw.as_deref())).await {
+        Ok(Some(permit)) => permit.commit(),
+        Ok(None) => {}
+        Err(refusal) => return *refusal,
     }
     tracing::info!("a stop was requested over the API");
     // After the reply has had time to leave, so the caller is told "stopping" rather than seeing the connection drop.
@@ -133,13 +186,102 @@ mod tests {
     async fn a_request_wakes_the_waiter() {
         let (state, path) = state().await;
         let waiter = tokio::spawn(requested());
-        let reply = request(State(state), RawQuery(None)).await;
+        let reply = request(State(state.clone()), RawQuery(None)).await;
+        assert!(state.database().work_admission().admit().is_err());
         assert_eq!(reply.status(), StatusCode::ACCEPTED);
         let woke = tokio::time::timeout(Duration::from_secs(3), waiter).await;
         assert!(
             woke.is_ok(),
             "the waiter must be woken within the grace period"
         );
+        jarvis_core::remove_scratch_dir(&path);
+    }
+
+    #[tokio::test]
+    async fn shutdown_admission_freezes_before_snapshot_and_rolls_back_refusals() {
+        let (state, path) = state().await;
+        let operation = state.database().work_admission().admit().unwrap();
+        let refused = prepare_shutdown(&state, false).await.unwrap_err();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(body(*refused).await["active_operations"], 1);
+        drop(state.database().work_admission().admit().unwrap());
+        drop(operation);
+
+        let reservation = prepare_shutdown(&state, false).await.unwrap().unwrap();
+        let service = crate::run_service::RunService::new(state.database_handle());
+        let request = jarvis_protocol::StartRunRequest {
+            objective: "must not start".to_owned(),
+            session_id: None,
+            idempotency_key: None,
+            project_id: None,
+        };
+        assert_eq!(
+            service
+                .start(&request)
+                .await
+                .unwrap_err()
+                .into_response()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let new = NewDelegatedTask {
+            workspace_id: jarvis_storage::LOCAL_WORKSPACE_ID,
+            repository: "fixture",
+            task: "must not queue",
+            allow_commands: false,
+            minutes: 0,
+            now: UtcTimestamp::now(&SystemClock),
+        };
+        assert!(matches!(
+            jarvis_storage::create_delegated_task(state.database(), &new).await,
+            Err(jarvis_storage::DatabaseError::WorkAdmission(_))
+        ));
+        assert!(
+            matches!(prepare_shutdown(&state, true).await, Err(response) if response.status() == StatusCode::CONFLICT)
+        );
+        assert_eq!(
+            jarvis_storage::read_shutdown_work(state.database())
+                .await
+                .unwrap()
+                .runs,
+            0
+        );
+        drop(reservation);
+        service.start(&request).await.unwrap();
+        assert!(prepare_shutdown(&state, false).await.is_err());
+        drop(state.database().work_admission().admit().unwrap());
+        prepare_shutdown(&state, true)
+            .await
+            .unwrap()
+            .unwrap()
+            .commit();
+        assert_eq!(
+            service
+                .start(&request)
+                .await
+                .unwrap_err()
+                .into_response()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(prepare_shutdown(&state, false).await.unwrap().is_none());
+        state.database().close().await;
+        jarvis_core::remove_scratch_dir(&path);
+    }
+
+    #[tokio::test]
+    async fn shutdown_admission_unreadable_snapshot_reopens_for_retry() {
+        let (state, path) = state().await;
+        state.database().close().await;
+        let refused = prepare_shutdown(&state, false).await.unwrap_err();
+        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+        drop(state.database().work_admission().admit().unwrap());
+        prepare_shutdown(&state, true)
+            .await
+            .unwrap()
+            .unwrap()
+            .commit();
+        assert!(state.database().work_admission().admit().is_err());
         jarvis_core::remove_scratch_dir(&path);
     }
 

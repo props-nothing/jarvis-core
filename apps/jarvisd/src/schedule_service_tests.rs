@@ -494,3 +494,22 @@ async fn a_finished_triggered_run_is_held_while_quiet_hours_are_on() {
         "and it stays held for as long as the window lasts"
     );
 }
+
+#[tokio::test]
+async fn shutdown_admission_does_not_claim_a_due_schedule() {
+    let fixture = fixture(false).await;
+    let fire_at = now();
+    let task = due_task(&fixture, fire_at).await;
+    let reservation = must(fixture.database.work_admission().prepare_shutdown(false))
+        .unwrap_or_else(|| panic!("open gate"));
+    assert!(matches!(
+        tick(&fixture.state, fire_at).await,
+        Err(DatabaseError::WorkAdmission(_))
+    ));
+    let unchanged = find(&fixture, task.id()).await;
+    assert_eq!(unchanged.next_run(), task.next_run());
+    assert_eq!(unchanged.fire_count(), 0);
+    drop(reservation);
+    assert_eq!(must(tick(&fixture.state, fire_at).await).started, 1);
+    fixture.database.close().await;
+}

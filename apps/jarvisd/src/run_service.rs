@@ -403,6 +403,11 @@ fn map_identity_error(error: &DatabaseError) -> RunServiceError {
 /// well-formed and simply absent, so blaming the caller's content would be wrong.
 fn map_database_error(error: &DatabaseError) -> RunServiceError {
     match error {
+        DatabaseError::WorkAdmission(_) => RunServiceError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::Conflict,
+            "the daemon is stopping or work admission is unavailable; retry after it restarts",
+        ),
         DatabaseError::RunCapacityExceeded => RunServiceError::new(
             StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Conflict,

@@ -1,5 +1,8 @@
 # ADR-0232: Stop and restart check background work and fail closed
 
+Amended by [ADR-0236](0236-shutdown-reserves-work-admission-before-checking-idleness.md):
+the original snapshot below is now taken with new work admission reserved.
+
 - Status: Accepted
 - Date: 2026-10-16
 - Related: [ADR-0222](0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md), [ADR-0224](0224-coding-waits-and-verification-preserve-real-task-outcomes.md)

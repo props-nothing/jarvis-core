@@ -759,6 +759,11 @@ impl ToolPipeline {
         actor: &ToolActor,
         correlation_id: CorrelationId,
     ) -> Result<ToolPipelineOutcome, ToolPipelineError> {
+        let Ok(_admission) = self.database.work_admission().admit() else {
+            return Ok(ToolPipelineOutcome::Refused {
+                reason_code: "daemon_stopping",
+            });
+        };
         let id = ToolId::new(tool)?;
         let definition = match self.registry.get(&id) {
             Ok(definition) => definition.clone(),
@@ -905,6 +910,22 @@ impl ToolPipeline {
     /// Stored child role additionally forbids delegation, independent of an earlier approval
     /// or the caller's reconstructed grants (ADR-0235).
     pub async fn resume(
+        &self,
+        call_id: &str,
+        arguments: Value,
+        actor: &ToolActor,
+        correlation_id: CorrelationId,
+    ) -> Result<ToolPipelineOutcome, ToolPipelineError> {
+        let Ok(_admission) = self.database.work_admission().admit() else {
+            return Ok(ToolPipelineOutcome::Refused {
+                reason_code: "daemon_stopping",
+            });
+        };
+        self.resume_admitted(call_id, arguments, actor, correlation_id)
+            .await
+    }
+
+    async fn resume_admitted(
         &self,
         call_id: &str,
         arguments: Value,
@@ -1380,6 +1401,11 @@ impl ToolPipeline {
         correlation_id: CorrelationId,
         owner: Option<OwnerApproval>,
     ) -> Result<ToolPipelineOutcome, ToolPipelineError> {
+        let Ok(_admission) = self.database.work_admission().admit() else {
+            return Ok(ToolPipelineOutcome::Refused {
+                reason_code: "daemon_stopping",
+            });
+        };
         let id = ToolId::new(tool)?;
         let definition = match self.registry.get(&id) {
             Ok(definition) => definition.clone(),

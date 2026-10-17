@@ -2119,3 +2119,163 @@ async fn a_changed_permission_applies_to_the_next_call_without_a_restart() {
         "turning a tool off must apply to the next call, not the next restart: {denied:?}"
     );
 }
+
+#[tokio::test]
+async fn shutdown_admission_refuses_fresh_remote_and_decided_calls_without_dispatch() {
+    let directory = TempRoot::new();
+    let roots = must(WorkspaceRoots::new([directory.path()]));
+    let adapter = Arc::new(RecordingAdapter::default());
+    let (_root, database, pipeline) = pipeline_with_extra(
+        roots,
+        vec![
+            mcp_definition("mcp.test.search", "search"),
+            held_definition(),
+        ],
+        Arc::clone(&adapter) as Arc<dyn jarvis_tools::ToolExecutor>,
+    )
+    .await;
+    let arguments = json!({"path":"notes/todo.txt"});
+    let held = must(
+        pipeline
+            .call_tool(
+                "mcp.test.write",
+                arguments.clone(),
+                &mcp_actor(),
+                CorrelationId::new(),
+            )
+            .await,
+    );
+    let ToolPipelineOutcome::AwaitingApproval {
+        call_id,
+        approval_id,
+        ..
+    } = held
+    else {
+        panic!("expected approval");
+    };
+    must(
+        jarvis_storage::record_decision(
+            &database,
+            &approval_id,
+            &must(jarvis_core::ApprovalDecision::new(
+                jarvis_core::ApprovalDecisionOutcome::Approve,
+                jarvis_core::ApprovalChannel::Cli,
+                UtcTimestamp::now(&SystemClock),
+                LOCAL_USER_ID,
+            )),
+        )
+        .await,
+    );
+    database
+        .work_admission()
+        .prepare_shutdown(true)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .unwrap_or_else(|| panic!("new shutdown"))
+        .commit();
+    let correlation = CorrelationId::new();
+    let fresh = must(
+        pipeline
+            .call_tool(
+                "mcp.test.search",
+                json!({"q":"late"}),
+                &mcp_actor(),
+                correlation,
+            )
+            .await,
+    );
+    let remote = must(
+        pipeline
+            .call_remote_tool(
+                "mcp.test.search",
+                json!({"q":"late"}),
+                &mcp_actor(),
+                CorrelationId::new(),
+            )
+            .await,
+    );
+    let resumed = must(
+        pipeline
+            .resume(&call_id, arguments, &mcp_actor(), CorrelationId::new())
+            .await,
+    );
+    for outcome in [fresh, remote, resumed] {
+        assert!(matches!(
+            outcome,
+            ToolPipelineOutcome::Refused {
+                reason_code: "daemon_stopping"
+            }
+        ));
+    }
+    assert!(must(adapter.seen.lock()).is_empty());
+    assert!(
+        pipeline.call(&correlation.to_string()).await.is_err(),
+        "no late call admitted"
+    );
+    assert_eq!(
+        must(pipeline.call(&call_id).await).outcome(),
+        ToolOutcome::Requested
+    );
+    database.close().await;
+}
+
+#[derive(Default)]
+struct PausedAdapter {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+#[async_trait::async_trait]
+impl jarvis_tools::ToolExecutor for PausedAdapter {
+    fn adapter_id(&self) -> &'static str {
+        "paused"
+    }
+    async fn execute(
+        &self,
+        _: &jarvis_tools::ToolExecutionRequest,
+    ) -> Result<jarvis_tools::ToolCallResult, jarvis_tools::AdapterError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Err(jarvis_tools::AdapterError::RefusedBeforeReaching {
+            reason: "fixture done".to_owned(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn shutdown_admission_observes_remote_execution_without_a_durable_call_row() {
+    let directory = TempRoot::new();
+    let adapter = Arc::new(PausedAdapter::default());
+    let (_root, database, pipeline) = pipeline_with_extra(
+        must(WorkspaceRoots::new([directory.path()])),
+        vec![mcp_definition("mcp.test.search", "search")],
+        Arc::clone(&adapter) as Arc<dyn jarvis_tools::ToolExecutor>,
+    )
+    .await;
+    let task = tokio::spawn(async move {
+        pipeline
+            .call_remote_tool(
+                "mcp.test.search",
+                json!({"q":"work"}),
+                &mcp_actor(),
+                CorrelationId::new(),
+            )
+            .await
+    });
+    must(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            adapter.entered.notified(),
+        )
+        .await,
+    );
+    assert!(matches!(
+        database.work_admission().prepare_shutdown(false),
+        Err(jarvis_core::WorkAdmissionError::Busy { active: 1 })
+    ));
+    adapter.release.notify_one();
+    let _ = must(task.await);
+    must(database.work_admission().prepare_shutdown(false))
+        .unwrap_or_else(|| panic!("open gate"))
+        .commit();
+    assert!(database.work_admission().admit().is_err());
+    database.close().await;
+}

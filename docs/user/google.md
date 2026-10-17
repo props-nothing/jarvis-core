@@ -57,7 +57,7 @@ JARVIS is told never to send because of something written inside an email or a w
 
 ## Restarting without losing work
 
-Stop/restart checks active ordinary runs, queued/running coding jobs and live managed processes, including previews. If any are present, a nonforced request refuses as busy; use `jarvis restart --wait` to wait for that work, or `--force` (the console's **Restart anyway**) to interrupt it. An unreadable work state refuses with HTTP 503 rather than guessing that the daemon is idle. Native approvals already waiting for your decision remain durable. This is a snapshot preflight, not an admission/drain barrier; see [lifecycle details](quick-start.md#stopping-and-troubleshooting).
+Stop/restart checks active ordinary runs, queued/running coding jobs and live managed processes, including previews. If any are present, a nonforced request refuses as busy; use `jarvis restart --wait` to wait for that work, or `--force` (the console's **Restart anyway**) to interrupt it. An unreadable work state refuses with HTTP 503 rather than guessing that the daemon is idle. Native approvals already waiting for your decision remain durable. An accepted stop/restart closes new work admission; a refused check reopens it. Force can interrupt already admitted work; see [lifecycle details](quick-start.md#stopping-and-troubleshooting).
 
 ## Signing out, and when it stops working
 

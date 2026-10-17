@@ -913,3 +913,30 @@ async fn a_file_trigger_without_a_granted_folder_says_so_and_starts_nothing() {
             .is_some_and(|text| text.contains("no folder is granted"))
     );
 }
+
+#[tokio::test]
+async fn shutdown_admission_preserves_poll_and_webhook_claims_for_retry() {
+    let fixture = fixture(false).await;
+    let created = UtcTimestamp::now(&SystemClock);
+    let trigger = trigger(&fixture, created).await;
+    let (secret, _) = make_webhook(&fixture).await;
+    let reservation = must(fixture.database.work_admission().prepare_shutdown(false))
+        .unwrap_or_else(|| panic!("open gate"));
+    assert!(matches!(
+        tick(&fixture.state, trigger.next_poll).await,
+        Err(DatabaseError::WorkAdmission(_))
+    ));
+    assert_eq!(
+        current(&fixture, &trigger.id).await.next_poll,
+        trigger.next_poll
+    );
+    let (status, _, _) = deliver(&fixture, &secret, b"delivery", Some("shutdown-retry")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    drop(reservation);
+    let (status, _, _) = deliver(&fixture, &secret, b"delivery", Some("shutdown-retry")).await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "shutdown must not consume the delivery key"
+    );
+}

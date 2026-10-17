@@ -428,6 +428,10 @@ async fn run_recorded_task(
             json!({"outcome":"cancelled", "next":"Cancelled in the queue; no agent started."}),
         );
     };
+    let _admission = db
+        .work_admission()
+        .admit()
+        .map_err(|_| refused("the daemon is stopping; no coding agent was started"))?;
     jarvis_storage::mark_delegated_task_running(db, workspace, id, UtcTimestamp::now(&SystemClock))
         .await
         .map_err(|error| {

@@ -547,3 +547,39 @@ fn status_compaction_preserves_failed_verification_with_large_unicode_evidence()
         1
     );
 }
+
+#[tokio::test]
+async fn shutdown_admission_blocks_queued_dispatch_after_capacity_is_released() {
+    let (scratch, db, manager) = rig("write:{cwd}/must-not-exist.txt").await;
+    let cancel = Notify::new();
+    let held = manager.inner.acquire(&cancel).await.unwrap().unwrap();
+    let task = manager
+        .start(&json!({"repository":"repo","task":"queued at shutdown"}))
+        .await
+        .unwrap();
+    let id = task["task_id"].as_str().unwrap();
+    assert_eq!(
+        manager.status(&json!({"task_id":id})).await.unwrap()["status"],
+        "queued"
+    );
+    db.work_admission()
+        .prepare_shutdown(true)
+        .unwrap()
+        .unwrap()
+        .commit();
+    drop(held);
+    let done = wait(&manager, id).await;
+    assert_eq!(done["status"], "failed");
+    assert!(
+        !scratch.0.join("trees").exists(),
+        "no worktree or agent may start"
+    );
+    assert!(!scratch.0.join("repo/must-not-exist.txt").exists());
+    assert!(
+        manager
+            .start(&json!({"repository":"repo","task":"late"}))
+            .await
+            .is_err()
+    );
+    db.close().await;
+}
