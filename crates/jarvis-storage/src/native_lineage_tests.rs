@@ -364,3 +364,6 @@ async fn parent_stop_withdraws_pending_and_approved_child_effects_only() {
 
 #[path = "delegation_coordination_tests.rs"]
 mod coordination;
+
+#[path = "shutdown_tests.rs"]
+mod shutdown;

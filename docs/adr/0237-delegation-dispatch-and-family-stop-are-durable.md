@@ -85,3 +85,5 @@ The ADR-0222 host-execution boundary remains: a worktree is not an OS sandbox an
 native ACP tools are not all intercepted. Broader child-audit/crash-isolation
 acceptance, coordinated shutdown draining and provider/platform acceptance remain
 separate P7-011 work.
+
+Amended by [ADR-0238](0238-shutdown-drains-owned-work-before-closing-dependencies.md) for coordinated graceful shutdown draining and delegation failure/audit acceptance.

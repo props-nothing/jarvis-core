@@ -696,7 +696,7 @@ async fn shutdown_admission_blocks_queued_dispatch_after_capacity_is_released() 
         .commit();
     drop(held);
     let done = wait(&manager, id).await;
-    assert_eq!(done["status"], "failed");
+    assert_eq!(done["status"], "cancelled");
     assert!(
         !scratch.0.join("trees").exists(),
         "no worktree or agent may start"

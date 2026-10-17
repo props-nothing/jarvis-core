@@ -105,3 +105,36 @@ Controlled local Windows PowerShell 5.1 runs are retained under `artifacts/revie
 | 2026-10-17 | probe folder allocation | Native macOS CI at `18b8585` found one creation failure; its original diagnostic erased the I/O error kind, so collision is an inference. Deterministic tests now force occupied file/directory names and simultaneous allocation while retaining exclusive ownership and existing sentinel bytes. Restoring single-attempt behavior fails on `AlreadyExists`; unique-ID allocation with bounded collision retry passes the 15-test agent-settings group. Final workspace/native reruns are tracked in TODO. | JARVIS agent |
 | 2026-10-17 | Windows PowerShell 5.1 process fixture | Module-autoload and process-policy controls above discriminate the old and new scripts. After the fixture repair, 24 command tests and 10 managed-process tests pass, including all five descendant cases and two bounded early-error diagnostics; strict daemon Clippy and workspace formatting pass. The first managed diagnostic expectation omitted the existing untrusted-data fence; its preserved failed log led to an exact fenced-stderr expectation, not a weakened assertion. Logs and command metadata are recorded in `windows-fixture-verification.json` under the local review artifacts. Full workspace and fresh native CI remain separate. | JARVIS agent |
 | 2026-10-17 | final code revision `dd65479` | Both local workspace configurations passed 3,170 tests each, with zero failures and six opt-in checks ignored; formatting, strict workspace Clippy, fresh builds and four local process gates passed. All ten [native CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38976054653) passed, including the three dedicated coding lifecycle gates and all five previously failing Windows fixture cases. This supersedes earlier pending workspace/native statements without establishing the original hosted timeout's cause. The real Windows Codex check remains separately scoped above; abrupt Unix death and escaped process groups remain excluded. | JARVIS agent |
+
+## 2026-10-17: coordinated daemon draining
+
+Live review for P7-011 uses the existing pinned Tokio 1.53.1 runtime; no ACP,
+process-wrap, OS signal or provider wire contract changes. `https://tokio.rs/llms.txt`
+was unavailable. The versioned timeout documentation was read at
+https://docs.rs/tokio/1.53.1/tokio/time/fn.timeout.html and release notes at
+https://raw.githubusercontent.com/tokio-rs/tokio/tokio-1.53.1/tokio/CHANGELOG.md.
+The release notes show no change requiring a different drain contract. Versioned
+JoinHandle/Notify rustdoc was unavailable through the reader; existing pinned SDK
+source remains the authority for these already-used APIs. JoinHandle drop detaches,
+so timing out a handle alone does not establish worker completion. A timeout drops
+its awaited future and is cooperative; blocking code can exceed the deadline.
+
+JARVIS will close admission, persist cancellation, notify existing process owners,
+and poll live permits and durable unfinished work under one bounded drain budget.
+It will keep database and outbound adapters open during that budget. It will never
+wrap a running effect in a timeout and call the drop successful cancellation.
+The existing configured shutdown timeout supplies the budget; no authentication,
+new credentials, external quotas or SDK upgrade are involved. Unavailable state,
+cleanup/persistence failure and a deadline with unfinished work fail the drain.
+Tests must hold an admitted operation across Stop, exercise an unreadable ledger,
+observe real coding/managed child exit before daemon exit, and preserve approval
+waits. Abrupt process death and deliberately escaped Unix descendants remain
+outside graceful-drain guarantees; no new OS sandbox claim follows.
+
+Implementation and local acceptance: ADR-0238 retains those boundaries. The full
+Windows workspace passes 3,228 tests (six existing opt-in ignores), including
+native in-flight inference, preserved approval, real managed-tree drain, scripted
+ACP crash, graceful cancellation before restart and a separate abrupt-death
+no-replay gate. The one-second lost-worker deadline leaves the task unfinished and
+records an unsuccessful daemon stop. Guard mutation failures and exact restoration
+are recorded under `artifacts/p7-011/draining/`; fresh native CI remains separate.

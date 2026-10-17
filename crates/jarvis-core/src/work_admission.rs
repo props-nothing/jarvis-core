@@ -49,6 +49,28 @@ pub struct WorkPermit(WorkAdmission);
 pub struct ShutdownPermit(WorkAdmission);
 
 impl WorkAdmission {
+    /// Whether admission is permanently closed and every admitted operation finished.
+    ///
+    /// # Errors
+    /// A poisoned gate cannot certify quiescence.
+    pub fn is_drained(&self) -> Result<bool, WorkAdmissionError> {
+        self.0
+            .lock()
+            .map(|state| state.phase == Phase::Closed && state.active == 0)
+            .map_err(|_| WorkAdmissionError::Unavailable)
+    }
+
+    /// Reads live operations, including operations admitted before shutdown closed the gate.
+    ///
+    /// # Errors
+    /// A poisoned counter cannot certify that work drained.
+    pub fn active_count(&self) -> Result<usize, WorkAdmissionError> {
+        self.0
+            .lock()
+            .map(|state| state.active)
+            .map_err(|_| WorkAdmissionError::Unavailable)
+    }
+
     /// Reserves one operation until the returned permit is dropped.
     ///
     /// # Errors
@@ -188,7 +210,9 @@ mod tests {
         let gate = WorkAdmission::default();
         let work = gate.admit().unwrap();
         gate.prepare_shutdown(true).unwrap().unwrap().commit();
+        assert_eq!(gate.active_count().unwrap(), 1);
         drop(work);
+        assert_eq!(gate.active_count().unwrap(), 0);
         assert!(matches!(gate.admit(), Err(WorkAdmissionError::Stopping)));
     }
 
@@ -226,6 +250,7 @@ mod tests {
         ));
         gate.close();
         assert!(gate.admit().is_err());
+        assert!(gate.active_count().is_err());
     }
 
     #[test]

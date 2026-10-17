@@ -138,7 +138,10 @@ pub use session_repository::{
     API_SESSION_CHANNEL, NewSession, RunAdmissionLimits, SessionTarget, StartRunInput, StartedRun,
     StoredSession, find_session, start_run,
 };
-pub use shutdown_repository::{ShutdownWork, read_shutdown_work};
+pub use shutdown_repository::{
+    ShutdownWork, read_shutdown_work, request_shutdown_cancellation,
+    settle_unstarted_shutdown_runs, shutdown_coding_failures,
+};
 pub use skill_repository::{
     StoredSkillRevision, ToolValidator, archive_skill_revision, delete_skill_revision,
     find_skill_revision, find_skill_revision_state, promote_skill_revision, read_skill_revisions,

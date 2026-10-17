@@ -255,6 +255,8 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0236](0236-shutdown-reserves-work-admission-before-checking-idleness.md) | Shutdown reserves work admission before checking idleness | Accepted |
 | [0237](0237-delegation-dispatch-and-family-stop-are-durable.md) | Delegation dispatch and family Stop are durable | Accepted |
 
+| [0238](0238-shutdown-drains-owned-work-before-closing-dependencies.md) | Shutdown drains owned work before closing dependencies | Accepted |
+
 ## Historical identifier aliases
 
 Two decisions accidentally reused phone-decision IDs. The canonical records are now ADR-0229 (file knowledge search, formerly the other ADR-0206) and ADR-0230 (coding delegation, formerly the other ADR-0207). Their old descriptive filenames remain link aliases; bare historical numbers require context. The accepted phone decisions retain ADR-0206 and ADR-0207.

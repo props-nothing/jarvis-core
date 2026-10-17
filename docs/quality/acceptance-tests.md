@@ -337,3 +337,19 @@ Given excessive input, output, tool loops, concurrent runs, event replay, call a
 | Voice beta | A16-A18 plus A17a, A17b, and A17c plus privacy/legal review |
 | Desktop beta | A19-A21 plus native installer lanes |
 | Stable | all applicable scenarios, A22/A24, security review, restore drill |
+
+## P7-011: delegation audit and graceful shutdown
+
+[ADR-0238](../adr/0238-shutdown-drains-owned-work-before-closing-dependencies.md) adds these automated gates:
+
+- Child tool calls, intent/policy/receipt identity and correlated events belong to the child and survive reopen. A native model failure leaves the parent and unrelated work usable; parent failure alone leaves a child runnable.
+- An actual scripted ACP process crash retains the failed task, canonical parent, originating launch call and approved intent. The daemon and later approved coding work remain usable.
+- Forced graceful shutdown closes admission, persists running/queued cancellation and confirms owned process-tree exit before database close; inspect cancellation before restarting the daemon.
+- Abrupt kill remains a separate interruption/no-replay check. On Unix, fixture cleanup explicitly handles observed descendants; this does not claim automatic cleanup on daemon death.
+- Held work permits, delayed settlement, real native inference, a real managed tree and a durable owner approval exercise drain ordering. Unreadable state, cleanup evidence failure and an unfinished-work deadline must refuse successful drain.
+
+Run `cargo test -p jarvisd shutdown_ --lib`, `cargo test -p jarvisd delegate::end_to_end --lib`,
+`cargo test -p jarvis-storage shutdown_`, and the `coding_lifecycle` acceptance target
+with freshly built binaries. Apply the existing full workspace, lint, docs and
+platform-native gates. These fixtures do not certify live providers or native
+in-process memory/panic-abort isolation.

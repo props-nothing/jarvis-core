@@ -83,3 +83,5 @@ contract or live-provider acceptance changes here.
 ## Cross-runtime coordination amendment
 
 [ADR-0237](0237-delegation-dispatch-and-family-stop-are-durable.md) adds durable coding ownership and Stop, per-call dispatch identity for both runtimes, and restart adoption without automatic relaunch. Earlier remaining-work notes above describe the preceding slice; broader audit, isolation and shutdown draining acceptance remain open.
+
+Amended by [ADR-0238](0238-shutdown-drains-owned-work-before-closing-dependencies.md) for coordinated graceful shutdown draining and delegation failure/audit acceptance.

@@ -23,7 +23,7 @@ impl Drop for Profile {
 }
 
 struct Fixture {
-    _profile: Profile,
+    profile: Profile,
     database: Arc<SqliteDatabase>,
     runs: RunService,
     pipeline: Arc<ToolPipeline>,
@@ -218,7 +218,7 @@ async fn fixture_with_policy(policy: jarvis_tools::WorkspacePolicy) -> Fixture {
     );
     agent.bind(&pipeline);
     Fixture {
-        _profile: profile,
+        profile,
         runs: RunService::new(Arc::clone(&database)),
         database,
         pipeline,
@@ -840,4 +840,184 @@ async fn a_full_house_points_at_the_list() {
         serde_json::from_str(&listed[0]).unwrap_or_else(|error| panic!("list JSON: {error}"));
     assert_eq!(page["running"], 4);
     assert_eq!(page["agents"].as_array().map(Vec::len), Some(4));
+}
+
+#[tokio::test]
+#[allow(clippy::unwrap_used)]
+async fn native_child_audit_and_failure_are_local_and_survive_reopen() {
+    let fixture = fixture().await;
+    let child = start_child(&fixture, "read the delegated input then fail").await;
+    let stored = jarvis_storage::find_run(&fixture.database, &child.run_id)
+        .await
+        .unwrap();
+    let parent = stored.parent_run_id().unwrap().to_owned();
+    let other = start(&fixture, "unrelated work").await;
+    let model = parent_model(vec![
+        Turn::tool_call("read", CONTEXT_TOOL, r#"{"source":"input","offset":0}"#),
+        Turn::refusal(),
+    ]);
+    let failed = drive_parent(&fixture, &model, &child.run_id).await;
+    assert_eq!(failed.state(), jarvis_core::RunState::Failed);
+    let calls = jarvis_storage::read_run_tool_calls(&fixture.database, &child.run_id)
+        .await
+        .unwrap();
+    assert_eq!(calls.len(), 1);
+    let call = &calls[0];
+    assert_eq!(call.run_id(), child.run_id);
+    assert_eq!(call.workspace_id(), child.workspace_id);
+    assert_eq!(call.outcome(), jarvis_core::ToolOutcome::Confirmed);
+    assert_eq!(call.receipt(), call.id());
+    assert_eq!(
+        call.intent_hash(),
+        jarvis_core::CanonicalIntentHash::compute(
+            CONTEXT_TOOL,
+            call.tool_version(),
+            &json!({"source":"input","offset":0})
+        )
+        .unwrap()
+        .to_hex()
+    );
+    assert!(!call.policy_version().is_empty());
+    assert!(
+        jarvis_storage::read_run_tool_calls(&fixture.database, &parent)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        jarvis_storage::read_run_tool_calls(&fixture.database, &other.run_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let events = audit_events(&fixture.database, &child.run_id).await;
+    assert!(events.iter().all(|event| event.run_id() == child.run_id));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.correlation_id() == call.correlation_id())
+    );
+    for id in [&parent, &other.run_id] {
+        assert_eq!(
+            jarvis_storage::find_run(&fixture.database, id)
+                .await
+                .unwrap()
+                .state(),
+            jarvis_core::RunState::Received
+        );
+        assert_eq!(
+            drive_parent(
+                &fixture,
+                &parent_model(vec![Turn::answer("still usable")]),
+                id
+            )
+            .await
+            .terminal_outcome(),
+            Some(RunOutcome::Succeeded)
+        );
+    }
+    fixture.database.close().await;
+    let db = SqliteDatabase::open(
+        &fixture
+            .profile
+            .0
+            .join(jarvis_storage::DEFAULT_DATABASE_FILENAME),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        jarvis_storage::find_run(&db, &child.run_id).await.unwrap(),
+        failed
+    );
+    assert_eq!(
+        jarvis_storage::read_run_tool_calls(&db, &child.run_id)
+            .await
+            .unwrap(),
+        calls
+    );
+    assert_eq!(audit_events(&db, &child.run_id).await, events);
+    db.close().await;
+}
+
+#[tokio::test]
+#[allow(clippy::unwrap_used)]
+async fn shutdown_waits_for_a_native_child_and_preserves_a_real_approval_wait() {
+    let fixture = fixture().await;
+    let child = start_child(&fixture, "finish in-flight inference").await;
+    let parent = jarvis_storage::find_run(&fixture.database, &child.run_id)
+        .await
+        .unwrap()
+        .parent_run_id()
+        .unwrap()
+        .to_owned();
+    // Failure does not implicitly stop children; explicit Stop and shutdown do.
+    assert_eq!(
+        drive_parent(&fixture, &parent_model(vec![Turn::refusal()]), &parent)
+            .await
+            .state(),
+        jarvis_core::RunState::Failed
+    );
+    assert!(
+        jarvis_storage::find_run(&fixture.database, &child.run_id)
+            .await
+            .unwrap()
+            .cancellation_requested_at()
+            .is_none()
+    );
+    let parked = start(&fixture, "approval survives shutdown").await;
+    let parked_model = parent_model(vec![Turn::tool_call(
+        "held",
+        crate::code_delegate_async::START,
+        r#"{"task":"held"}"#,
+    )]);
+    assert_eq!(
+        drive_parent(&fixture, &parked_model, &parked.run_id)
+            .await
+            .state(),
+        jarvis_core::RunState::AwaitingApproval
+    );
+    let approvals = jarvis_storage::read_run_approvals(&fixture.database, &parked.run_id)
+        .await
+        .unwrap();
+    assert_eq!(approvals.len(), 1);
+    let model = parent_model(vec![Turn::Slow {
+        delay_ms: 200,
+        then: Box::new(Turn::answer("finished inference")),
+    }]);
+    let drain = async {
+        while model.seen_messages().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        crate::shutdown::drain_work(&fixture.database, None, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+    };
+    let (finished, ()) = tokio::join!(drive_parent(&fixture, &model, &child.run_id), drain);
+    assert_eq!(finished.state(), jarvis_core::RunState::Cancelled);
+    assert_eq!(
+        jarvis_storage::read_run_approvals(&fixture.database, &parked.run_id)
+            .await
+            .unwrap(),
+        approvals
+    );
+    assert_eq!(
+        jarvis_storage::find_run(&fixture.database, &parked.run_id)
+            .await
+            .unwrap()
+            .state(),
+        jarvis_core::RunState::AwaitingApproval
+    );
+    fixture.database.close().await;
+}
+
+#[allow(clippy::unwrap_used)]
+async fn audit_events(db: &SqliteDatabase, id: &str) -> Vec<jarvis_storage::StoredRunEvent> {
+    jarvis_storage::read_run_events(
+        db,
+        id,
+        jarvis_core::ReplayRequest::new(jarvis_core::RunEventSequence::new(1).unwrap(), 100)
+            .unwrap(),
+    )
+    .await
+    .unwrap()
 }

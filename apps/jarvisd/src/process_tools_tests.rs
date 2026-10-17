@@ -368,3 +368,38 @@ server.listen(Number(process.argv[2]), '127.0.0.1', () => state('listening'));
     assert_eq!(terminal(&tool, id).await.status, "stopped");
     assert!(!port_reachable(port).await);
 }
+
+#[tokio::test]
+async fn shutdown_drains_the_live_managed_tree_before_closing_storage() {
+    let scratch = Scratch::new();
+    let tool = Arc::new(scratch.tool());
+    let state = shutdown_state(&scratch, Arc::clone(&tool)).await;
+    let answer = tool
+        .start(&crate::command_run::process_fixture::command(&scratch.0))
+        .await
+        .unwrap();
+    let id = answer["process_id"].as_str().unwrap();
+    let tree = managed_tree_ready(&scratch.0, &tool, id).await;
+    crate::shutdown::drain_work(state.database(), Some(&tool), Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(tool.active_count().unwrap(), 0);
+    assert_eq!(tool.load(id).unwrap().status, "stopped");
+    tree.assert_gone().await;
+    state.database().close().await;
+}
+
+#[tokio::test]
+async fn shutdown_cannot_hide_a_managed_cleanup_failure_after_registry_removal() {
+    let scratch = Scratch::new();
+    let tool = Arc::new(scratch.tool());
+    let state = shutdown_state(&scratch, Arc::clone(&tool)).await;
+    tool.cleanup_failed.store(true, Ordering::Release);
+    assert_eq!(tool.active_count().unwrap(), 0);
+    assert!(
+        crate::shutdown::drain_work(state.database(), Some(&tool), Duration::from_secs(1))
+            .await
+            .is_err()
+    );
+    state.database().close().await;
+}

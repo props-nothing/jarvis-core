@@ -70,6 +70,7 @@ mod run_service;
 mod schedule_service;
 mod schedule_tool;
 mod settings_service;
+mod shutdown;
 mod singleton;
 mod skill_bundles;
 mod skill_service;
@@ -140,6 +141,8 @@ enum DaemonError {
     UnknownArgument(String),
     #[error("failed to listen for a shutdown signal")]
     Signal(#[source] io::Error),
+    #[error("graceful shutdown did not drain: {0}")]
+    ShutdownDrain(&'static str),
     #[error("failed to bind the loopback HTTP transport on port {port}")]
     HttpBind {
         /// The configured port, without the resolved address.
@@ -512,6 +515,7 @@ struct Services {
 
 /// Everything the daemon must hold for its lifetime, constructed in startup order.
 struct Running {
+    shutdown_grace: std::time::Duration,
     health: Arc<HealthState>,
     settings_context: settings_service::SettingsContext,
     logging: Logging,
@@ -675,6 +679,10 @@ fn compose_phone(
 /// Establishes owned resources before the daemon serves. Configuration and
 /// credentials are validated first; singleton ownership precedes log rotation
 /// and database access so a rejected second daemon cannot alter active logs.
+fn shutdown_grace(daemon: &jarvis_storage::DaemonConfig) -> std::time::Duration {
+    std::time::Duration::from_secs(u64::from(daemon.shutdown_timeout_seconds()))
+}
+
 async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonError> {
     let health = Arc::new(HealthState::new());
     let paths = resolve_paths(root)?;
@@ -787,6 +795,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     .await?;
 
     Ok(Running {
+        shutdown_grace: shutdown_grace(daemon),
         health,
         settings_context,
         logging,
@@ -2123,6 +2132,7 @@ where
     F: Future<Output = io::Result<()>>,
 {
     let Running {
+        shutdown_grace,
         health,
         settings_context,
         logging,
@@ -2138,6 +2148,8 @@ where
         accept_loop,
     } = start(build, root.as_deref()).await?;
     warn_about_unused_environment();
+
+    let processes = services.processes.clone();
 
     // The listener is bound before it is served, and binding is what fails fast: an occupied port
     // is reported here rather than becoming a listener nobody notices is dead.
@@ -2178,6 +2190,14 @@ where
 
     let outcome = wait_for_exit(shutdown, accept_loop, http_stop, mcp_stop).await;
     database.work_admission().close();
+    health.begin_shutdown()?;
+    let drained = shutdown::drain_work(&database, processes.as_deref(), shutdown_grace).await;
+    if let Err(reason) = &drained {
+        tracing::error!(
+            reason,
+            "shutdown work did not drain; unfinished effects remain unconfirmed"
+        );
+    }
     stop_transports(http, serving_mcp, http_port, &outcome).await;
 
     let shutdown_result = outcome.shutdown;
@@ -2193,8 +2213,7 @@ where
         tracing::warn!(?failures, "some MCP connections did not stop cleanly");
     }
 
-    health.begin_shutdown()?;
-    let stop_reason = if shutdown_result.is_ok() && accept_failure.is_none() {
+    let stop_reason = if shutdown_result.is_ok() && accept_failure.is_none() && drained.is_ok() {
         DaemonStopReason::Signal
     } else {
         DaemonStopReason::ShutdownFailed
@@ -2212,6 +2231,7 @@ where
     shutdown_result.map_err(DaemonError::Signal)?;
     persistence_result?;
     lock_result?;
+    drained.map_err(DaemonError::ShutdownDrain)?;
     let stopped = health.snapshot();
     tracing::info!(
         phase = stopped.phase,

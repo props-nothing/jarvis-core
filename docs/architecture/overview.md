@@ -222,6 +222,10 @@ The single local daemon shares a process-local work-admission gate through its
 database handle. Stop/restart reserves admission before checking durable work and
 managed processes, then commits closed before acceptance or reopens on refusal.
 Native creation/execution, coding queue/dispatch, tool calls/resumes and automation
-claims use the same gate. Already admitted effects can still be interrupted by
-force or OS shutdown; coordinated cancellation remains separate.
-See [ADR-0236](../adr/0236-shutdown-reserves-work-admission-before-checking-idleness.md).
+claims use the same gate. Accepted shutdown records cross-runtime cancellation and
+awaits permits, native/coding settlement and managed-process cleanup before closing
+adapters and storage. Durable approval waits remain resumable. The configured work
+drain budget bounds waiting; unreadable state, cleanup failure or unfinished work
+at the deadline produces an unsuccessful shutdown with conservative restart
+recovery. Existing effects are not rolled back. See [ADR-0236](../adr/0236-shutdown-reserves-work-admission-before-checking-idleness.md)
+and [ADR-0238](../adr/0238-shutdown-drains-owned-work-before-closing-dependencies.md).

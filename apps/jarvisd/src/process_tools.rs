@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -48,9 +49,24 @@ pub(crate) struct ProcessTools {
     folders: CommandRunTool,
     storage: PathBuf,
     active: Arc<Mutex<BTreeMap<String, Arc<Active>>>>,
+    cleanup_failed: Arc<AtomicBool>,
 }
 
 impl ProcessTools {
+    /// Signal only live owned processes; never resurrect or kill a persisted PID.
+    pub(crate) fn request_shutdown(&self) -> Result<usize, &'static str> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "managed process registry unavailable")?;
+        for process in active.values() {
+            process.cancel.notify_one();
+        }
+        if self.cleanup_failed.load(Ordering::Acquire) {
+            return Err("managed process cleanup or result persistence failed");
+        }
+        Ok(active.len())
+    }
     /// Only this daemon's live registry counts; old request files are interrupted history.
     pub(crate) fn active_count(&self) -> Result<usize, &'static str> {
         self.active
@@ -64,6 +80,7 @@ impl ProcessTools {
             folders: CommandRunTool::new(roots)?,
             storage,
             active: Arc::new(Mutex::new(BTreeMap::new())),
+            cleanup_failed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -190,8 +207,9 @@ impl ProcessTools {
             .insert(id.clone(), Arc::clone(&active));
         let processes = Arc::clone(&self.active);
         let process_id = id.clone();
+        let cleanup_failed = Arc::clone(&self.cleanup_failed);
         tokio::spawn(async move {
-            supervise(child, active, folder, processes, process_id).await;
+            supervise(child, active, folder, processes, process_id, cleanup_failed).await;
         });
         Ok(
             json!({"process_id":id,"status":"running","note":"No overall deadline. Inspect status for logs/preview reachability; stop explicitly. Port reachability is not browser verification."}),
@@ -298,6 +316,7 @@ async fn supervise(
     folder: PathBuf,
     processes: Arc<Mutex<BTreeMap<String, Arc<Active>>>>,
     process_id: String,
+    cleanup_failed: Arc<AtomicBool>,
 ) {
     let stdout = child
         .take_stdout()
@@ -314,12 +333,14 @@ async fn supervise(
         }
     };
     if let Err(cleanup) = child.start_kill() {
+        cleanup_failed.store(true, Ordering::Release);
         status = "failed";
         error = Some(format!("process-tree cleanup failed: {cleanup}"));
     } else if !matches!(
         tokio::time::timeout(Duration::from_secs(3), child.wait()).await,
         Ok(Ok(_))
     ) {
+        cleanup_failed.store(true, Ordering::Release);
         status = "failed";
         error = Some("process exit could not be confirmed after cleanup".to_owned());
     }
@@ -331,8 +352,11 @@ async fn supervise(
         record.capture_complete = complete;
         record.finished_at = Some(UtcTimestamp::now(&SystemClock).to_string());
         if let Err(error) = save_result(&folder, &record) {
+            cleanup_failed.store(true, Ordering::Release);
             tracing::warn!(%error, "managed process result could not be saved");
         }
+    } else {
+        cleanup_failed.store(true, Ordering::Release);
     }
     if let Ok(mut processes) = processes.lock() {
         processes.remove(&process_id);

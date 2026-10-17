@@ -457,7 +457,7 @@ async fn verify_approved_continuation(
         );
         tokio::time::sleep(POLL).await;
     }
-    api.task("interrupt me", "interrupted").await;
+    api.task("interrupt me", "cancelled").await;
     assert_eq!(
         std::fs::read_to_string(folder.join("owner.txt")).unwrap(),
         "preserve owner changes"
@@ -466,12 +466,7 @@ async fn verify_approved_continuation(
 
 #[tokio::test]
 async fn coding_stop_and_daemon_restart_preserve_files_without_replaying_jobs() {
-    let (Some(daemon), Some(agent)) = (binary("jarvisd"), binary("examples/fake_acp_agent")) else {
-        assert!(
-            std::env::var_os("ACCEPTANCE_REQUIRE_BINARIES").is_none(),
-            "build jarvisd and `cargo build -p jarvis-runtimes --example fake_acp_agent` first"
-        );
-        eprintln!("SKIP: coding lifecycle requires jarvisd and fake_acp_agent binaries");
+    let Some((daemon, agent)) = acceptance_binaries() else {
         return;
     };
     let root = scratch_root();
@@ -482,44 +477,17 @@ async fn coding_stop_and_daemon_restart_preserve_files_without_replaying_jobs() 
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     let first_marker = folder.join("first.json");
-    configure(
-        &paths,
-        &folder,
-        &agent,
-        &format!(
-            "initialize_wait:{},initialize_child",
-            first_marker.display()
-        ),
-        port,
-    );
+    configure_wait(&paths, &folder, &agent, &first_marker, port);
     let mut running = Daemon::start(&daemon, &root.0, &paths).await;
     let api = Api::new(&paths, port);
     verify_owner_stop(&api, &first_marker).await;
 
     let family_marker = folder.join("family.json");
-    configure(
-        &paths,
-        &folder,
-        &agent,
-        &format!(
-            "initialize_wait:{},initialize_child",
-            family_marker.display()
-        ),
-        port,
-    );
+    configure_wait(&paths, &folder, &agent, &family_marker, port);
     verify_parent_stop(&api, &family_marker).await;
 
     let restart_marker = folder.join("restart.json");
-    configure(
-        &paths,
-        &folder,
-        &agent,
-        &format!(
-            "initialize_wait:{},initialize_child",
-            restart_marker.display()
-        ),
-        port,
-    );
+    configure_wait(&paths, &folder, &agent, &restart_marker, port);
     api.tool(
         "jarvis.code.delegate_start",
         json!({"task":"interrupt me","allow_commands":false,"allow_network":false}),
@@ -544,10 +512,11 @@ async fn coding_stop_and_daemon_restart_preserve_files_without_replaying_jobs() 
     api.post("/shutdown?force=true", json!({}), 202).await;
     running.exited().await;
     active_processes.assert_stopped().await;
+    assert_graceful_settlement(&paths).await;
 
     let mut restarted = Daemon::start(&daemon, &root.0, &paths).await;
-    api.task("interrupt me", "interrupted").await;
-    api.task("queued behind me", "interrupted").await;
+    api.task("interrupt me", "cancelled").await;
+    api.task("queued behind me", "cancelled").await;
     api.task("cancel me", "cancelled").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
@@ -560,7 +529,229 @@ async fn coding_stop_and_daemon_restart_preserve_files_without_replaying_jobs() 
         "preserve owner changes"
     );
 
+    verify_crash_isolation(&api, &paths, &folder, &agent, port).await;
     verify_approved_continuation(&api, &paths, &folder, &agent, port, &active).await;
+    verify_abrupt_restart(
+        &api,
+        &paths,
+        &folder,
+        &agent,
+        port,
+        &daemon,
+        &root.0,
+        &mut restarted,
+    )
+    .await;
     api.post("/shutdown?force=true", json!({}), 202).await;
     restarted.exited().await;
+}
+
+async fn verify_crash_isolation(
+    api: &Api,
+    paths: &AppPaths,
+    folder: &Path,
+    agent: &Path,
+    port: u16,
+) {
+    configure(paths, folder, agent, "crash", port);
+    let parent = api
+        .post("/runs", json!({"objective":"survive child crash"}), 201)
+        .await;
+    api.tool_for_run(
+        &parent["run_id"],
+        "jarvis.code.delegate_start",
+        json!({"task":"crash child","allow_commands":false,"allow_network":false}),
+        true,
+    )
+    .await;
+    let failed = api.task("crash child", "failed").await;
+    assert_eq!(failed["parent_run_id"], parent["run_id"]);
+    let db = jarvis_storage::SqliteDatabase::open(&paths.data().join("jarvis.sqlite3"))
+        .await
+        .unwrap();
+    let call = jarvis_storage::find_tool_call(&db, failed["origin_call_id"].as_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(call.run_id(), parent["run_id"].as_str().unwrap());
+    assert_eq!(call.outcome(), jarvis_core::ToolOutcome::Confirmed);
+    assert!(call.approval_id().is_some());
+    assert_eq!(call.receipt(), call.id());
+    let approval = jarvis_storage::find_approval(&db, call.approval_id().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(approval.intent().to_hex(), call.intent_hash());
+    db.close().await;
+    // Same parent can still invoke ordinary tools after the external process dies.
+    api.tool_for_run(
+        &parent["run_id"],
+        "jarvis.code.delegate_list",
+        json!({}),
+        false,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn verify_abrupt_restart(
+    api: &Api,
+    paths: &AppPaths,
+    folder: &Path,
+    agent: &Path,
+    port: u16,
+    daemon: &Path,
+    root: &Path,
+    running: &mut Daemon,
+) {
+    let marker = folder.join("abrupt.json");
+    configure(
+        paths,
+        folder,
+        agent,
+        &format!("initialize_wait:{},initialize_child", marker.display()),
+        port,
+    );
+    for task in ["abrupt running", "abrupt queued"] {
+        api.tool(
+            "jarvis.code.delegate_start",
+            json!({"task":task,"allow_commands":false,"allow_network":false}),
+            true,
+        )
+        .await;
+    }
+    api.task("abrupt running", "running").await;
+    api.task("abrupt queued", "queued").await;
+    let mut processes = FixtureProcesses::ready(&marker).await;
+    let before = std::fs::read(&marker).unwrap();
+    running.child.kill().unwrap();
+    running.child.wait().unwrap();
+    // Abrupt Unix parent death does not run the process-group owner's Drop.
+    // Clean up only the fixture's observed PIDs; recovery must still never replay.
+    #[cfg(unix)]
+    for pid in &processes.0 {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+    processes.assert_stopped().await;
+    *running = Daemon::start(daemon, root, paths).await;
+    for task in ["abrupt running", "abrupt queued"] {
+        api.task(task, "interrupted").await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        before,
+        "abrupt restart must not replay workers"
+    );
+}
+
+async fn assert_graceful_settlement(paths: &AppPaths) {
+    // Inspect BEFORE restart recovery: graceful drain itself persisted cancellation.
+    let db = jarvis_storage::SqliteDatabase::open(&paths.data().join("jarvis.sqlite3"))
+        .await
+        .unwrap();
+    for brief in ["interrupt me", "queued behind me"] {
+        let rows =
+            jarvis_storage::list_delegated_tasks(&db, jarvis_storage::LOCAL_WORKSPACE_ID, 50)
+                .await
+                .unwrap();
+        let row = rows.iter().find(|row| row.task == brief).unwrap();
+        assert_eq!(row.status, "cancelled");
+        assert!(row.cancellation_requested_at.is_some());
+    }
+    db.close().await;
+}
+
+#[tokio::test]
+async fn unfinished_work_deadline_records_failed_shutdown_without_claiming_settlement() {
+    let Some((daemon, agent)) = acceptance_binaries() else {
+        return;
+    };
+    let root = scratch_root();
+    let paths = portable_layout(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    configure(&paths, &root.0.join("work"), &agent, "crash", port);
+    let config = paths.config().join("config.toml");
+    std::fs::write(
+        &config,
+        std::fs::read_to_string(&config).unwrap().replace(
+            "shutdown_timeout_seconds = 15",
+            "shutdown_timeout_seconds = 1",
+        ),
+    )
+    .unwrap();
+    let mut running = Daemon::start(&daemon, &root.0, &paths).await;
+    let api = Api::new(&paths, port);
+    // A durable task whose owning worker was lost cannot certify cleanup.
+    let db = jarvis_storage::SqliteDatabase::open(&paths.data().join("jarvis.sqlite3"))
+        .await
+        .unwrap();
+    let task = jarvis_storage::create_delegated_task(
+        &db,
+        &jarvis_storage::NewDelegatedTask {
+            workspace_id: jarvis_storage::LOCAL_WORKSPACE_ID,
+            repository: "repo",
+            task: "lost worker",
+            allow_commands: false,
+            minutes: 1,
+            now: jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock),
+        },
+    )
+    .await
+    .unwrap();
+    api.post("/shutdown?force=true", json!({}), 202).await;
+    let status = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(status) = running.child.try_wait().unwrap() {
+                break status;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !status.success(),
+        "unfinished work must not report clean shutdown"
+    );
+    let stored =
+        jarvis_storage::find_delegated_task(&db, jarvis_storage::LOCAL_WORKSPACE_ID, &task.id)
+            .await
+            .unwrap();
+    assert_eq!(stored.status, "queued");
+    assert!(stored.cancellation_requested_at.is_some());
+    let inspection = jarvis_storage::inspect_database(&paths.data().join("jarvis.sqlite3"))
+        .await
+        .unwrap();
+    let stopped = inspection
+        .daemon_instances
+        .iter()
+        .find(|row| row.process_id == i64::from(running.child.id()))
+        .unwrap();
+    assert_eq!(stopped.stop_reason.as_deref(), Some("shutdown-failed"));
+    db.close().await;
+}
+
+fn acceptance_binaries() -> Option<(PathBuf, PathBuf)> {
+    let binaries = binary("jarvisd").zip(binary("examples/fake_acp_agent"));
+    assert!(
+        binaries.is_some() || std::env::var_os("ACCEPTANCE_REQUIRE_BINARIES").is_none(),
+        "build jarvisd and fake_acp_agent first"
+    );
+    if binaries.is_none() {
+        eprintln!("SKIP: coding lifecycle requires daemon and agent binaries");
+    }
+    binaries
+}
+
+fn configure_wait(paths: &AppPaths, folder: &Path, agent: &Path, marker: &Path, port: u16) {
+    configure(
+        paths,
+        folder,
+        agent,
+        &format!("initialize_wait:{},initialize_child", marker.display()),
+        port,
+    );
 }
