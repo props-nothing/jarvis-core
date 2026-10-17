@@ -76,6 +76,7 @@
 
 - [Upstream architecture patterns](research/upstream-patterns.md)
 - [Competitive gap review: Hermes Agent and OpenClaw (2026-10-17)](research/competitive-gap-2026-10-17.md)
+- [Voice backup and local voices (2026-10-17)](research/voice-backup-and-local-voices-2026-10-17.md)
 - [Integration research index](research/integrations/README.md)
 - [Python prototype migration](migration/python-prototype.md)
 - [Third-party provenance](../THIRD_PARTY.md)

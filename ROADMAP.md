@@ -159,11 +159,13 @@ No JARVIS-specific runtime protocol and no per-framework adapter (OpenAI Agents,
 Deliver:
 
 - local speech recognition and synthesis that need no key, voice activity detection and echo handling, and a client that is not a browser tab (`P8-010`); voice notes through Telegram are the cheapest first one
+- a backup voice when ElevenLabs is unavailable: a provider-neutral speech interface with a fallback chain, an OpenAI-compatible adapter for hosted and local servers, and a second native cloud provider (`P8-018` to `P8-021`). Owner-requested 2026-10-17; plan in [voice backup and local voices](docs/research/voice-backup-and-local-voices-2026-10-17.md)
+- native local voice generation in the daemon, with an editable voice library, voice design, consented cloning of the owner's voice and a pronunciation dictionary, in the style of ElevenLabs (`P8-022` to `P8-026`)
 - provider-neutral outbound calls (Twilio, SIP) to numbers the owner approves, signed webhooks, call records, consent flags and retention (`P8-007` to `P8-009`, `P8-011`). **First slice built (`ADR-0200`):** JARVIS rings the owner through an ElevenLabs agent, to listed numbers only, with records and a yes on the phone that can answer the approval; run live by the owner on a real account (2026-10-13).
 
 Parked until the owner uses them: ElevenLabs Custom LLM and Speech Engine transports, model-based turn detection ([ADR-0010](docs/adr/0010-model-based-turn-detection.md) stays the policy if built), and a realtime room.
 
-**Exit gate:** the owner can talk to JARVIS hands-free without a browser tab, and a policy-approved task can place an outbound call with correlated audit and call records.
+**Exit gate:** the owner can talk to JARVIS hands-free without a browser tab, and a policy-approved task can place an outbound call with correlated audit and call records; with ElevenLabs blocked, JARVIS still answers in a natural backup voice, including a local one that works offline.
 
 ## Phase 9: Desktop And Product Installation
 
@@ -218,7 +220,7 @@ Owner-requested on 2026-10-17 after the [competitive gap review](docs/research/c
 
 Deliver, in order:
 
-1. Signed, toolchain-free installation and updates (`P12-001`), and an owner decision on whether guided setup still requires a voice key (`P12-002`)
+1. Signed, toolchain-free installation and updates (`P12-001`), and an owner decision on whether guided setup still requires a voice key (`P12-002`); the backup and local voice (`P8-018` to `P8-022`) make a no-key setup possible
 2. Skills chosen by meaning, skills that improve after use, an always-loaded owner profile and semantic memory (`P12-003` to `P12-006`)
 3. Discord, Slack and WhatsApp channels, an enforceable execution sandbox and a native Anthropic adapter (`P12-007` to `P12-009`)
 4. Image generation, PowerPoint and charts; restart-safe proactive delivery; skill ecosystem import with scanning; completed live acceptance (`P12-010` to `P12-013`)
