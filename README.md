@@ -18,12 +18,35 @@
     <a href="LICENSE">Apache-2.0</a>
 </p>
 
+<p align="center">
+    <a href="https://www.jarvisd.dev/#film"><img src="docs/assets/jarvis-demo.webp" alt="The JARVIS console face working through one request: searching the web, delegating to a sub-agent and a coding agent, stopping for the owner's approval before sending an email, and the JARVIS title card." width="880"></a>
+    <br>
+    <sub>One request, seen through the console's live mission view. Rendered from the console's own face and mission-view code with JARVIS's real tool names; the request, files and messages are examples. <a href="https://www.jarvisd.dev/#film"><b>Watch the full 59-second film</b></a>.</sub>
+</p>
+
 JARVIS is a **local-first personal AI assistant with a durable Rust core**. Talk to it, give it a project, connect your tools, and watch it work. Your conversations, memory, approvals and task state stay with JARVIS, not with a replaceable model or agent framework.
 
 Use a local or hosted OpenAI-compatible model, choose a fallback, and reach the same assistant from the browser console, terminal, Telegram or an authenticated external app. Cloud models and connected services receive the data needed for the operations you enable; local-first does not mean every integration is offline.
 
 > **Models suggest. You decide. Rust enforces.**
 > JARVIS run tool effects pass through deterministic policy, durable approvals and an audit trail. Direct external MCP calls use policy and owner approval, but their pending approvals are in memory and their direct outcomes are not yet stored in run history. A web page cannot grant permissions, and a model cannot approve its own request.
+
+## One Request, End To End
+
+Ask once: *"Plan Friday's team dinner, handle my inbox and prep the board deck."* This is how that request moves through JARVIS. Every step is a real tool, every effect passes the same policy, and the console shows each one as it happens.
+
+| | What JARVIS does | Tools it reaches for |
+| --- | --- | --- |
+| **1. Research** | Searches the web and reads the pages it finds, keeping each source as a link. | `web.search`, `web.fetch` |
+| **2. Your day** | Finds unread mail, reads what matters, checks Friday, adds an event and drafts a reply. | `gmail.search`, `gmail.read`, `calendar.events`, `calendar.create`, `gmail.draft` |
+| **3. Your files** | Searches granted folders, reads the spreadsheet and the deck, edits the notes. | `knowledge.search`, `files.read_document`, `files.edit` |
+| **4. Memory** | Recalls what you approved before, and proposes a new memory for you to accept. | `memory.search`, `memory.propose` |
+| **5. Agents** | Hands research to a sub-agent and a fix to a coding agent, then runs the checks itself. | `agent.delegate`, `code.delegate`, `command.run` |
+| **6. Keeps going** | Files the work in a project journal and schedules the follow-ups. | `project.create`, `project.note`, `schedule.add` |
+| **7. Your yes** | Before an email leaves, it stops and asks. One click, one command or one spoken word answers. | `gmail.send`, held for approval |
+| **8. Answers** | Tells you what it did, in text or out loud, wherever you asked: console, terminal or Telegram. | |
+
+Tool names are shown without their `jarvis.` prefix. Which of these are available depends on what you grant and connect; policy decides what needs your approval. The [abilities guide](docs/user/abilities.md) lists every tool and its default.
 
 ## What You Can Do
 
