@@ -407,9 +407,6 @@ pub(crate) fn shown_objective(objective: &str) -> String {
     if let Some((kind, task)) = crate::trigger_service::parse_triggered(objective) {
         return format!("[{} trigger] {task}", kind.as_str());
     }
-    if let Some(task) = objective.strip_prefix(crate::delegate::DELEGATED_NOTICE) {
-        return format!("[sub-agent] {task}");
-    }
     objective.to_owned()
 }
 
@@ -738,9 +735,20 @@ pub async fn list_runs(State(state): State<GatewayState>, RawQuery(raw): RawQuer
                     .collect::<String>()
             });
         summaries.push(RunSummaryReply {
+            parent_run_id: run.parent_run_id().map(str::to_owned),
+            is_delegated: run.is_delegated(),
             run_id: run.id().to_owned(),
             session_id: run.session_id().to_owned(),
-            objective: shown_objective(run.objective()),
+            objective: if run.is_delegated() {
+                format!(
+                    "[sub-agent] {}",
+                    run.objective()
+                        .strip_prefix(crate::delegate::DELEGATED_NOTICE)
+                        .unwrap_or(run.objective())
+                )
+            } else {
+                shown_objective(run.objective())
+            },
             state: run.state(),
             outcome: run.terminal_outcome(),
             error_code: run.error_code().map(str::to_owned),

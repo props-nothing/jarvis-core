@@ -21,6 +21,8 @@ pub enum ToolEffect {
     ReadOnly,
     /// Writes local or provider state that can be reversed.
     Write,
+    /// Starts independent work. This grants no authority over its later effects.
+    Delegation,
     /// Sends something to a party outside JARVIS.
     ExternalCommunication,
     /// Destroys or irreversibly alters data.
@@ -40,6 +42,7 @@ impl ToolEffect {
         match self {
             Self::ReadOnly => "read_only",
             Self::Write => "write",
+            Self::Delegation => "delegation",
             Self::ExternalCommunication => "external_communication",
             Self::Destructive => "destructive",
             Self::CodeExecution => "code_execution",
@@ -75,6 +78,7 @@ impl ToolEffect {
         match self {
             Self::ReadOnly => 0,
             Self::Write => 1,
+            Self::Delegation => 1,
             Self::ExternalCommunication => 2,
             Self::Destructive => 3,
             Self::Financial => 3,
@@ -88,10 +92,11 @@ impl ToolEffect {
 
     /// Returns every effect, ordered from least to most consequential.
     #[must_use]
-    pub const fn all() -> [Self; 7] {
+    pub const fn all() -> [Self; 8] {
         [
             Self::ReadOnly,
             Self::Write,
+            Self::Delegation,
             Self::ExternalCommunication,
             Self::CodeExecution,
             Self::Destructive,
@@ -211,6 +216,42 @@ impl fmt::Display for EffectSet {
     }
 }
 
+/// The authority boundary of delegated work, chosen by the adapter, never task text.
+///
+/// Both forms create work and require ordinary authorization. A native child's later
+/// tool calls re-enter JARVIS policy; a host process can execute its own tools under
+/// task authorization. A worktree or cooperative permission callback does not change
+/// that boundary (ADR-0235).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DelegationBoundary {
+    /// Ordinary JARVIS run whose tool calls pass through JARVIS policy.
+    NativeRun,
+    /// External agent with host execution authority.
+    HostProcess,
+}
+
+impl DelegationBoundary {
+    /// Effects of starting or continuing work at this boundary.
+    #[must_use]
+    pub fn effects(self) -> EffectSet {
+        let mut effects = EffectSet::single(ToolEffect::Delegation);
+        effects.effects.insert(ToolEffect::Write);
+        if self == Self::HostProcess {
+            effects.effects.insert(ToolEffect::CodeExecution);
+        }
+        effects
+    }
+
+    /// Default task approval; workspace restrictions and explicit owner trust still apply.
+    #[must_use]
+    pub const fn approval(self) -> crate::ApprovalPolicy {
+        match self {
+            Self::NativeRun => crate::ApprovalPolicy::Auto,
+            Self::HostProcess => crate::ApprovalPolicy::Ask,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +333,17 @@ mod tests {
     fn reading_has_the_lowest_floor() {
         assert_eq!(EffectSet::single(ToolEffect::ReadOnly).risk_floor(), 0);
         assert!(!EffectSet::single(ToolEffect::ReadOnly).is_mutating());
+    }
+
+    #[test]
+    fn delegation_alone_is_mutating_and_cannot_be_declared_read_risk() {
+        let effects = EffectSet::single(ToolEffect::Delegation);
+        assert!(effects.is_mutating());
+        assert_eq!(effects.risk_floor(), 1);
+        assert!(crate::declared_for_effects(0, &effects).is_err());
+        assert!(
+            crate::RetryPolicy::blind(1, 1, &effects, crate::Idempotency::Unsupported).is_err()
+        );
     }
 
     /// Code execution is floor 3 without a sandbox argument, because the code decides its effects.

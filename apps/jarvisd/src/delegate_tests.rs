@@ -2,13 +2,17 @@
 
 use std::sync::Arc;
 
-use jarvis_core::RunOutcome;
+use jarvis_core::{
+    ApprovalChannel, ApprovalDecision, ApprovalDecisionOutcome, CorrelationId, RunOutcome,
+    SessionChannel,
+};
 use jarvis_models::{Role, Turn, scripted};
 use jarvis_protocol::StartRunRequest;
 use jarvis_storage::SqliteDatabase;
 
 use super::*;
 use crate::executor::{Executor, SCRIPTED_MODEL_NAME, execute_run_with_tools};
+use crate::tool_pipeline::{ToolPipelineError, ToolPipelineOutcome};
 
 struct Profile(std::path::PathBuf);
 
@@ -24,9 +28,156 @@ struct Fixture {
     runs: RunService,
     pipeline: Arc<ToolPipeline>,
     executor: Arc<Executor>,
+    coding_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct CodingBoundaryProbe(Arc<std::sync::atomic::AtomicUsize>);
+
+fn legacy_coding_definition(current: &ToolDefinition) -> ToolDefinition {
+    ToolDefinition::new(ToolDefinitionParts {
+        id: current.id().clone(),
+        version: "1.0.0".into(),
+        title: current.title().into(),
+        description: current.description().into(),
+        input_schema: current.input_schema().clone(),
+        output_schema: current.output_schema().clone(),
+        effects: EffectSet::single(ToolEffect::CodeExecution),
+        risk: 3,
+        required_scopes: current.required_scopes().clone(),
+        approval: ApprovalPolicy::Ask,
+        timeout_seconds: 60,
+        retry: RetryDeclaration::none(),
+        idempotency: Idempotency::Unsupported,
+        source: ToolSource::Native,
+        availability: Availability::Available,
+        sensitivity: ToolSensitivity::new(Sensitivity::Internal, Sensitivity::Internal),
+    })
+    .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[tokio::test]
+async fn delegation_child_role_refuses_direct_and_previously_approved_coding_calls() {
+    let fixture = fixture().await;
+    let child = start_child(&fixture, "stored child role").await;
+    let definitions = fixture
+        .pipeline
+        .definitions()
+        .unwrap_or_else(|e| panic!("{e}"));
+    // Full owner-surface grants deliberately bypass the executor's discovery/scope filter.
+    let actor = crate::tool_actor::ToolActor::for_composed_tools(
+        &child.workspace_id,
+        &child.run_id,
+        SessionChannel::Cli,
+        "policy-1",
+        &definitions,
+    );
+    let args = json!({"task":"nested coding"});
+    let direct = fixture
+        .pipeline
+        .call_tool(
+            crate::code_delegate_async::START,
+            args.clone(),
+            &actor,
+            CorrelationId::new(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(
+        direct,
+        ToolPipelineOutcome::Refused {
+            reason_code: "child_cannot_delegate"
+        }
+    ));
+
+    // Seed an approval under the historical catalog, which had no delegation effect.
+    // Reopen with today's catalog: an old yes cannot elevate the stored child's role.
+    let current = definitions
+        .iter()
+        .find(|d| d.id().to_string() == crate::code_delegate_async::START)
+        .unwrap_or_else(|| panic!("start definition"));
+    let legacy = legacy_coding_definition(current);
+    let old = ToolPipeline::with_adapters(
+        Arc::clone(&fixture.database),
+        None,
+        jarvis_tools::WorkspacePolicy::default(),
+        vec![(
+            vec![legacy],
+            Arc::new(CodingBoundaryProbe(Arc::clone(&fixture.coding_calls)))
+                as Arc<dyn ToolExecutor>,
+        )],
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let held = old
+        .call_tool(
+            crate::code_delegate_async::START,
+            args.clone(),
+            &actor,
+            CorrelationId::new(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ToolPipelineOutcome::AwaitingApproval {
+        call_id,
+        approval_id,
+        ..
+    } = held
+    else {
+        panic!("expected old approval: {held:?}")
+    };
+    let decision = ApprovalDecision::new(
+        ApprovalDecisionOutcome::Approve,
+        ApprovalChannel::Cli,
+        UtcTimestamp::now(&SystemClock),
+        jarvis_storage::LOCAL_USER_ID,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    jarvis_storage::record_decision(&fixture.database, &approval_id, &decision)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let resumed = fixture
+        .pipeline
+        .resume(&call_id, args, &actor, CorrelationId::new())
+        .await;
+    assert!(
+        matches!(
+            resumed,
+            Err(ToolPipelineError::ResumeRefused {
+                reason: "a native child cannot delegate, including through an earlier approval",
+                ..
+            })
+        ),
+        "{resumed:?}"
+    );
+    assert_eq!(
+        fixture
+            .coding_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    let stored = jarvis_storage::find_tool_call(&fixture.database, &call_id)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(stored.outcome(), jarvis_core::ToolOutcome::Requested);
+}
+
+#[async_trait]
+impl ToolExecutor for CodingBoundaryProbe {
+    fn adapter_id(&self) -> &'static str {
+        "coding-boundary-probe"
+    }
+    async fn execute(&self, _: &ToolExecutionRequest) -> Result<ToolCallResult, AdapterError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(AdapterError::RefusedBeforeReaching {
+            reason: "probe reached".into(),
+        })
+    }
 }
 
 async fn fixture() -> Fixture {
+    fixture_with_policy(jarvis_tools::WorkspacePolicy::default()).await
+}
+
+async fn fixture_with_policy(policy: jarvis_tools::WorkspacePolicy) -> Fixture {
     let path = std::env::temp_dir().join(format!(
         "jarvis-delegate-{}-{}",
         std::process::id(),
@@ -44,15 +195,24 @@ async fn fixture() -> Fixture {
             .unwrap_or_else(|error| panic!("scripted executor: {error}")),
     );
     let agent = Arc::new(AgentTool::new(Arc::clone(&database), Arc::clone(&executor)));
+    let coding_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let pipeline = Arc::new(
         ToolPipeline::with_adapters(
             Arc::clone(&database),
             None,
-            jarvis_tools::WorkspacePolicy::default(),
-            vec![(
-                AgentTool::definitions().unwrap_or_else(|error| panic!("definitions: {error}")),
-                Arc::clone(&agent) as Arc<dyn ToolExecutor>,
-            )],
+            policy,
+            vec![
+                (
+                    AgentTool::definitions().unwrap_or_else(|error| panic!("definitions: {error}")),
+                    Arc::clone(&agent) as Arc<dyn ToolExecutor>,
+                ),
+                (
+                    crate::code_delegate_async::AsyncCodeDelegateTool::definitions()
+                        .unwrap_or_else(|e| panic!("coding definitions: {e}")),
+                    Arc::new(CodingBoundaryProbe(Arc::clone(&coding_calls)))
+                        as Arc<dyn ToolExecutor>,
+                ),
+            ],
         )
         .unwrap_or_else(|error| panic!("compose the pipeline: {error}")),
     );
@@ -63,7 +223,101 @@ async fn fixture() -> Fixture {
         database,
         pipeline,
         executor,
+        coding_calls,
     }
+}
+
+#[tokio::test]
+async fn delegation_coding_launches_park_before_reaching_the_adapter() {
+    let fixture = fixture().await;
+    for tool in [
+        crate::code_delegate::DELEGATE_TOOL,
+        crate::code_delegate_async::START,
+        crate::code_delegate_async::RESUME,
+    ] {
+        let parent = start(&fixture, "coding launch boundary").await;
+        let args = if tool == crate::code_delegate_async::RESUME {
+            json!({"task_id": jarvis_core::RunId::new().to_string()})
+        } else {
+            // Cooperative settings cannot turn host execution into ordinary native delegation.
+            json!({"task":"inspect the project", "mode":"worktree", "allow_commands":false})
+        };
+        let model = parent_model(vec![Turn::tool_call("launch", tool, &args.to_string())]);
+        let settled = drive_parent(&fixture, &model, &parent.run_id).await;
+        assert_eq!(
+            settled.state(),
+            jarvis_core::RunState::AwaitingApproval,
+            "{tool}"
+        );
+        let calls = jarvis_storage::read_run_tool_calls(&fixture.database, &parent.run_id)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_version(), "1.1.0");
+    }
+    assert_eq!(
+        fixture
+            .coding_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test]
+async fn delegation_child_cannot_launch_coding_even_when_owner_trusts_it() {
+    let mut policy = jarvis_tools::WorkspacePolicy::default();
+    for tool in [
+        crate::code_delegate::DELEGATE_TOOL,
+        crate::code_delegate_async::START,
+        crate::code_delegate_async::RESUME,
+    ] {
+        policy = policy.trusting(ToolId::new(tool).unwrap_or_else(|e| panic!("{e}")));
+    }
+    let fixture = fixture_with_policy(policy).await;
+    let child = start_child(&fixture, "try coding without an objective marker").await;
+    let offered = crate::executor::tool_specs_for_test(&fixture.pipeline, true);
+    assert!(!offered.iter().any(|name| is_agent_management_tool(name)));
+    let model = parent_model(vec![
+        Turn::tool_call(
+            "alias",
+            crate::code_delegate::DELEGATE_TOOL,
+            r#"{"task":"nested"}"#,
+        ),
+        Turn::tool_call(
+            "start",
+            crate::code_delegate_async::START,
+            r#"{"task":"nested"}"#,
+        ),
+        Turn::tool_call(
+            "resume",
+            crate::code_delegate_async::RESUME,
+            &json!({"task_id": jarvis_core::RunId::new().to_string()}).to_string(),
+        ),
+        Turn::answer("refused"),
+    ]);
+    let settled = drive_parent(&fixture, &model, &child.run_id).await;
+    assert_eq!(settled.terminal_outcome(), Some(RunOutcome::Succeeded));
+    assert_eq!(
+        fixture
+            .coding_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    let results = tool_results(&model);
+    assert_eq!(results.len(), 3);
+    assert!(
+        results
+            .iter()
+            .all(|result| result.contains("refused") || result.contains("could not be completed")),
+        "{results:?}"
+    );
+    assert!(
+        jarvis_storage::read_run_approvals(&fixture.database, &child.run_id)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .is_empty(),
+        "a scope denial must not become an approval"
+    );
 }
 
 async fn start(fixture: &Fixture, objective: &str) -> jarvis_protocol::RunReply {
@@ -77,6 +331,23 @@ async fn start(fixture: &Fixture, objective: &str) -> jarvis_protocol::RunReply 
         })
         .await
         .unwrap_or_else(|error| panic!("start: {error:?}"))
+}
+
+async fn start_child(fixture: &Fixture, objective: &str) -> jarvis_protocol::RunReply {
+    let parent = start(fixture, "fixture parent").await;
+    fixture
+        .runs
+        .start_delegated(
+            &StartRunRequest {
+                objective: objective.to_owned(),
+                session_id: None,
+                idempotency_key: None,
+                project_id: None,
+            },
+            &parent.run_id,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("start child: {error:?}"))
 }
 
 fn parent_model(turns: Vec<Turn>) -> jarvis_models::ScriptedModel {
@@ -215,7 +486,7 @@ async fn history_paging_discovers_messages_older_than_the_context_window() {
 #[tokio::test]
 async fn a_long_delegated_answer_has_recoverable_pages() {
     let fixture = fixture().await;
-    let child = start(&fixture, &format!("{DELEGATED_NOTICE}read everything")).await;
+    let child = start_child(&fixture, &format!("{DELEGATED_NOTICE}read everything")).await;
     let original = format!("{}LAST-PAGE", "full answer\n".repeat(1000));
     let model = parent_model(vec![Turn::answer(&original)]);
     let run = drive_parent(&fixture, &model, &child.run_id).await;
@@ -285,12 +556,17 @@ async fn a_delegated_task_runs_as_a_sub_agent_and_its_answer_is_fenced() {
     let recent = jarvis_storage::read_recent_runs(&fixture.database, &parent.workspace_id, 10)
         .await
         .unwrap_or_else(|error| panic!("read runs: {error}"));
-    let children: Vec<_> = recent
-        .iter()
-        .filter(|run| is_delegated_objective(run.objective()))
-        .collect();
+    let children: Vec<_> = recent.iter().filter(|run| run.is_delegated()).collect();
     assert_eq!(children.len(), 1);
     assert!(children[0].objective().ends_with("say hello"));
+    assert_eq!(children[0].parent_run_id(), Some(parent.run_id.as_str()));
+    let reply = fixture
+        .runs
+        .read(children[0].id())
+        .await
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    assert!(reply.is_delegated);
+    assert_eq!(reply.parent_run_id, Some(parent.run_id));
 }
 
 /// **Delegation is one level deep: a sub-agent is offered no delegation tool and is refused one it names anyway.**
@@ -313,7 +589,7 @@ async fn a_sub_agent_cannot_delegate() {
     );
 
     // And a call it makes anyway is refused, because its authority has no `agent.delegate` scope.
-    let child = start(&fixture, &format!("{DELEGATED_NOTICE}try to delegate")).await;
+    let child = start_child(&fixture, "try to delegate without any objective marker").await;
     let model = parent_model(vec![
         Turn::tool_call("c1", DELEGATE_TOOL, r#"{"task":"again"}"#),
         Turn::answer("I could not."),
@@ -329,10 +605,7 @@ async fn a_sub_agent_cannot_delegate() {
         .await
         .unwrap_or_else(|error| panic!("read runs: {error}"));
     assert_eq!(
-        recent
-            .iter()
-            .filter(|run| is_delegated_objective(run.objective()))
-            .count(),
+        recent.iter().filter(|run| run.is_delegated()).count(),
         1,
         "no second sub-agent may have been started"
     );
@@ -342,7 +615,15 @@ async fn a_sub_agent_cannot_delegate() {
 #[tokio::test]
 async fn result_refuses_a_run_that_is_not_a_sub_agent() {
     let fixture = fixture().await;
-    let ordinary = start(&fixture, "an ordinary private run").await;
+    let ordinary = start(
+        &fixture,
+        &format!("{DELEGATED_NOTICE}an ordinary private run"),
+    )
+    .await;
+    assert!(
+        !ordinary.is_delegated,
+        "objective text cannot mint child identity"
+    );
     let parent = start(&fixture, "collect it").await;
     let model = parent_model(vec![
         Turn::tool_call(
@@ -363,7 +644,7 @@ async fn result_refuses_a_run_that_is_not_a_sub_agent() {
 #[tokio::test]
 async fn a_parked_sub_agent_is_reported_as_waiting_for_the_user() {
     let fixture = fixture().await;
-    let child = start(&fixture, &format!("{DELEGATED_NOTICE}do something held")).await;
+    let child = start_child(&fixture, &format!("{DELEGATED_NOTICE}do something held")).await;
     let mut run = jarvis_storage::find_run(&fixture.database, &child.run_id)
         .await
         .unwrap_or_else(|error| panic!("read the child: {error}"));
@@ -416,12 +697,12 @@ async fn a_parked_sub_agent_is_reported_as_waiting_for_the_user() {
 async fn list_names_the_sub_agents_holding_the_slots_and_nothing_else() {
     let fixture = fixture().await;
     let _private = start(&fixture, "an ordinary private run").await;
-    let waiting = start(
+    let waiting = start_child(
         &fixture,
         &format!("{DELEGATED_NOTICE}research the first company"),
     )
     .await;
-    let second = start(
+    let second = start_child(
         &fixture,
         &format!("{DELEGATED_NOTICE}research the second company"),
     )
@@ -453,7 +734,7 @@ async fn parked_sub_agents_do_not_hold_the_working_slots() {
     let fixture = fixture().await;
     let mut parked = Vec::new();
     for index in 0..MAX_ACTIVE_SUBAGENTS {
-        let child = start(&fixture, &format!("{DELEGATED_NOTICE}held {index}")).await;
+        let child = start_child(&fixture, &format!("{DELEGATED_NOTICE}held {index}")).await;
         let mut run = jarvis_storage::find_run(&fixture.database, &child.run_id)
             .await
             .unwrap_or_else(|error| panic!("{error}"));
@@ -511,7 +792,7 @@ async fn parked_sub_agents_do_not_hold_the_working_slots() {
 async fn a_full_house_points_at_the_list() {
     let fixture = fixture().await;
     for index in 0..MAX_ACTIVE_SUBAGENTS {
-        start(&fixture, &format!("{DELEGATED_NOTICE}task {index}")).await;
+        start_child(&fixture, &format!("{DELEGATED_NOTICE}task {index}")).await;
     }
     for index in 0..60 {
         start(&fixture, &format!("unrelated newer work {index}")).await;

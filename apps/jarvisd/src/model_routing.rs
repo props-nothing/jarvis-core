@@ -2,7 +2,7 @@
 //!
 //! Most work does not need the strongest model: a scheduled check, a run a new mail started and a sub-agent's bounded errand are often
 //! well served by a cheaper one, and the owner's own questions keep the model they chose. The kind is read from how the run began
-//! (its objective's framing), so no run record or migration is needed and a resumed run keeps the kind it had.
+//! (durable lineage for sub-agents; objective framing for schedules/triggers). A resumed child keeps its role.
 
 use jarvis_models::ModelId;
 
@@ -17,12 +17,12 @@ pub(crate) enum RunRole {
     Background,
 }
 
-/// The kind of run an objective began as.
-pub(crate) fn role_of(objective: &str) -> RunRole {
+/// Uses durable child identity before schedule/trigger framing.
+pub(crate) fn role_of(objective: &str, is_delegated: bool) -> RunRole {
     if let Some(original) = objective.strip_prefix(crate::resume::RESUME_NOTICE) {
-        return role_of(original);
+        return role_of(original, is_delegated);
     }
-    if objective.starts_with(crate::delegate::DELEGATED_NOTICE) {
+    if is_delegated {
         RunRole::SubAgent
     } else if objective.starts_with(crate::schedule_service::UNATTENDED_NOTICE)
         || crate::trigger_service::parse_triggered(objective).is_some()
@@ -76,12 +76,22 @@ mod tests {
             crate::schedule_service::UNATTENDED_NOTICE
         );
         let delegated = format!("{}find the invoice", crate::delegate::DELEGATED_NOTICE);
-        assert_eq!(role_of(plain), RunRole::Main);
-        assert_eq!(role_of(&scheduled), RunRole::Background);
-        assert_eq!(role_of(&delegated), RunRole::SubAgent);
+        assert_eq!(role_of(plain, false), RunRole::Main);
+        assert_eq!(role_of(&scheduled, false), RunRole::Background);
+        assert_eq!(role_of(&delegated, true), RunRole::SubAgent);
+        assert_eq!(
+            role_of(&delegated, false),
+            RunRole::Main,
+            "text cannot select a child model"
+        );
+        assert_eq!(role_of(plain, true), RunRole::SubAgent);
+        assert_eq!(
+            role_of(&format!("{}{plain}", crate::resume::RESUME_NOTICE), true),
+            RunRole::SubAgent
+        );
         for original in [plain, scheduled.as_str(), delegated.as_str()] {
             let resumed = format!("{}{original}", crate::resume::RESUME_NOTICE);
-            assert_eq!(role_of(&resumed), role_of(original));
+            assert_eq!(role_of(&resumed, false), role_of(original, false));
         }
     }
 

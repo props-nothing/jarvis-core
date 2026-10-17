@@ -487,6 +487,7 @@ pub async fn run_gate(daemon: &Path, client: &Path) -> String {
     );
 
     let stderr = first.kill_and_drain();
+    let family = seed_native_family_boundary(&root).await;
 
     // The restart both accounts for the interrupted runs and serves new ones, so `executor_model` is
     // set for this start. Setting it between starts is itself meaningful: the executor is resolved
@@ -500,9 +501,152 @@ pub async fn run_gate(daemon: &Path, client: &Path) -> String {
     assert_the_recovery_is_logged(&root, &abandoned);
     assert_a_run_streams_to_a_terminal_state(&run_client).await;
     assert_the_cli_can_ask(client, &root);
+    assert_native_family_after_restart(&run_client, client, &root, &family).await;
 
     let restarted_stderr = second.kill_and_drain();
     format!("{stderr}\n{restarted_stderr}")
+}
+
+/// Seeds a persisted native delegation boundary using the production storage API.
+/// The rest of the gate exercises the real daemon, HTTP read model and CLI Stop.
+async fn seed_native_family_boundary(root: &TempRoot) -> (String, String, String) {
+    let database = jarvis_storage::SqliteDatabase::open(
+        &root
+            .paths()
+            .data()
+            .join(jarvis_storage::DEFAULT_DATABASE_FILENAME),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("open family fixture: {error}"));
+    let parent = seed_family_run(&database, None).await;
+    let active = seed_family_run(&database, Some(&parent)).await;
+    let parked = seed_family_run(&database, Some(&parent)).await;
+    advance_family_fixture(&database, &parked, true).await;
+    advance_family_fixture(&database, &parent, false).await;
+    // Exact parent IDs must remain usable beyond the CLI's fifty-run search page.
+    for _ in 0..51 {
+        let later = seed_family_run(&database, None).await;
+        advance_family_fixture(&database, &later, false).await;
+    }
+    database.close().await;
+    (parent, active, parked)
+}
+
+async fn seed_family_run(
+    database: &jarvis_storage::SqliteDatabase,
+    parent: Option<&str>,
+) -> String {
+    let identity = jarvis_storage::load_local_identity(database)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut input = jarvis_storage::StartRunInput::new(
+        jarvis_core::SessionId::new().to_string(),
+        jarvis_core::RunId::new().to_string(),
+        jarvis_core::RequestId::new().to_string(),
+        identity.workspace_id(),
+        identity.user_id(),
+        "native lineage process fixture",
+        jarvis_storage::API_SESSION_CHANNEL,
+        jarvis_core::CorrelationId::new(),
+        jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    if let Some(parent) = parent {
+        input = input
+            .with_admission_limits(
+                jarvis_storage::RunAdmissionLimits::new(parent, 4, 16)
+                    .unwrap_or_else(|error| panic!("{error}")),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+    jarvis_storage::start_run(database, &input)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"))
+        .run_id()
+        .to_owned()
+}
+
+async fn advance_family_fixture(database: &jarvis_storage::SqliteDatabase, id: &str, parked: bool) {
+    use jarvis_core::RunState;
+    let path = if parked {
+        vec![
+            RunState::ContextBuilding,
+            RunState::Planning,
+            RunState::AwaitingApproval,
+        ]
+    } else {
+        vec![
+            RunState::ContextBuilding,
+            RunState::Planning,
+            RunState::Executing,
+            RunState::Observing,
+            RunState::Responding,
+            RunState::Completed,
+        ]
+    };
+    for next in path {
+        let run = jarvis_storage::find_run(database, id)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        let transition = jarvis_core::RunTransition::new(next, next.required_outcome(), None)
+            .unwrap_or_else(|error| panic!("{error}"));
+        jarvis_storage::transition_run(
+            database,
+            id,
+            run.expectation(),
+            &transition,
+            jarvis_core::UtcTimestamp::now(&jarvis_core::SystemClock),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+async fn assert_native_family_after_restart(
+    api: &RunClient,
+    cli: &Path,
+    root: &TempRoot,
+    family: &(String, String, String),
+) {
+    let (parent, active, parked) = family;
+    let active_reply = api.read_run(active).await;
+    assert_eq!(active_reply["state"], "failed");
+    assert_eq!(
+        active_reply["error_code"],
+        jarvis_storage::INTERRUPTED_ERROR_CODE
+    );
+    assert_eq!(active_reply["parent_run_id"], parent.as_str());
+    assert_eq!(active_reply["is_delegated"], true);
+    let parked_reply = api.read_run(parked).await;
+    assert_eq!(parked_reply["state"], "awaiting_approval");
+    assert_eq!(parked_reply["parent_run_id"], parent.as_str());
+    assert_eq!(parked_reply["is_delegated"], true);
+    let output = Command::new(cli)
+        .args(["cancel", parent, "--root"])
+        .arg(&root.0)
+        .output()
+        .unwrap_or_else(|error| panic!("run parent Stop: {error}"));
+    assert!(
+        output.status.success(),
+        "parent Stop: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(api.read_run(parked).await["state"], "cancelled");
+    assert_eq!(
+        api.read_run(parent).await["state"],
+        "completed",
+        "Stop preserves a parent's actual outcome"
+    );
+    assert_eq!(
+        api.read_run(active).await,
+        active_reply,
+        "completed child history stays immutable"
+    );
+    assert_eq!(
+        api.read_stream(parked).await.last().map(String::as_str),
+        Some("run_cancelled")
+    );
 }
 
 #[tokio::test]

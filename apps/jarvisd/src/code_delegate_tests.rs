@@ -5,6 +5,7 @@ use std::process::Command;
 use jarvis_core::{FENCE_CLOSE, FENCE_OPEN};
 
 use super::*;
+use jarvis_tools::{ApprovalPolicy, ToolEffect};
 
 struct Scratch(PathBuf);
 

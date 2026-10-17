@@ -6,6 +6,114 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
+## Completed acceptance slice: consistent delegation policy (2026-10-17)
+
+Owner-selected `P7-010`: declare native/coding delegation consistently while
+preserving their different execution authority and the owner's approval controls.
+
+- [x] Add the canonical delegation effect and shared native/host contracts; use them for native delegation, coding launch aliases and continuation.
+- [x] Keep host execution at risk 3, ordinary native admission at risk 1, per-tool trust, scope/denial/ceiling checks and no blind non-idempotent retries.
+- [x] Withhold both management families from native children and enforce stored role on direct pipeline calls and approval resume.
+- [x] Complete workspace formatting, strict Clippy, rebuilt process gates, workspace tests and documentation/dependency checks; preserve staged changes.
+
+Design and upgrade behavior: [ADR-0235](docs/adr/0235-delegation-declares-work-and-its-execution-authority.md).
+The launch tools are version 1.1.0; the existing receipt binding requires an old
+pending 1.0.0 launch to be requested again after inspection and cancellation.
+Cross-runtime cancellation, duplicate-dispatch coordination and shutdown draining
+remain `P7-011`; the ACP bridge and enforceable sandbox remain `P7-003`.
+
+Windows evidence: **3,187 workspace tests passed**, zero failures and six existing
+opt-in tests ignored. The CLI/daemon binaries and examples were rebuilt and the
+process gates ran with `ACCEPTANCE_REQUIRE_BINARIES=1`. Focused tests cover all
+four launch definitions, effect serialization, no blind retries, per-ID trust,
+risk ceilings, child scope refusal, full-grant direct calls and an earlier decided
+approval. Removing the stored-child guard failed its negative test; removing
+host code execution let trust bypass a risk-2 ceiling and failed its negative
+test. Both guards were restored before final checks.
+
+Formatting, strict all-target/all-feature Clippy, six documentation tests,
+documentation links and advisory/dependency/license checks passed. Logs and
+falsification evidence are retained under `artifacts/p7-010/`. The staged HUD
+patch has the same before/after SHA-256. No fresh macOS/Linux CI or live-provider
+acceptance is claimed; no external protocol or provider call changed.
+
+## Completed acceptance slice: durable native parent/child tasks (2026-10-17)
+
+Owner-selected `P7-009`: replace objective-based identity with immutable stored
+lineage, define restart behavior and propagate explicit parent Stop. Preserve
+unrelated staged HUD work and the completed coding acceptance evidence.
+
+- [x] Add migration 0030, conservative legacy-role preservation and atomic parent/capacity admission.
+- [x] Use stored lineage for permissions, model routing and discovery; expose parent IDs in run replies, agent results and CLI listings.
+- [x] Propagate parent cancellation to unfinished children and held approvals, enforce cancellation at tool submission, and preserve restart identity without automatic family replay.
+- [x] Pass focused migration/lifecycle/falsification tests, workspace formatting, strict Clippy, workspace tests and documentation checks; record evidence and preserve staged changes.
+
+Design and operator semantics: [ADR-0234](docs/adr/0234-native-subagents-have-durable-lineage-and-parent-stop.md)
+and [native sub-agents](docs/user/sub-agents.md). Native/coding policy alignment
+is delivered in `P7-010` above; broader coordination and shutdown draining remain `P7-011`.
+
+Windows evidence: **3,179 workspace tests passed**, zero failures and six existing
+opt-in tests ignored, with rebuilt CLI/daemon binaries required by the process
+gates. The Phase 2 gate now reopens a native family, reads lineage through HTTP
+and uses the real CLI to stop a completed parent older than the recent-run page.
+Its parked child stops while completed history remains unchanged. The Phase 3
+gate preserves explicitly approved direct-call recovery after an interruption.
+The cancellation gate therefore checks cancellation intent, rather than refusing
+every terminal owning run.
+
+Removing parent validation allowed forbidden nested delegation and failed its
+negative test; removing the final cancellation predicate allowed a stopped call
+to advance and failed its negative test. Both guards were restored. The final
+storage suite passed **374 tests**, and the shutdown regression passed after its
+fixture was upgraded from a text marker to a real stored child. Formatting,
+strict all-target/all-feature Clippy, six documentation tests, the 368-file
+documentation check, and advisory/dependency/license checks passed. Logs and
+the original failed attempts are retained under `artifacts/p7-009/`.
+
+The owner's staged HUD patch is byte-for-byte unchanged. The new tests run in the
+existing native CI suites and process gates; no new hosted CI, macOS or Linux
+result is claimed. Legacy children keep their restricted role with no invented
+parent and can be stopped individually. External coding jobs retain their own
+Stop controls.
+
+## Completed acceptance slice: complete coding website delivery (2026-10-17)
+
+Continue the next coding acceptance gate under `P7-004`/`P7-008`. Use a disposable
+profile and a real signed-in agent; preserve unrelated staged HUD work. Structured
+parent/child records (`P7-009`) remain the following architecture slice.
+
+- [x] Add an explicitly enabled [real website acceptance harness](docs/quality/coding-website-acceptance.md) through actual JARVIS denial/approval, durable coding jobs and independent checks. Require a pinned browser verifier before account work.
+- [x] Verify a complete responsive website with desktop/mobile-emulated interactions, reload persistence, managed preview cleanup and unchanged unrelated files; retain screenshots and failed attempts. Fresh sign-in, physical devices, notification reception and other native platforms/providers remain separate.
+- [x] Pass harness refusal controls, documentation checks, workspace formatting, strict Clippy and workspace tests; preserve exact evidence and the owner's staged changes.
+
+Windows evidence: pinned Codex ACP 2.2.2 built the disposable Harbor task board.
+The first run reached the harness's explicit ten-minute deadline while reviewing
+the site; JARVIS retained `timed_out`/unverified and skipped independent checks.
+A fresh approved continuation used the existing files and a new task ID, completed,
+and passed JARVIS's independent check. The original failed record remains unchanged.
+Both 1440×1000 desktop and 390×844 mobile-emulated Chromium contexts passed add,
+completion, filters, whitespace rejection, literal HTML-looking input, reload
+persistence, overflow and browser-error checks. Managed preview Stop was confirmed
+by terminal state and a closed port; the daemon exited successfully and sentinel/
+verifier hashes stayed unchanged. Visual review confirmed the responsive layouts.
+An offscreen fixed skip link appeared in a scrolled full-page mobile capture;
+capturing from the top removes that screenshot artifact, with before/after viewport
+evidence retained. This is a completed journey with explicit continuation, not an
+uninterrupted ten-minute delivery claim.
+
+The harness initially expected HTTP 403 when resuming a denied call. The real
+gateway correctly returned non-retryable HTTP 409 with its existing approval
+refusal; the assertion now requires that exact response and unchanged job IDs.
+That failed harness attempt and the original timed-out run remain under
+`artifacts/reviews/coding-website/run-CnJtlK/`; passing continuation evidence and
+screenshots are in `continuation-uO3KmW/`. Five offline controls cover explicit
+live opt-in, verifier version, profile ownership and a real symlink/junction escape.
+Formatting, strict all-target/all-feature Clippy and **3,170 workspace tests**
+passed (zero failures, six existing opt-in tests ignored); documentation, workflow
+and dependency checks passed. Docker was unavailable. The staged HUD patch is
+byte-for-byte unchanged. No new native macOS/Linux or hosted CI result is claimed;
+the new offline guards are wired into CI.
+
 ## Completed acceptance slice: release verification and coding lifecycle (2026-10-17)
 
 <a id="current-acceptance-slice-release-verification-and-coding-lifecycle-2026-10-16"></a>
@@ -129,7 +237,7 @@ The current local product has a Rust daemon/CLI, a browser console, Telegram, Go
 
 <a id="owner-requested-coding-delivery-2026-10-15"></a>
 
-Coding uses the first Settings-permitted folder **in place** by default; Git/worktrees are opt-in, automatic commits are absent, and no total deadline is imposed unless requested. Durable queued jobs, explicit fresh continuation, complete skill bundles, independent checks and managed previews are built. Ordinary/background Codex runs, a real dependency-install/check smoke and real Windows Codex cancellation are recorded. Complete owner website delivery, fresh sign-in, other-provider/platform cancellation and a scoped agent-to-JARVIS integration bridge remain open. The current slice records daemon/native lifecycle acceptance separately. See [coding guide](docs/user/code-agents.md), [ADR-0222](docs/adr/0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md), [ADR-0224](docs/adr/0224-coding-waits-and-verification-preserve-real-task-outcomes.md) and [repair evidence](docs/history/todo-owner-evidence-through-2026-10-16.md#owner-requested-delegation-repair-2026-10-16).
+Coding uses the first Settings-permitted folder **in place** by default; Git/worktrees are opt-in, automatic commits are absent, and no total deadline is imposed unless requested. Durable queued jobs, explicit fresh continuation, complete skill bundles, independent checks and managed previews are built. Ordinary/background Codex runs, a real dependency-install/check smoke, real Windows Codex cancellation and a complete disposable website with explicit continuation are recorded. Fresh sign-in, other-provider/platform acceptance and a scoped agent-to-JARVIS integration bridge remain open. Daemon/native lifecycle acceptance is recorded separately. See [coding guide](docs/user/code-agents.md), [ADR-0222](docs/adr/0222-coding-delivery-uses-owner-workspaces-and-durable-evidence.md), [ADR-0224](docs/adr/0224-coding-waits-and-verification-preserve-real-task-outcomes.md) and [repair evidence](docs/history/todo-owner-evidence-through-2026-10-16.md#owner-requested-delegation-repair-2026-10-16).
 
 <a id="owner-selected-memory-discovery-2026-10-15"></a>
 
@@ -164,7 +272,7 @@ These are residual scopes, not an instruction to rebuild delivered features. His
 - [~] `P5-009` Google write/draft tools are delivered. For each new MCP/provider write, prove its policy/idempotency/outcome boundary and real approved/denied behavior rather than adding a bespoke connector by default.
 - [ ] `P5-010` Complete provider-seam tests and selected live checks for expiry, revoked scope, pagination, throttling, reauthorization and redacted diagnostics.
 - [~] `P6-007` Quiet hours and notifications exist. Add per-day proactive-message budgets, deduplication, per-kind/project controls and an owner-facing disable action when required.
-- [ ] `P6-010` Durable structured parent/child identity, restart semantics and linked cancellation remain with `P7-009`–`P7-011`. Atomic admission alone does not complete delegation durability.
+- [~] `P6-010` Native structured parent/child identity, explicit restart behavior and linked cancellation are delivered in `P7-009` / ADR-0234. Shared native/coding policy is delivered in `P7-010` / ADR-0235; broader delegation coordination/acceptance remains `P7-011`.
 - [~] `P6-012` Mail, file and webhook triggers exist; preserve their deduplication and ordinary-run policy. Atomic webhook budget reservations fix concurrent admission, not the claim-to-run crash-loss window. Reliable restart delivery remains a separate demand-gated handoff/outbox slice under the Phase 6 target; external-service acceptance remains `P11-017`.
 
 See [P5–P8 historical evidence](docs/history/todo-p5-p8-evidence-through-2026-10-16.md). Time-zone schedules and model-selected approved skills are delivered; the multi-step workflow engine remains parked.
@@ -174,13 +282,13 @@ See [P5–P8 historical evidence](docs/history/todo-p5-p8-evidence-through-2026-
 - [~] `P7-001` ACP v1 client, handshake and bounded task activity are built, with recorded real Codex tasks. Complete the current activity/event and real-agent acceptance rather than implementing a private JARVIS runtime protocol.
 - [~] `P7-002` Sanitized environment, operation/output bounds and owned descendant cleanup exist. Scripted lifecycle gates pass on Windows, macOS and Linux; real Windows Codex cancellation is recorded. Remaining supervisor work includes abrupt-crash/orphan recovery, stderr redaction review, backoff and real-agent evidence on other native platforms. No default total deadline or OS confinement is claimed.
 - [ ] `P7-003` Task approval and cooperative ACP permissions exist. A scoped JARVIS tool bridge, interactive policy re-entry where needed and an enforceable optional sandbox remain; a worktree is not a security boundary.
-- [~] `P7-004` In-place durable coding, optional worktrees, complete skills, independent checks and managed previews are built (ADR-0222/0224). Scripted native cancellation/shutdown/restart/continuation and real Windows Codex cancellation are verified in the lifecycle slice. Verify fresh sign-in, other-provider/platform cancellation, full desktop/mobile website behavior, notification delivery and retained-work cleanup.
+- [~] `P7-004` In-place durable coding, optional worktrees, complete skills, independent checks and managed previews are built (ADR-0222/0224). Scripted native lifecycle, real Windows Codex cancellation, and a complete Windows Codex website with desktop/mobile-emulated behavior, explicit continuation and preview cleanup are verified. Fresh sign-in, other-provider/platform acceptance, notification reception and physical-device checks remain.
 - [~] `P7-008` Adversarial Stop/timeout, agent error/exit, authentication retry, late permissions, owned descendant cleanup and setup-refusal tests are implemented, with cancellation and ownership falsification. Complete capability-skew, abrupt-crash and broader audit coverage for the supported ACP surface; native tools are not all intercepted.
-- [ ] `P7-009` Replace objective-text parent markers with structured persisted parent/child identity and lifecycle semantics, including restart and parent cancellation.
-- [ ] `P7-010` Define delegation's effect/policy semantics consistently for native and coding jobs.
-- [ ] `P7-011` Prove depth and concurrency limits, duplicate-delivery behavior, child isolation, audit and cancellation propagation. The completed ADR-0228 admission repair closes only its documented concurrency/history defect. ADR-0232 protects the stop/restart preflight; coordinated draining that prevents new work after that snapshot remains separate lifecycle work.
+- [x] `P7-009` Replaced native objective-text identity with immutable parent/child records, conservative legacy migration, restart handling and parent Stop. Run/agent replies and CLI listings expose lineage; the completed acceptance slice above and [ADR-0234](docs/adr/0234-native-subagents-have-durable-lineage-and-parent-stop.md) record evidence and limits.
+- [x] `P7-010` Shared delegation effects and native/host execution contracts, per-tool trust and risk floors, and stored-child refusal on direct/approval-resumed launches are implemented. The completed acceptance slice above and [ADR-0235](docs/adr/0235-delegation-declares-work-and-its-execution-authority.md) record verification and upgrade behavior.
+- [ ] `P7-011` Complete broader depth/concurrency, duplicate-delivery, isolation, audit and cancellation coordination acceptance. ADR-0228 covers atomic native capacity; ADR-0234 adds stored one-level lineage, parent-admission falsification and native parent Stop/restart checks. ADR-0232 protects the stop/restart preflight; coordinated draining that prevents new work after that snapshot remains separate lifecycle work.
 
-Next coding acceptance: complete one disposable real-agent website task through actual approval, independent checks, a managed loopback preview and desktop/mobile browser interactions; stop the preview and prove unrelated files remain unchanged. Record fresh sign-in and notification acceptance separately. The next architecture slice is `P7-009` structured parent/child identity with restart and parent-stop semantics; shutdown admission/draining remains `P7-011`.
+The disposable Windows Codex website gate above is verified through actual approval, independent checks, a managed loopback preview, desktop/mobile-emulated interactions and explicit cleanup. Fresh sign-in, notification reception and other-provider/platform acceptance remain separate. Native parent/child identity, restart and parent Stop are implemented in the acceptance slice above. Native/coding delegation policy alignment is complete in `P7-010`; broader coordination and shutdown admission/draining remain `P7-011`.
 
 ### Voice and channels (P8)
 

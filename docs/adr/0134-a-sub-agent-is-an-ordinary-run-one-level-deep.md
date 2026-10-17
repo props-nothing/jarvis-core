@@ -5,6 +5,8 @@ Date: 2026-10-03
 
 **Amended by:** [ADR-0228](0228-native-subagent-admission-counts-and-starts-in-one-transaction.md) makes admission count/start atomic across the relevant workspace history and prioritizes unfinished children in listing. The limits apply at admission; approval resume is unchanged, and structured parent linkage/cancellation remain separate work.
 
+**Later amendment:** [ADR-0234](0234-native-subagents-have-durable-lineage-and-parent-stop.md) replaces native child text identity with persisted lineage, defines parent Stop and restart behavior, and uses the stored role for child model routing. The original decision and evidence below remain historical.
+
 ## Context
 
 One agent in one conversation is the ceiling of a chat window. The product's promise is an assistant that can hand
@@ -39,3 +41,7 @@ read any run's answer.
 - Not done: the parent does not learn automatically when a parked sub-agent is later approved (it can ask again with
   `result`); no per-sub-agent tool restriction (a sub-agent has the parent's tools minus delegation); sub-agents share
   the parent's model.
+
+## Policy amendment
+
+[ADR-0235](0235-delegation-declares-work-and-its-execution-authority.md) defines the shared delegation effect and execution boundary, and withholds both native and coding management scopes from native children. Broader coordination remains P7-011.

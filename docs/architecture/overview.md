@@ -136,6 +136,16 @@ sequenceDiagram
 
 Native model requests receive tool descriptions and scoped handles, not JARVIS credential values. JARVIS-owned tool requests return through application policy before execution. External ACP agents use their own authentication and native tools under task approval; these are host processes, and a scoped JARVIS tool bridge remains separate work.
 
+Native sub-agents carry immutable parent IDs and stored roles. Explicit parent
+Stop reaches unfinished children, and restart recovery preserves lineage without
+automatically replaying a family. See [ADR-0234](../adr/0234-native-subagents-have-durable-lineage-and-parent-stop.md)
+and [native sub-agents](../user/sub-agents.md).
+
+Native and coding launches share an explicit delegation effect. Native children
+re-enter JARVIS tool policy; coding jobs additionally retain host-execution risk
+and task approval. Native children cannot launch another native or coding agent.
+See [ADR-0235](../adr/0235-delegation-declares-work-and-its-execution-authority.md).
+
 The sequence above describes native runs. Direct external MCP tool calls enforce policy but currently use in-memory pending approvals and do not persist the native run tool-call/outcome ledger; calls that delegate a JARVIS run do create that run's durable history. Completing direct-call accountability remains acceptance work before broader remote effects.
 
 ## Proactive Event Flow

@@ -53,6 +53,8 @@ pub(crate) fn objective_preview(objective: &str) -> String {
 /// actually given.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredRun {
+    parent_run_id: Option<String>,
+    is_delegated: bool,
     id: String,
     session_id: String,
     workspace_id: String,
@@ -67,6 +69,18 @@ pub struct StoredRun {
 }
 
 impl StoredRun {
+    /// Returns the immutable parent. Migrated legacy sub-agents have no known parent.
+    #[must_use]
+    pub fn parent_run_id(&self) -> Option<&str> {
+        self.parent_run_id.as_deref()
+    }
+
+    /// Whether durable lineage restricts this run to the sub-agent role.
+    #[must_use]
+    pub const fn is_delegated(&self) -> bool {
+        self.is_delegated
+    }
+
     /// Returns the run identifier.
     #[must_use]
     pub fn id(&self) -> &str {
@@ -407,7 +421,8 @@ pub struct InterruptedRun {
 ///
 /// A run qualifies when it failed with the restart code, started at or after `since`, and is the newest run of its
 /// conversation: a person who already answered after the interruption has moved on. A run whose objective starts with
-/// one of `skip_prefixes` (an earlier continuation, or a sub-agent whose parent is gone) is never offered, so a daemon
+/// one of `skip_prefixes` (an earlier continuation) is never offered. Durable children and parents
+/// with recorded children are also excluded to avoid replaying delegated work, so a daemon
 /// that keeps dying cannot loop. At most `limit` are returned, in the order given.
 ///
 /// # Errors
@@ -428,6 +443,8 @@ pub async fn continuable_interrupted_runs(
         let row = sqlx::query(
             "SELECT id, session_id, COALESCE(full_objective, objective) AS objective FROM agent_runs AS run \
              WHERE id = ?1 AND state = 'failed' AND error_code = ?2 AND started_at >= ?3 \
+               AND delegation_kind = 'none' \
+               AND NOT EXISTS (SELECT 1 FROM agent_runs AS child WHERE child.parent_run_id = run.id) \
                AND NOT EXISTS (SELECT 1 FROM agent_runs AS later \
                                WHERE later.session_id = run.session_id AND later.id > run.id)",
         )
@@ -478,7 +495,7 @@ pub async fn continuable_interrupted_runs(
 /// [`DatabaseError::Sqlite`] when the read fails.
 pub async fn find_run(database: &SqliteDatabase, id: &str) -> Result<StoredRun, DatabaseError> {
     let row = sqlx::query(
-        "SELECT id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
+        "SELECT parent_run_id, delegation_kind <> 'none' AS is_delegated, id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
                 cancellation_requested_at, terminal_outcome, completed_at, error_code, \
                 started_at \
          FROM agent_runs WHERE id = ?1",
@@ -534,7 +551,7 @@ pub async fn read_recent_runs(
     limit: u32,
 ) -> Result<Vec<StoredRun>, DatabaseError> {
     let rows = sqlx::query(
-        "SELECT id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
+        "SELECT parent_run_id, delegation_kind <> 'none' AS is_delegated, id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
                 cancellation_requested_at, terminal_outcome, completed_at, error_code, \
                 started_at \
          FROM agent_runs WHERE workspace_id = ?1 ORDER BY id DESC LIMIT ?2",
@@ -555,26 +572,25 @@ pub async fn read_recent_runs(
 /// Filtering happens before the result limit so unrelated recent work cannot hide a child.
 ///
 /// # Errors
-/// Returns a validation error for an empty marker/invalid page or a storage/decode error.
-pub async fn read_runs_by_objective_prefix(
+/// Returns a validation error for an invalid page or a storage/decode error.
+pub async fn read_delegated_runs(
     database: &SqliteDatabase,
     workspace_id: &str,
-    prefix: &str,
     limit: u32,
 ) -> Result<Vec<StoredRun>, DatabaseError> {
-    if prefix.is_empty() || limit == 0 || limit > 100 {
+    if limit == 0 || limit > 100 {
         return Err(DatabaseError::InvalidRunRequest {
             field: "run class page",
         });
     }
     let rows = sqlx::query(
-        "SELECT id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
+        "SELECT parent_run_id, delegation_kind <> 'none' AS is_delegated, id, session_id, workspace_id, COALESCE(full_objective, objective) AS objective, state, version, \
                 cancellation_requested_at, terminal_outcome, completed_at, error_code, started_at \
          FROM agent_runs WHERE workspace_id = ?1 \
-           AND substr(COALESCE(full_objective, objective), 1, length(?2)) = ?2 \
-         ORDER BY (terminal_outcome IS NOT NULL), id DESC LIMIT ?3",
+           AND delegation_kind <> 'none' \
+         ORDER BY (terminal_outcome IS NOT NULL), id DESC LIMIT ?2",
     )
-    .bind(workspace_id).bind(prefix).bind(i64::from(limit))
+    .bind(workspace_id).bind(i64::from(limit))
     .fetch_all(database.pool()).await
     .map_err(|source| DatabaseError::Sqlite { operation: "read a class of runs", source })?;
     rows.iter().map(decode_run).collect()
@@ -832,7 +848,8 @@ pub async fn settle_run(
     find_run(database, &settlement.run_id).await
 }
 
-/// Records that a client requested cancellation without settling the run yet.
+/// Records cancellation of a run and its unfinished native children.
+/// Child approvals are withdrawn atomically; parked children are then settled without a driver.
 ///
 /// This is deliberately not a transition. Cancellation is a *request*; the run settles as
 /// `cancelled` only once the in-flight work has actually stopped, which is what
@@ -854,9 +871,8 @@ pub async fn settle_run(
 ///    intermittently, because the window between reading the version and writing it is where the
 ///    executor's next write lands.
 ///
-/// The guard that *is* meaningful is kept: a **settled** run refuses a cancellation request, because
-/// there is no work left to stop. That is a fact about the run rather than about who is asking, so it
-/// cannot go stale.
+/// A fully settled family refuses cancellation. A terminal parent with unfinished children can
+/// still stop them without rewriting its own outcome (ADR-0234).
 ///
 /// # Why the version is NOT advanced either (`P3-008j`)
 ///
@@ -891,50 +907,82 @@ pub async fn settle_run(
 /// # Errors
 ///
 /// Returns [`DatabaseError::RunNotFound`] when no run has that identifier,
-/// [`DatabaseError::RunTransitionRefused`] for an already-settled run, and
+/// [`DatabaseError::RunTransitionRefused`] for a fully settled family, and
 /// [`DatabaseError::Sqlite`] for any other persistence failure.
 pub async fn request_run_cancellation(
     database: &SqliteDatabase,
     id: &str,
     at: UtcTimestamp,
 ) -> Result<StoredRun, DatabaseError> {
-    let result = sqlx::query(
-        "UPDATE agent_runs \
-         SET cancellation_requested_at = COALESCE(cancellation_requested_at, ?2), \
-             updated_at = ?2 \
-         WHERE id = ?1 \
-           AND state NOT IN ('completed', 'cancelled', 'failed')",
+    let mut transaction = database
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|source| DatabaseError::Sqlite {
+            operation: "begin cancellation of a run family",
+            source,
+        })?;
+    let state: Option<String> = sqlx::query_scalar("SELECT state FROM agent_runs WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|source| DatabaseError::Sqlite {
+            operation: "read cancellation target",
+            source,
+        })?;
+    let state = state
+        .ok_or(DatabaseError::RunNotFound)?
+        .parse::<RunState>()
+        .map_err(|_| DatabaseError::StoredRunInvalid { field: "state" })?;
+    let targets: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM agent_runs WHERE (id = ?1 OR parent_run_id = ?1) \
+         AND state NOT IN ('completed', 'cancelled', 'failed')",
     )
     .bind(id)
-    .bind(at.to_string())
-    .execute(database.pool())
+    .fetch_all(&mut *transaction)
     .await
     .map_err(|source| DatabaseError::Sqlite {
-        operation: "request agent run cancellation",
+        operation: "read unfinished child runs",
         source,
     })?;
-
-    if result.rows_affected() == 0 {
-        // Either the run is absent or it has settled, and the two are different answers for a caller,
-        // so which one it is comes from reading rather than from guessing. A `RunNotFound` propagates
-        // from the read, which is where identity is actually known.
-        let current = find_run(database, id).await?;
-        if current.state().is_terminal() {
-            return Err(DatabaseError::RunTransitionRefused {
-                source: jarvis_core::RunTransitionError::TerminalStateImmutable {
-                    from: current.state(),
-                },
-            });
-        }
-        // A non-terminal state after a non-match is no longer reachable by a racing *write*, because
-        // this statement's predicate is exactly the condition the follow-up read evaluates — see the
-        // doc above on why the version is deliberately not advanced. It remains reachable by a racing
-        // **creation**: cancelling an identifier that does not exist yet, while another request creates
-        // it, leaves a live run that the statement above did not match. Reported rather than asserted
-        // away, because "impossible" is the claim that goes stale first.
-        return Err(DatabaseError::RunConflict);
+    if targets.is_empty() {
+        return Err(DatabaseError::RunTransitionRefused {
+            source: jarvis_core::RunTransitionError::TerminalStateImmutable { from: state },
+        });
     }
-
+    // A completed parent may still own background work. Its outcome stays immutable;
+    // Stop records intent on each unfinished child. New children cannot race past this lock.
+    sqlx::query(
+        "UPDATE agent_runs SET cancellation_requested_at = COALESCE(cancellation_requested_at, ?2), updated_at = ?2 \
+         WHERE (id = ?1 OR parent_run_id = ?1) AND state NOT IN ('completed', 'cancelled', 'failed')",
+    ).bind(id).bind(at.to_string()).execute(&mut *transaction).await
+        .map_err(|source| DatabaseError::Sqlite { operation: "request run family cancellation", source })?;
+    // Revoke held effects in the same transaction as intent. A concurrently released
+    // effect must win its submitted-state write before this transaction to run.
+    sqlx::query(
+        "UPDATE approvals SET state = CASE WHEN state = 'pending' THEN 'expired' ELSE state END, arguments_json = NULL \
+         WHERE state IN ('pending', 'approved') AND run_id IN \
+         (SELECT id FROM agent_runs WHERE (id = ?1 OR parent_run_id = ?1) AND cancellation_requested_at IS NOT NULL)",
+    ).bind(id).execute(&mut *transaction).await
+        .map_err(|source| DatabaseError::Sqlite { operation: "withdraw run family approvals", source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| DatabaseError::Sqlite {
+            operation: "commit run family cancellation",
+            source,
+        })?;
+    // Parked runs have no driver. If shutdown interrupts this loop, durable intent
+    // is completed by startup recovery. A resumed driver observes the same intent.
+    for target in targets {
+        let run = find_run(database, &target).await?;
+        if target != id && run.state() == RunState::AwaitingApproval {
+            match settle_parked_run_cancelled(database, &run, at).await {
+                Ok(_) | Err(DatabaseError::RunConflict) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
     find_run(database, id).await
 }
 
@@ -1059,6 +1107,18 @@ fn decode_run(row: &sqlx::sqlite::SqliteRow) -> Result<StoredRun, DatabaseError>
     };
 
     let run = StoredRun {
+        parent_run_id: row
+            .try_get("parent_run_id")
+            .map_err(|source| DatabaseError::Sqlite {
+                operation: "decode a run parent",
+                source,
+            })?,
+        is_delegated: row
+            .try_get("is_delegated")
+            .map_err(|source| DatabaseError::Sqlite {
+                operation: "decode a run role",
+                source,
+            })?,
         id: text_field(row, "id")?,
         session_id: text_field(row, "session_id")?,
         workspace_id: text_field(row, "workspace_id")?,
@@ -2502,6 +2562,83 @@ mod tests {
             );
         }
 
+        database.close().await;
+    }
+    #[tokio::test]
+    async fn lineage_migration_preserves_legacy_roles_without_inventing_parents() {
+        let directory = TestDirectory::new();
+        let path = directory.path().join(DEFAULT_DATABASE_FILENAME);
+        let pool = must(
+            sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    sqlx::sqlite::SqliteConnectOptions::new()
+                        .filename(&path)
+                        .create_if_missing(true)
+                        .foreign_keys(true),
+                )
+                .await,
+        );
+        let current = sqlx::migrate!("./migrations/sqlite");
+        let legacy = sqlx::migrate::Migrator::with_migrations(
+            current
+                .iter()
+                .filter(|migration| migration.version <= 29)
+                .cloned()
+                .collect(),
+        );
+        must(legacy.run(&pool).await);
+        seed_identity(&pool).await;
+        let notice = "You are a sub-agent working for JARVIS on one bounded task. Do only that task, use \
+the tools you are offered, and report the result briefly and factually. You cannot delegate further, and nobody is \
+available to answer questions, so make reasonable assumptions.\n\nTask: ";
+        let objective = format!("{notice}legacy task");
+        for (id, full) in [(RUN_A, None), (RUN_B, Some(objective.as_str()))] {
+            must(sqlx::query("INSERT INTO agent_runs (id, session_id, workspace_id, user_id, objective, full_objective, state, started_at, updated_at, correlation_id, version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'received', ?7, ?7, ?8, 1)")
+                .bind(id).bind(SESSION).bind(WORKSPACE).bind(USER).bind(&objective).bind(full)
+                .bind(at(0).to_string()).bind(CorrelationId::new().to_string()).execute(&pool).await);
+        }
+        pool.close().await;
+        let database = must(SqliteDatabase::open(&path).await);
+        assert!(database.pre_migration_backup().is_some());
+        for id in [RUN_A, RUN_B] {
+            let run = must(find_run(&database, id).await);
+            assert!(run.is_delegated());
+            assert!(run.parent_run_id().is_none());
+            assert_eq!(run.objective(), objective);
+        }
+        let root_id = jarvis_core::RunId::new().to_string();
+        let ordinary = must(
+            create_run(
+                &database,
+                &must(NewRun::new(
+                    &root_id,
+                    SESSION,
+                    WORKSPACE,
+                    USER,
+                    &objective,
+                    CorrelationId::new(),
+                    at(1),
+                )),
+            )
+            .await,
+        );
+        assert!(
+            !ordinary.is_delegated(),
+            "new objective text cannot confer the legacy role"
+        );
+        let recovered = must(recover_interrupted_runs(&database, at(2)).await);
+        let continuable =
+            must(continuable_interrupted_runs(&database, &recovered, at(0), &[], 10).await);
+        assert!(continuable.iter().all(|run| run.run_id == root_id));
+        assert!(
+            must(
+                sqlx::query("PRAGMA foreign_key_check")
+                    .fetch_all(database.pool())
+                    .await
+            )
+            .is_empty()
+        );
         database.close().await;
     }
 }

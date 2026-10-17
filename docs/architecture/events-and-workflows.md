@@ -2,6 +2,18 @@
 
 > **Target contract with a smaller current implementation:** schedules and mail/file/secret-path webhook triggers start ordinary durable runs; quiet hours are implemented. The generic event envelope, outbox/inbox, multi-step workflow engine and compensation machinery below remain parked under ADR-0167 until a named process requires them. Current trigger authentication is documented in [the user guide](../user/triggers.md).
 
+## Current native delegation
+
+Native sub-agents are ordinary runs with immutable parent IDs and a persisted
+role. Admission validates the parent and reserves workspace capacity in the same
+transaction as child creation. Explicit parent cancellation records intent on
+unfinished children and withdraws their held approvals; parent completion alone
+leaves background work running. Restart recovery retains lineage and never
+automatically continues a child or a parent that already delegated work.
+Legacy children retain their restricted role with an unknown parent. See
+[ADR-0234](../adr/0234-native-subagents-have-durable-lineage-and-parent-stop.md)
+and the [operator guide](../user/sub-agents.md).
+
 ## Event Envelope
 
 Every admitted event has:

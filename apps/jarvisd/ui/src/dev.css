@@ -1,0 +1,5 @@
+/* Development playground layout only; the product styles come from ../../src/hud/hud.css. */
+body { overflow: auto; }
+#playground { position: relative; z-index: 1; display: flex; justify-content: center; padding: 6vh 16px; }
+.playground { max-height: none; }
+.playground .ops-tabs { margin-top: 18px; }

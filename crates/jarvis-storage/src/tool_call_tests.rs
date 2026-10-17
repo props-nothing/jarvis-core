@@ -167,6 +167,54 @@ fn call(id: &str, key: &str) -> NewToolCall {
     ))
 }
 
+#[tokio::test]
+async fn cancellation_blocks_authorization_and_submission_but_keeps_in_flight_reports() {
+    for stop_after in [
+        ToolOutcome::Requested,
+        ToolOutcome::Authorized,
+        ToolOutcome::Submitted,
+    ] {
+        let (_directory, database) = seeded_database().await;
+        live_run(&database).await;
+        must(admit_tool_call(&database, &call(CALL, &key_for(1))).await);
+        if stop_after != ToolOutcome::Requested {
+            must(advance_tool_call(&database, CALL, ToolOutcome::Authorized, at(1)).await);
+        }
+        if stop_after == ToolOutcome::Submitted {
+            must(advance_tool_call(&database, CALL, ToolOutcome::Submitted, at(1)).await);
+        }
+        must(crate::request_run_cancellation(&database, RUN, at(2)).await);
+        if stop_after == ToolOutcome::Submitted {
+            let result = must(
+                record_tool_outcome(
+                    &database,
+                    CALL,
+                    &must(ToolOutcomeRecord::confirmed("already sent")),
+                    None,
+                    at(3),
+                )
+                .await,
+            );
+            assert_eq!(result.outcome(), ToolOutcome::Confirmed);
+        } else {
+            let next = if stop_after == ToolOutcome::Requested {
+                ToolOutcome::Authorized
+            } else {
+                ToolOutcome::Submitted
+            };
+            assert!(matches!(
+                advance_tool_call(&database, CALL, next, at(3)).await,
+                Err(DatabaseError::ToolCallConflict)
+            ));
+            assert_eq!(
+                must(find_tool_call(&database, CALL).await).outcome(),
+                stop_after
+            );
+        }
+        database.close().await;
+    }
+}
+
 /// A call round-trips: it is admitted, read back, and every field agrees.
 #[tokio::test]
 async fn a_call_round_trips() {

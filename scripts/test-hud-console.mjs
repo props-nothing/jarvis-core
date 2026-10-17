@@ -243,7 +243,7 @@ test('quiet atmosphere removes the animated segments and orbiting markers', () =
   assert.equal(arcs.length, 1);
   arcs.length = 0;
   context.drawPresenceOrbit(100, 100, 80, 10, 1, false);
-  assert.equal(arcs.length, 21);
+  assert.equal(arcs.length, 28);
 });
 test('cinematic orbit positions stay fixed with reduced motion', () => {
   const { context, arcs } = orbitContext(true);

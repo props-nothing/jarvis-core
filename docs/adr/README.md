@@ -250,6 +250,8 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0231](0231-webhook-deliveries-reserve-budget-with-their-deduplication-key.md) | Webhook deliveries reserve budget with their deduplication key | Accepted |
 | [0232](0232-stop-and-restart-check-background-work-and-fail-closed.md) | Stop and restart check background work and fail closed | Accepted |
 | [0233](0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) | Coding cancellation is final and process ownership outlives the root | Accepted |
+| [0234](0234-native-subagents-have-durable-lineage-and-parent-stop.md) | Native subagents have durable lineage and parent Stop | Accepted |
+| [0235](0235-delegation-declares-work-and-its-execution-authority.md) | Delegation declares work and its execution authority | Accepted |
 
 ## Historical identifier aliases
 

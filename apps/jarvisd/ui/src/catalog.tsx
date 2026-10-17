@@ -1,10 +1,14 @@
 import { createRoot } from "react-dom/client";
 
+/** How a status reads at a glance: set up, needs the owner, or neutral information. Derived from saved settings only. */
+export type Tone = "ok" | "todo" | "info";
+
 export interface Integration {
   id: string;
   name: string;
   description: string;
   status: string;
+  tone?: Tone;
 }
 
 // Small product-specific symbols keep this catalog self-contained and offline.
@@ -17,14 +21,24 @@ const symbols: Record<string, string> = {
   programs: "M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"
 };
 
+function count(entries: readonly Integration[], tone: Tone): number {
+  return entries.filter(entry => (entry.tone || "info") === tone).length;
+}
+
 export function Catalog({ entries, navigate }: { entries: readonly Integration[]; navigate: (id: string) => void }) {
+  const ready = count(entries, "ok"), waiting = count(entries, "todo");
   return <section aria-label="Apps and tools catalog">
+    <ul className="catalog-summary" aria-label="Setup summary">
+      <li className="ok"><b>{ready}</b>configured</li>
+      <li className="todo"><b>{waiting}</b>need setup</li>
+      <li><b>{entries.length}</b>available</li>
+    </ul>
     <ul className="integration-list">
       {entries.map(entry => <li className="integration-item" key={entry.id}>
         <button className="integration-link" type="button" aria-label={`Open ${entry.name}`} aria-describedby={`integration-${entry.id}-status`} onClick={() => navigate(entry.id)}>
           <span className="integration-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d={symbols[entry.id] || symbols.programs} /></svg></span>
           <span className="integration-copy"><span className="integration-name">{entry.name}</span><span className="integration-description">{entry.description}</span></span>
-          <span className="integration-status" id={`integration-${entry.id}-status`}>{entry.status}</span>
+          <span className="integration-status" id={`integration-${entry.id}-status`} data-tone={entry.tone || "info"} title={entry.status}>{entry.status}</span>
           <svg className="integration-chevron" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m9 5 7 7-7 7" /></svg>
         </button>
       </li>)}

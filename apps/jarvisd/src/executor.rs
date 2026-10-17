@@ -504,12 +504,13 @@ impl Executor {
         &self.model_id
     }
 
-    /// The model a run that began with `objective` is asked: the main model, or the one set for sub-agents or for scheduled and
-    /// trigger-started runs (`ADR-0196`).
+    /// Selects the model using durable child identity, then schedule/trigger framing.
     #[must_use]
-    pub fn model_id_for(&self, objective: &str) -> &ModelId {
-        self.routes
-            .model_for(crate::model_routing::role_of(objective), &self.model_id)
+    pub fn model_id_for(&self, objective: &str, is_delegated: bool) -> &ModelId {
+        self.routes.model_for(
+            crate::model_routing::role_of(objective, is_delegated),
+            &self.model_id,
+        )
     }
 }
 
@@ -1338,7 +1339,7 @@ fn tool_specs(
         .iter()
         // A sub-agent is offered no delegation tool, so delegation is one level deep (`ADR-0134`).
         .filter(|summary| {
-            !(sub_agent && summary.id.starts_with(crate::delegate::AGENT_TOOL_PREFIX))
+            !(sub_agent && crate::delegate::is_agent_management_tool(&summary.id))
         })
         .filter(|summary| {
             crate::tool_search::group_of(&summary.id).is_none_or(|group| !waiting.contains_key(&group))
@@ -2059,7 +2060,7 @@ async fn generate(
     }
     // The tool surface is re-derived from the registry on every call rather than carried in the
     // transcript, so the offered set is always the current one and there is one statement of it.
-    let sub_agent = crate::delegate::is_delegated_objective(run.objective());
+    let sub_agent = run.is_delegated();
     let specs = deps.tools.map_or_else(Vec::new, |tools| {
         tool_specs(tools, sub_agent, &state.messages)
     });
@@ -2572,15 +2573,11 @@ fn tool_actor_for(
     let definitions = tools
         .definitions()
         .map_err(|error| format!("the daemon's tool surface could not be read: {error}"))?;
-    let sub_agent = crate::delegate::is_delegated_objective(run.objective());
+    let sub_agent = run.is_delegated();
     let definitions: Vec<_> = definitions
         .into_iter()
         .filter(|definition| {
-            !(sub_agent
-                && definition
-                    .id()
-                    .to_string()
-                    .starts_with(crate::delegate::AGENT_TOOL_PREFIX))
+            !(sub_agent && crate::delegate::is_agent_management_tool(&definition.id().to_string()))
         })
         .collect();
     Ok(crate::tool_actor::ToolActor::for_composed_tools(
@@ -3627,11 +3624,17 @@ mod tests {
         let delegated = format!("{}find it", crate::delegate::DELEGATED_NOTICE);
         let scheduled = format!("{}check it", crate::schedule_service::UNATTENDED_NOTICE);
         assert_eq!(
-            executor.model_id_for("what is on today").as_str(),
+            executor.model_id_for("what is on today", false).as_str(),
             "strong-model"
         );
-        assert_eq!(executor.model_id_for(&delegated).as_str(), "cheap-sub");
-        assert_eq!(executor.model_id_for(&scheduled).as_str(), "cheap-bg");
+        assert_eq!(
+            executor.model_id_for(&delegated, true).as_str(),
+            "cheap-sub"
+        );
+        assert_eq!(
+            executor.model_id_for(&scheduled, false).as_str(),
+            "cheap-bg"
+        );
 
         let unrouted = ModelProviderConfig::new(
             "http://127.0.0.1:11434/v1",
@@ -3640,8 +3643,14 @@ mod tests {
         );
         let plain = Executor::build(jarvis_storage::LIVE_PROVIDER_MODEL_NAME, Some(&unrouted))
             .unwrap_or_else(|error| panic!("the plain executor must build: {error}"));
-        assert_eq!(plain.model_id_for(&delegated).as_str(), "strong-model");
-        assert_eq!(plain.model_id_for(&scheduled).as_str(), "strong-model");
+        assert_eq!(
+            plain.model_id_for(&delegated, true).as_str(),
+            "strong-model"
+        );
+        assert_eq!(
+            plain.model_id_for(&scheduled, false).as_str(),
+            "strong-model"
+        );
 
         let bad = ModelProviderConfig::new("http://127.0.0.1:11434/v1", "m", "k")
             .with_routed_models(Some(String::new()), None);

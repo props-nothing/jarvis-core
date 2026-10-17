@@ -1,6 +1,6 @@
 # Coding delivery contracts
 
-Verified: 2026-10-16 UTC. Owner-requested coding workflow changes.
+Verified: 2026-10-17 UTC. Earlier coding workflow evidence retains its original date.
 
 ## Live delegation repair, 2026-10-16
 
@@ -54,6 +54,50 @@ separate Node import/behavior check successfully and verified the supplied
 package/check files remained unchanged. No global settings or credentials were
 changed. This verifies the tested npm installation path, not general website
 delivery or other runtime/platform configurations.
+
+## Disposable website acceptance refresh, 2026-10-17
+
+Before adding the opt-in acceptance harness, fetched the ACP index, v1 prompt-turn
+guide, updates page, and codex-acp v2.2.2 README listed above. The repository-local
+`llms.txt` was unavailable. Retain ACP v1 and codex-acp 2.2.2; no wire, capability,
+authentication, or production dependency change. Existing agent sign-in is used;
+fresh sign-in and notification delivery are separate gates. A completed prompt
+does not prove browser behavior. The explicit live harness can consume account
+usage and is excluded from ordinary CI.
+
+Independent browser verification uses the existing pinned Playwright
+`1.64.0-alpha-1790635538000`, from revision
+`e8149b8257d32dcf8f72573ecc43e72439da7080`. Checked
+https://playwright.dev/llms.txt (unavailable),
+https://playwright.dev/docs/api/class-browser,
+https://playwright.dev/docs/emulation, and
+https://raw.githubusercontent.com/microsoft/playwright/e8149b8257d32dcf8f72573ecc43e72439da7080/packages/playwright-core/types/types.d.ts
+on 2026-10-17 UTC. Isolated contexts support viewport and touch/mobile emulation;
+they do not prove physical mobile-device behavior. Browser contexts have no owner
+cookies or credentials, and only visit the disposable loopback preview. External
+browser requests are blocked. No new SDK is installed by the harness.
+
+The selected test task produces a local static task board without external
+services. Exercise actual JARVIS approval/denial, independently supplied checks,
+managed preview start/status/stop, desktop and emulated-mobile interactions,
+reload persistence, and unchanged sentinel/check files. Preserve sanitized
+results and screenshots outside tracked files. Fail closed on absent binaries,
+wrong verifier version, missing checks, task failure, browser errors, or cleanup
+failure. Retain the generated work for inspection; never delete an owner folder.
+Provider quotas or absent existing sign-in may block the live gate and must not
+be turned into success. This acceptance adds no new architecture or runtime
+guarantee.
+
+Live Windows result: the first explicit ten-minute task produced the website but
+timed out during its review; it remains failed/unverified. A fresh approved
+continuation completed from the retained files and passed independent checks.
+Isolated Chromium 155.0.8059.12 contexts at 1440×1000 and mobile-emulated 390×844
+passed functional/persistence/input-escaping/layout checks with no browser errors.
+Managed preview Stop, closed port, clean daemon exit and unchanged supplied-file
+hashes passed. The driver used authenticated JARVIS APIs and a separate browser
+verifier; this does not prove automatic natural-language orchestration of every
+step. Existing sign-in was used. Failed attempts and successful continuation are
+retained separately under `artifacts/reviews/coding-website/run-CnJtlK/`.
 
 ## Versioned authority
 

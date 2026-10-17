@@ -297,11 +297,33 @@ mod tests {
     #[tokio::test]
     async fn native_children_count_but_durable_approval_waits_survive_without_blocking() {
         let (state, path) = state().await;
-        let mut child = start_run(
-            &state,
-            &format!("{}review", crate::delegate::DELEGATED_NOTICE),
-        )
-        .await;
+        let mut parent = start_run(&state, "delegate a review").await;
+        let reply = crate::run_service::RunService::new(state.database_handle())
+            .start_delegated(
+                &jarvis_protocol::StartRunRequest {
+                    objective: "review".to_owned(),
+                    session_id: None,
+                    idempotency_key: None,
+                    project_id: None,
+                },
+                parent.id(),
+            )
+            .await
+            .unwrap();
+        let mut child = jarvis_storage::find_run(state.database(), &reply.run_id)
+            .await
+            .unwrap();
+        assert!(child.is_delegated());
+        for next in [
+            RunState::ContextBuilding,
+            RunState::Planning,
+            RunState::Executing,
+            RunState::Observing,
+            RunState::Responding,
+            RunState::Completed,
+        ] {
+            parent = advance(&state, parent, next).await;
+        }
         let refusal = refusal_if_working(&state, false).await.unwrap();
         assert_eq!(body(refusal).await["agent_runs"], 1);
         for next in [

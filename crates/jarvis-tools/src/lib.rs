@@ -62,7 +62,7 @@ pub use definition::{
 // resolves for every caller in this crate while the storage adapter -- which cannot depend on this
 // crate -- reads the same definition from core. One definition, two readers, no second home.
 pub use documents::{DocumentError, DocumentSet, MAX_SUPPLIED_DOCUMENTS};
-pub use effect::{EffectSet, ToolEffect};
+pub use effect::{DelegationBoundary, EffectSet, ToolEffect};
 pub use evaluation::{
     ActorAuthority, ActorStatus, Decision, DenyReason, EscalationSignal, PolicyDecision,
     PolicyError, PolicyRequest, STANDING_POLICY_TOOLS, TargetAssessment, WorkspacePolicy,

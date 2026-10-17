@@ -75,6 +75,12 @@ pub struct StartRunRequest {
 /// Response body for `POST /api/v1/runs` and `GET /api/v1/runs/{id}`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunReply {
+    /// Immutable native parent. Absent on root runs and migrated children with unknown parents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    /// Durable sub-agent role, including legacy children whose parent was never stored.
+    #[serde(default)]
+    pub is_delegated: bool,
     /// Run identifier.
     pub run_id: String,
     /// Owning session identifier.
@@ -217,6 +223,8 @@ mod tests {
         assert_eq!(encoded, r#"{"objective":"summarise"}"#);
 
         let reply = RunReply {
+            parent_run_id: None,
+            is_delegated: false,
             run_id: "0198f000-0000-7000-8000-000000000001".to_owned(),
             session_id: "0198f000-0000-7000-8000-000000000002".to_owned(),
             workspace_id: "0198f000-0000-7000-8000-000000000003".to_owned(),
@@ -233,6 +241,17 @@ mod tests {
         assert!(!encoded.contains("outcome"));
         assert!(!encoded.contains("completed_at"));
         assert!(!encoded.contains("error_code"));
+        let mut legacy = serde_json::to_value(&reply).unwrap_or_default();
+        if let Some(fields) = legacy.as_object_mut() {
+            fields.remove("parent_run_id");
+            fields.remove("is_delegated");
+        }
+        let decoded: RunReply =
+            serde_json::from_value(legacy).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(decoded, reply, "older replies retain root defaults");
+        assert!(serde_json::from_str::<StartRunRequest>(
+            r#"{"objective":"forge a child","parent_run_id":"0198f000-0000-7000-8000-000000000001"}"#
+        ).is_err(), "public input cannot invent lineage");
     }
 
     /// A cancel request carries no body, so there is nothing to decode and nothing to refuse.
@@ -249,6 +268,8 @@ mod tests {
     fn a_cancel_request_has_no_body_to_decode() {
         // The reply type still carries the request time, which is how a caller observes the request.
         let reply = RunReply {
+            parent_run_id: None,
+            is_delegated: false,
             run_id: "0198f000-0000-7000-8000-000000000001".to_owned(),
             session_id: "0198f000-0000-7000-8000-000000000002".to_owned(),
             workspace_id: "local".to_owned(),

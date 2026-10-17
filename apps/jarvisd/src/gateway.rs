@@ -334,7 +334,7 @@ impl GatewayState {
         };
         let database = Arc::clone(&self.database);
         let executor = Arc::clone(executor);
-        let model_id = executor.model_id_for(objective).clone();
+        let model_id = executor.model_id_for(objective, false).clone();
         // The composed tool pipeline, when one exists, so the run is an agent loop rather than a single model
         // call. `None` for a profile with no tool surface, in which case the run answers without tools.
         let tools = self.tools.clone();
@@ -977,8 +977,11 @@ async fn continue_parked_run(state: &GatewayState, run_id: &str, call_id: &str) 
     // spawn, which keeps "resume always answers" from turning into "resume re-drives a run it should
     // not" — the domain would refuse the second drive, but reaching for it at all is the mistake.
     let parked = match state.runs.read(run_id).await {
-        Ok(reply) => (reply.state == jarvis_core::RunState::AwaitingApproval)
-            .then(|| executor.model_id_for(&reply.objective).clone()),
+        Ok(reply) => (reply.state == jarvis_core::RunState::AwaitingApproval).then(|| {
+            executor
+                .model_id_for(&reply.objective, reply.is_delegated)
+                .clone()
+        }),
         Err(_) => None,
     };
     let Some(model_id) = parked else {
@@ -1139,8 +1142,11 @@ async fn continue_declined_run(state: &GatewayState, run_id: &str, approval_id: 
         return;
     };
     let parked = match state.runs.read(run_id).await {
-        Ok(reply) => (reply.state == jarvis_core::RunState::AwaitingApproval)
-            .then(|| executor.model_id_for(&reply.objective).clone()),
+        Ok(reply) => (reply.state == jarvis_core::RunState::AwaitingApproval).then(|| {
+            executor
+                .model_id_for(&reply.objective, reply.is_delegated)
+                .clone()
+        }),
         Err(_) => None,
     };
     let Some(model_id) = parked else {

@@ -116,12 +116,13 @@ window.JarvisSettings = function (context) {
     function clearSecrets() { walkFields($("settings-body"), function (field) { if (field.type === "password") field.value = ""; }); }
     function appsPanel(body) {
       var entries = [
-        { id: "connections", name: "GitHub", description: "Repositories, issues and pull requests. Sign in, check access or disconnect.", status: "Open to check account" },
-        { id: "google", name: "Google", description: "Gmail and Calendar. Configure sign-in and allowed actions.", status: keyIsSet("google") ? "Client configured · sign-in checked in details" : "Setup needed" },
-        { id: "voice", name: "Voice & web search", description: "ElevenLabs voice and web search credentials.", status: keyIsSet("voice") || keyIsSet("search") ? "Credentials saved" : "Optional setup" },
-        { id: "files", name: "Files & coding", description: "Folder access, coding agents and sandbox configuration.", status: tabState("files") === "ok" ? "Configured" : "Access off until configured" },
-        { id: "permissions", name: "Browser & documentation", description: "Built-in tools. Inspect available tools and choose when JARVIS asks.", status: "Managed by JARVIS · availability in details" },
-        { id: "programs", name: "Custom tools (MCP)", description: "Connect a local program or remote tool server. For advanced integrations.", status: "Open to inspect servers" }
+        // The tone only colours what the saved settings already say; it is not a live connection check.
+        { id: "connections", name: "GitHub", description: "Repositories, issues and pull requests. Sign in, check access or disconnect.", status: "Open to check account", tone: "info" },
+        { id: "google", name: "Google", description: "Gmail and Calendar. Configure sign-in and allowed actions.", status: keyIsSet("google") ? "Client configured" : "Setup needed", tone: keyIsSet("google") ? "ok" : "todo" },
+        { id: "voice", name: "Voice & web search", description: "ElevenLabs voice and web search credentials.", status: keyIsSet("voice") || keyIsSet("search") ? "Credentials saved" : "Optional setup", tone: keyIsSet("voice") || keyIsSet("search") ? "ok" : "info" },
+        { id: "files", name: "Files & coding", description: "Folder access, coding agents and sandbox configuration.", status: tabState("files") === "ok" ? "Configured" : "Off until configured", tone: tabState("files") === "ok" ? "ok" : "info" },
+        { id: "permissions", name: "Browser & documentation", description: "Built-in tools. Inspect available tools and choose when JARVIS asks.", status: "Built in · managed by JARVIS", tone: "info" },
+        { id: "programs", name: "Custom tools (MCP)", description: "Connect a local program or remote tool server. For advanced integrations.", status: "Open to inspect servers", tone: "info" }
       ];
       if (window.JarvisControls) catalogUnmount = window.JarvisControls.mountCatalog(body, entries, goTab);
       else entries.forEach(function (entry) {
@@ -2559,6 +2560,80 @@ window.JarvisSettings = function (context) {
       body.appendChild(card);
     }
     var lastTab = "";
+    // ---- layout: every section is one panel -----------------------------------------------------------------------------
+    // The tab builders append headings, rows, notes and cards straight to the body. In a browser this pass groups them, after every render
+    // and whenever something loads in later: a heading (section()) opens a panel, the rows after it go inside, a card stands as a panel of
+    // its own, and loose rows before any heading share one untitled panel. It only moves the nodes the builders made (listeners and ids go
+    // with them), never creates content, and does nothing a second time, so it is safe to run whenever the body changes.
+    function isHeading(node) {
+      return node.tagName === "DIV" && !node.className && node.firstElementChild && node.firstElementChild.classList.contains("secthead");
+    }
+    function standsAlone(node) {
+      var cls = node.classList;
+      return cls.contains("settings-hero") || cls.contains("spanel") || cls.contains("overview-grid") || cls.contains("card") ||
+        (node.getAttribute("role") === "status") || !!(node.querySelector && node.querySelector(".integration-list, .overview-grid"));
+    }
+    function shapeSettingsBody(body) {
+      var panel = null;
+      Array.prototype.slice.call(body.children).forEach(function (node) {
+        if (node.classList.contains("spanel") && node.dataset.shaped) { panel = node.querySelector(".spanel-body"); return; }
+        if (isHeading(node)) {
+          var wrap = el("section", "spanel");
+          wrap.dataset.shaped = "1";
+          var head = el("header", "spanel-head");
+          var inner = el("div", "spanel-body");
+          body.insertBefore(wrap, node);
+          head.appendChild(node);
+          wrap.appendChild(head);
+          wrap.appendChild(inner);
+          panel = inner;
+          return;
+        }
+        if (node.classList.contains("card")) {
+          // A card after a heading belongs to that section. On its own it becomes a section: its title (and the sentence under it) move
+          // to the section's side column, and the card with everything else stays together beside it.
+          if (panel) { panel.appendChild(node); return; }
+          var section = el("section", "spanel");
+          section.dataset.shaped = "1";
+          var side = el("header", "spanel-head");
+          var main = el("div", "spanel-body");
+          body.insertBefore(section, node);
+          var first = node.firstElementChild;
+          var title = first && (first.tagName === "H4" || first.classList.contains("secthead") || isHeading(first)) ? first : null;
+          if (title) {
+            side.appendChild(title);
+            var intro = node.firstElementChild;
+            if (intro && intro.tagName === "P" && (intro.classList.contains("lead") || intro.classList.contains("secthint") || intro.classList.contains("help"))) side.appendChild(intro);
+            section.appendChild(side);
+          }
+          main.appendChild(node);
+          section.appendChild(main);
+          panel = null;
+          return;
+        }
+        if (standsAlone(node)) { panel = null; return; }
+        if (!panel) {
+          var loose = el("section", "spanel");
+          loose.dataset.shaped = "1";
+          panel = el("div", "spanel-body");
+          loose.appendChild(panel);
+          body.insertBefore(loose, node);
+        }
+        panel.appendChild(node);
+      });
+    }
+    if (typeof MutationObserver === "function") {
+      var shaping = false;
+      new MutationObserver(function () {
+        if (shaping) return;
+        shaping = true;
+        var body = $("settings-body"), top = body.scrollTop;
+        shapeSettingsBody(body);
+        body.scrollTop = top;
+        Promise.resolve().then(function () { shaping = false; });
+      }).observe($("settings-body"), { childList: true });
+    }
+
     function renderSettings() {
       var body = $("settings-body");
       if (openPicker) openPicker.close();
@@ -2720,27 +2795,62 @@ window.JarvisSettings = function (context) {
       focusSettingsTab();
       loadSettings();
     }
-    function closeSettings() { if (openPicker) openPicker.close(); clearSecrets(); $("settings").hidden = true; }
+    function closeSettings() { if (openPicker) openPicker.close(); clearSecrets(); $("settings").hidden = true; if (typeof checkAttention === "function") checkAttention(); }
     // Things that have stopped working while nobody is looking at Settings: the internet address, the phone door, Telegram. Each is
-    // asked from the daemon's own status routes (no provider is called), and only a real problem is shown, with a way to the tab that fixes it.
-    var attention = $("attention");
-    function paintAttention(items) {
+    // asked from the daemon's own status routes (no provider is called). Only a real breakage is raised, and quietly: a pill in the
+    // header ("1 issue") that opens a small panel with Check again, the tab that fixes it, and Hide. A step that is simply not set up
+    // yet (the door waiting for an internet address that is switched off) is not an alarm; the Phone tab shows it where it is set up.
+    // The daemon retries these by itself, so the page asks again every 20 seconds, when the tab is shown again and when Settings closes.
+    var attention = $("attention"), issuesPill = $("pill-issues");
+    var issues = [], hiddenIssues = {}, attentionOpen = false, attentionNote = "", checking = null;
+    function issueKey(item) { return item.tab + "|" + item.text; }
+    function setAttentionOpen(open) {
+      attentionOpen = open && issues.length > 0;
+      if (issuesPill) issuesPill.setAttribute("aria-expanded", attentionOpen ? "true" : "false");
+      paintAttention();
+    }
+    function paintAttention() {
+      var visible = issues.filter(function (item) { return !hiddenIssues[issueKey(item)]; });
       attention.replaceChildren();
-      attention.hidden = !items.length;
-      items.forEach(function (item) {
+      if (issuesPill) {
+        issuesPill.hidden = !visible.length && !attentionNote;
+        issuesPill.lastChild.textContent = visible.length ? visible.length + (visible.length === 1 ? " issue" : " issues") : "all clear";
+        issuesPill.className = "pill " + (visible.length ? "wait issues" : "on");
+        attention.hidden = !attentionOpen || (!visible.length && !attentionNote);
+      } else {
+        attention.hidden = !visible.length;
+      }
+      visible.forEach(function (item) {
         var line = el("div", "attline");
         line.appendChild(el("span", "", item.text));
+        var acts = el("span", "attacts");
+        var again = el("button", "link", checking ? "Checking\u2026" : "Check again");
+        again.type = "button";
+        again.disabled = !!checking;
+        again.addEventListener("click", function () { checkAttention(true); });
         var fix = el("button", "link", "Open " + item.label);
         fix.type = "button";
-        fix.addEventListener("click", function () { openSettings(); goTab(item.tab); });
-        line.appendChild(fix);
+        fix.addEventListener("click", function () { setAttentionOpen(false); openSettings(); goTab(item.tab); });
+        var hide = el("button", "link", "Hide");
+        hide.type = "button";
+        hide.title = "Hide this until it changes or the page is reloaded";
+        hide.addEventListener("click", function () { hiddenIssues[issueKey(item)] = true; attentionNote = ""; paintAttention(); if (issuesPill && !issuesPill.hidden) issuesPill.focus(); });
+        acts.appendChild(again);
+        acts.appendChild(fix);
+        acts.appendChild(hide);
+        line.appendChild(acts);
         attention.appendChild(line);
       });
+      if (attentionNote) attention.appendChild(el("div", "attnote", attentionNote));
     }
-    function checkAttention() {
+    function checkAttention(manual) {
+      if (checking) return checking;
       var items = [];
       var none = function () {};
-      Promise.all([
+      var before = {};
+      issues.forEach(function (item) { before[issueKey(item)] = item.label; });
+      if (manual) { attentionNote = ""; checking = true; paintAttention(); }
+      checking = Promise.all([
         api("/mcp/access").then(function (info) {
           var pub = info.public || {};
           if (pub.wanted && pub.status && pub.status.state === "problem") {
@@ -2749,15 +2859,41 @@ window.JarvisSettings = function (context) {
         }, none),
         api("/phone").then(function (phone) {
           var door = phone.door || {};
-          if (door.on && door.state === "problem") {
+          var settingUp = /internet address/i.test(door.problem || "");
+          if (door.on && door.state === "problem" && !settingUp) {
             items.push({ tab: "phone", label: "Phone", text: "The phone door is not working (" + (door.problem || "unknown reason") + "), so calls to JARVIS may get no answer." });
           }
         }, none),
         api("/telegram").then(function (telegram) {
           if (telegram.state === "error") items.push({ tab: "telegram", label: "Telegram", text: telegram.problem || "Telegram is not working." });
         }, none)
-      ]).then(function () { paintAttention(items); });
+      ]).then(function () {
+        checking = null;
+        var now = {};
+        items.forEach(function (item) { now[issueKey(item)] = true; });
+        // A hidden issue comes back only if it changes, so forget the ones that went away.
+        Object.keys(hiddenIssues).forEach(function (key) { if (!now[key]) delete hiddenIssues[key]; });
+        var fixed = Object.keys(before).filter(function (key) { return !now[key]; }).map(function (key) { return before[key]; });
+        issues = items;
+        if (manual) attentionNote = fixed.length ? fixed.join(", ") + ": working again." : items.length ? "Checked just now: still not working. JARVIS keeps retrying by itself." : "Checked just now: everything is working.";
+        else if (fixed.length && attentionOpen) attentionNote = fixed.join(", ") + ": working again.";
+        if (!items.length && attentionNote) setTimeout(function () { if (!issues.length) { attentionNote = ""; setAttentionOpen(false); } }, 4000);
+        paintAttention();
+      });
+      return checking;
     }
+    if (issuesPill) {
+      issuesPill.addEventListener("click", function () { setAttentionOpen(!attentionOpen); });
+      document.addEventListener("click", function (event) {
+        // A button inside the panel may have been redrawn by the time this runs; a detached target was inside, not outside.
+        if (!event.target || event.target.isConnected === false) return;
+        if (attentionOpen && !attention.contains(event.target) && !issuesPill.contains(event.target)) setAttentionOpen(false);
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && attentionOpen) { setAttentionOpen(false); issuesPill.focus(); event.stopPropagation(); }
+      }, true);
+    }
+    if (document.addEventListener) document.addEventListener("visibilitychange", function () { if (!document.hidden) checkAttention(); });
     setTimeout(checkAttention, 2500);
     setInterval(checkAttention, 20000);
     $("open-settings").addEventListener("click", openSettings);

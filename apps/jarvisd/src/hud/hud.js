@@ -439,7 +439,9 @@
         var existing = view.chips.children;
         for (var i = 0; i < existing.length; i += 1) { if (existing[i].textContent === label) return; }
         view.chips.hidden = false;
-        view.chips.appendChild(el("span", "chip" + (waiting ? " wait" : ""), label));
+        var chipNode = el("span", "chip" + (waiting ? " wait" : ""), label);
+        view.chips.appendChild(chipNode);
+        launchPacket(chipNode, waiting);
         // A big task makes dozens of these; the latest few are shown and the rest are counted.
         var all = [].filter.call(view.chips.children, function (chip) { return !chip.classList.contains("more"); });
         var hidden = Math.max(0, all.length - 6);
@@ -1132,6 +1134,7 @@
         });
         notice(approve ? "Approved " + what + ". Carrying on." : "Denied " + what + ". It was not done.");
         if (approve) feel("pleased", 2.2, "nod"); else feel("neutral", 1.8, "shake");
+        celebrate(approvalId, approve);
       },
       function (error) {
         if (error.status === 409) {
@@ -1193,6 +1196,7 @@
     // Wake-word mode: only speech that names JARVIS (or follows it within a few seconds) is acted on.
     var match = /\bjarvis\b[\s,.:;!-]*(.*)$/i.exec(heard);
     if (match) {
+      wakeFlare();
       if (match[1].trim()) command(match[1]);
       else wakeArmedUntil = Date.now() + 8000;
     } else if (Date.now() < wakeArmedUntil) {
@@ -1322,7 +1326,21 @@
     ["activity", "automations", "knowledge", "tools"].forEach(function (id) { $("ops-" + id).setAttribute("aria-pressed", id === section ? "true" : "false"); });
     if (section === "knowledge" && !memoryLoaded) loadMemory(true);
   }
-  ["activity", "automations", "knowledge", "tools"].forEach(function (id) { $("ops-" + id).addEventListener("click", function () { selectOpsSection(id); }); });
+  var OPS_SECTIONS = ["activity", "automations", "knowledge", "tools"];
+  OPS_SECTIONS.forEach(function (id) { $("ops-" + id).addEventListener("click", function () { selectOpsSection(id); }); });
+  // Inside Operations: 1-4 jump to a section, and the arrow keys move along the section buttons.
+  $("ops").addEventListener("keydown", function (event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    var focused = document.activeElement;
+    if (focused && (/^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName) || focused.isContentEditable)) return;
+    var at = OPS_SECTIONS.indexOf(focused && focused.id ? focused.id.replace(/^ops-/, "") : "");
+    var to = /^[1-4]$/.test(event.key) ? Number(event.key) - 1
+      : at >= 0 && (event.key === "ArrowRight" || event.key === "ArrowLeft") ? (at + (event.key === "ArrowRight" ? 1 : OPS_SECTIONS.length - 1)) % OPS_SECTIONS.length : -1;
+    if (to < 0) return;
+    event.preventDefault();
+    selectOpsSection(OPS_SECTIONS[to]);
+    $("ops-" + OPS_SECTIONS[to]).focus();
+  });
   $("open-ops").addEventListener("click", function () { setOps($("ops").hidden); });
   $("ops-close").addEventListener("click", function () { setOps(false); });
   $("ops").addEventListener("click", function (event) { if (event.target === $("ops")) setOps(false); });
@@ -1597,6 +1615,7 @@
 
     function approvalCard(approval) {
       var item = el("div", "item");
+      item.dataset.approval = approval.approval_id;
       var row = el("div", "row");
       row.appendChild(el("span", "tag wait", "risk " + approval.risk_level));
       row.appendChild(el("strong", "", approval.tool));
@@ -2580,12 +2599,12 @@
   }
 
   // The orbit is atmosphere, not a progress meter; only daemon state drives the labels and task counts.
-  var FACE = 0.56;
+  var FACE = 0.42;
   var motes = [];
   for (var moteIndex = 0; moteIndex < 42; moteIndex += 1) {
     motes.push({ a: moteIndex * 2.399, r: 0.55 + ((moteIndex * 0.618) % 1) * 1.1, sp: (moteIndex % 2 ? 1 : -1) * (0.01 + (moteIndex % 5) * 0.004), size: 0.8 + (moteIndex % 3) * 0.5 });
   }
-  var voiceShow = 0, captionAt = "";
+  var captionAt = "";
 
   function drawPresenceOrbit(cx, cy, size, t, speed, quiet) {
     ctx.save();
@@ -2636,6 +2655,149 @@
       ctx.arc(cx + Math.cos(at) * size * 0.7, cy + Math.sin(at) * size * 0.7, 2, 0, TAU);
       ctx.fill();
     }
+    // The reactor: three heavy arcs counter-rotating just outside the tick ring, lit like the face.
+    ctx.lineCap = "round";
+    ctx.shadowColor = rgba(0.6);
+    ctx.shadowBlur = 14;
+    for (var blade = 0; blade < 3; blade += 1) {
+      var from = -turn * 1.6 + blade * TAU / 3;
+      ctx.strokeStyle = rgba(0.42);
+      ctx.lineWidth = Math.max(1.5, size * 0.008);
+      ctx.beginPath();
+      ctx.arc(cx, cy, size * 0.88, from, from + TAU / 3 * 0.42);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.lineCap = "butt";
+    // A radar sweep: a fading wedge of light that trails a bright edge round the ring.
+    var sweep = turn * 3.2 - Math.PI / 2, tail = 0.9;
+    var wedge = ctx.createConicGradient ? ctx.createConicGradient(sweep - tail, cx, cy) : null;
+    if (wedge) {
+      wedge.addColorStop(0, rgba(0));
+      wedge.addColorStop(tail / TAU, rgba(0.16));
+      wedge.addColorStop(tail / TAU + 0.001, rgba(0));
+      wedge.addColorStop(1, rgba(0));
+      ctx.fillStyle = wedge;
+    } else ctx.fillStyle = rgba(0.05);
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.86, sweep - tail, sweep);
+    ctx.arc(cx, cy, size * 0.7, sweep, sweep - tail, true);
+    ctx.fill();
+    ctx.strokeStyle = rgba(0.45);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(sweep) * size * 0.7, cy + Math.sin(sweep) * size * 0.7);
+    ctx.lineTo(cx + Math.cos(sweep) * size * 0.86, cy + Math.sin(sweep) * size * 0.86);
+    ctx.stroke();
+    // An outer dashed ring, drifting slowly, and a hairline inside the face's own circle.
+    if (ctx.setLineDash) ctx.setLineDash([2, 9]);
+    ctx.lineDashOffset = -turn * size * 0.6;
+    ctx.strokeStyle = rgba(0.2);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 1.12, 0, TAU);
+    ctx.stroke();
+    if (ctx.setLineDash) ctx.setLineDash([]);
+    ctx.strokeStyle = rgba(0.07);
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.64, 0, TAU);
+    ctx.stroke();
+    // Reticle corners locked on the face; they breathe in and out a little unless motion is reduced.
+    var breathe = calm ? 0 : Math.sin(t * 1.1) * 0.015;
+    var boxX = size * (0.62 + breathe), boxY = size * (0.7 + breathe), arm = size * 0.07;
+    ctx.strokeStyle = rgba(0.3);
+    ctx.lineWidth = 1.2;
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (corner) {
+      var x = cx + corner[0] * boxX, y = cy + corner[1] * boxY;
+      ctx.beginPath();
+      ctx.moveTo(x - corner[0] * arm, y);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x, y - corner[1] * arm);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // What the presence is doing, drawn around the face. Each effect follows a real state (speaking, listening, working, waiting);
+  // none is a meter or a number. A change of state sends one shockwave out, so the change is seen as well as the colour.
+  var stateFx = { mode: "", waves: [], rippleAt: 0, beatAt: 0 };
+  function drawStateEffects(cx, cy, size, t, mode) {
+    stateFx.t = t;
+    if (mode !== stateFx.mode) {
+      if (stateFx.mode && !calm) stateFx.waves.push({ born: t, from: 0.55, to: 1.45, life: 1.1, width: 2.2 });
+      stateFx.mode = mode;
+    }
+    if (!calm && mode === "listening" && t >= stateFx.rippleAt) {
+      stateFx.waves.push({ born: t, from: 0.62, to: 1.25, life: 1.4, width: 1 + energy * 2 });
+      stateFx.rippleAt = t + 0.55;
+    }
+    if (!calm && mode === "waiting" && t >= stateFx.beatAt) {
+      stateFx.waves.push({ born: t, from: 0.86, to: 1.08, life: 0.7, width: 2 });
+      stateFx.waves.push({ born: t + 0.22, from: 0.86, to: 1.12, life: 0.8, width: 1.4 });
+      stateFx.beatAt = t + 1.7;
+    }
+    ctx.save();
+    stateFx.waves = stateFx.waves.filter(function (wave) { return t - wave.born < wave.life; });
+    stateFx.waves.forEach(function (wave) {
+      var u = (t - wave.born) / wave.life;
+      if (u < 0) return;
+      var eased = 1 - Math.pow(1 - u, 3);
+      ctx.lineWidth = wave.width;
+      ctx.strokeStyle = wave.rgb ? "rgba(" + wave.rgb + "," + 0.75 * (1 - u) + ")" : rgba(0.55 * (1 - u));
+      ctx.beginPath();
+      ctx.arc(cx, cy, size * (wave.from + (wave.to - wave.from) * eased), 0, TAU);
+      ctx.stroke();
+    });
+
+    if (mode === "speaking") {
+      // the voice as a ring of bars round the face, mirrored so it reads as one sound
+      var bars = 96, inner = size * 0.93;
+      ctx.lineCap = "round";
+      ctx.lineWidth = Math.max(1.5, size * 0.011);
+      for (var b = 0; b < bars; b += 1) {
+        var angle = b / bars * TAU - Math.PI / 2;
+        if (Math.abs(angle - Math.PI / 2) < 0.32) continue;   // a gap at the bottom, where the caption sits
+        var mirror = Math.min(b, bars - b) / (bars / 2);
+        var wave2 = calm ? 0.4 : Math.abs(Math.sin(mirror * 9.1 + t * 7.3) * Math.sin(mirror * 3.7 - t * 4.1));
+        var len = size * (0.015 + wave2 * energy * 0.16);
+        ctx.strokeStyle = rgba(0.25 + 0.6 * wave2);
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
+        ctx.lineTo(cx + Math.cos(angle) * (inner + len), cy + Math.sin(angle) * (inner + len));
+        ctx.stroke();
+      }
+    } else if (mode === "working" && !calm) {
+      // data packets running round the segment ring with fading tails, and streams of light falling in towards the face
+      ctx.lineCap = "round";
+      for (var packet = 0; packet < 5; packet += 1) {
+        var dir = packet % 2 ? -1 : 1;
+        var head = t * (packet % 2 ? -1.25 : 0.95) + packet * TAU / 5;
+        for (var tailStep = 0; tailStep < 6; tailStep += 1) {
+          ctx.strokeStyle = rgba(0.8 * (1 - tailStep / 6));
+          ctx.lineWidth = 2.6 - tailStep * 0.3;
+          ctx.beginPath();
+          var a0 = head - dir * tailStep * 0.05, a1 = head - dir * (tailStep + 1) * 0.05;
+          ctx.arc(cx, cy, size * 0.75, Math.min(a0, a1), Math.max(a0, a1));
+          ctx.stroke();
+        }
+      }
+      for (var stream = 0; stream < 18; stream += 1) {
+        var lane = stream * 2.399;
+        var progress = (t * (0.35 + (stream % 4) * 0.08) + stream * 0.37) % 1;
+        var r1 = size * (1.35 - progress * 0.7), r2 = r1 + size * 0.07;
+        ctx.strokeStyle = rgba(0.5 * Math.sin(Math.PI * progress));
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(lane) * r1, cy + Math.sin(lane) * r1);
+        ctx.lineTo(cx + Math.cos(lane) * r2, cy + Math.sin(lane) * r2);
+        ctx.stroke();
+      }
+    } else if (mode === "listening") {
+      ctx.lineWidth = 2 + energy * 3;
+      ctx.strokeStyle = rgba(0.15 + energy * 0.5);
+      ctx.beginPath();
+      ctx.arc(cx, cy, size * (0.92 + energy * 0.05), 0, TAU);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -2648,10 +2810,12 @@
     // The mobile stage is compact; the desktop leaves room for the controls below.
     var top = compact ? 12 : 20, bottom = compact ? 8 : 100;
     var usable = Math.max(80, H - top - bottom);
-    var size = Math.min(avail * FACE, usable / 1.55);
+    // The desktop face leaves room round it for the rings and the voice; the small mobile stage gives the face most of its space.
+    var size = compact ? Math.min(avail * 0.56, usable / 1.6) : Math.min(avail * FACE, usable / 2.05);
     var cx = room + avail / 2, cy = top + usable / 2;
     var quiet = document.documentElement.dataset.atmosphere === "quiet";
     var reach = size * 0.5;
+    lastFace = { cx: cx, cy: cy, size: size };
     if (reach < 30) return;
     var speed = calm ? 0.2 : (mode === "working" ? 1.8 : mode === "waiting" ? 1.2 : mode === "offline" ? 0.1 : mode === "idle" ? 0.5 : 1);
 
@@ -2688,39 +2852,127 @@
       JarvisHead.draw(ctx, cx, cy, size * 1.55, { rgb: current, energy: energy, mode: mode, mouth: mouth, t: t, calm: calm });
     }
 
-    // the voice, as a thin line of bars under the face, only while someone is talking
-    voiceShow += ((mode === "speaking" || mode === "listening" ? 1 : 0) - voiceShow) * 0.1;
-    if (voiceShow > 0.02) {
-      var baseline = cy + size * 0.6, half = size * 0.4, bars = 56;
-      ctx.lineWidth = Math.max(1.4, size * 0.006);
-      ctx.lineCap = "round";
-      for (var b = 0; b < bars; b += 1) {
-        var u = b / (bars - 1);
-        var bell = Math.sin(Math.PI * u);
-        var wave = calm ? 0.35 : Math.abs(Math.sin(b * 0.9 + t * 7.3) * Math.sin(b * 0.37 - t * 3.1));
-        var len = (1.5 + wave * energy * size * 0.12) * (0.25 + 0.75 * bell);
-        var x = cx - half + u * half * 2;
-        ctx.strokeStyle = rgba((0.18 + 0.6 * bell) * voiceShow);
-        ctx.beginPath();
-        ctx.moveTo(x, baseline - len);
-        ctx.lineTo(x, baseline + len);
-        ctx.stroke();
-      }
-    }
+    // the state around the face: shockwaves on a change, the voice as a ring, ripples while listening, packets while working
+    if (!quiet) drawStateEffects(cx, cy, size, t, mode);
 
     // what JARVIS is doing right now: nodes, beams and the effect for each kind of work (mission.js)
     if (window.JarvisMission) JarvisMission.draw(ctx, cx, cy, reach, t, current, calm, W, H, room);
 
-    // the caption sits just under the face, wherever the face is
-    var place = Math.round(cy + size * 0.74) + "|" + Math.round(room);
+    // the caption sits under the face, in the gap of the rings, wherever the face is
+    var captionTop = Math.round(Math.min(cy + size * 1.02, H - 96));
+    var place = captionTop + "|" + Math.round(room);
     if (place !== captionAt) {
       captionAt = place;
       var label = $("caption");
-      label.style.top = Math.round(cy + size * 0.74) + "px";
+      label.style.top = captionTop + "px";
       label.style.bottom = "auto";
       label.style.left = Math.round(room) + "px";
     }
   }
+
+  // ---- moments: short, one-off effects for things that just happened -----------------------------------------------
+  // Each follows a real event (an answer you gave, the wake word heard, a step taken, a long quiet). None runs with reduced motion
+  // or the quiet atmosphere, and none carries anything that is not also on the page as text.
+  var lastFace = null;
+  function showy() { return !calm && document.documentElement.dataset.atmosphere !== "quiet" && !document.hidden; }
+  function faceCentre() {
+    if (!lastFace) return null;
+    var box = canvas.getBoundingClientRect();
+    if (!box.width || !box.height) return null;
+    return { x: box.left + lastFace.cx, y: box.top + lastFace.cy, size: lastFace.size, box: box };
+  }
+  // Shockwaves from the face, in a colour of their own (green for yes, red for no) or the presence colour.
+  function burst(rgb, rings, from, to) {
+    if (!showy()) return;
+    for (var k = 0; k < rings; k += 1) {
+      stateFx.waves.push({ born: (stateFx.t || 0) + k * 0.16, from: from || 0.4, to: (to || 1.6) + k * 0.15, life: 1.2, width: Math.max(1, 3 - k), rgb: rgb });
+    }
+  }
+  // A wash of light over the stage, centred on the face.
+  function flash(kind) {
+    var stage = $("stage"), at = faceCentre();
+    if (!showy()) return;
+    if (at) {
+      stage.style.setProperty("--fx", Math.round(at.x - at.box.left) + "px");
+      stage.style.setProperty("--fy", Math.round(at.y - at.box.top) + "px");
+    }
+    stage.classList.remove("flash-yes", "flash-no", "flash-wake");
+    void stage.offsetWidth;
+    stage.classList.add("flash-" + kind);
+    setTimeout(function () { stage.classList.remove("flash-" + kind); }, 1500);
+  }
+  // An answered question folds into the face, which answers with a flash: green for yes, red for no.
+  function celebrate(approvalId, approve) {
+    var colour = approve ? "165,214,160" : "250,129,123";
+    var card = null, to = faceCentre();
+    document.querySelectorAll("#tray-waiting .item").forEach(function (item) { if (item.dataset.approval === approvalId) card = item; });
+    function land() { burst(colour, 2); flash(approve ? "yes" : "no"); }
+    if (!card || !to || !showy() || !card.animate || !card.getClientRects().length) { land(); return; }
+    var from = card.getBoundingClientRect();
+    var ghost = card.cloneNode(true);
+    ghost.querySelectorAll("[id]").forEach(function (node) { node.removeAttribute("id"); });
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.inert = true;
+    ghost.classList.add("ghost", approve ? "yes" : "no");
+    ghost.style.left = from.left + "px";
+    ghost.style.top = from.top + "px";
+    ghost.style.width = from.width + "px";
+    document.body.appendChild(ghost);
+    var dx = to.x - (from.left + from.width / 2), dy = to.y - (from.top + from.height / 2);
+    ghost.animate([
+      { transform: "none", opacity: 1, filter: "none" },
+      { transform: "translate(" + dx * 0.12 + "px, " + dy * 0.12 + "px) scale(1.04)", opacity: 1, filter: "brightness(1.6)", offset: 0.22 },
+      { transform: "translate(" + dx + "px, " + dy + "px) scale(0.04)", opacity: 0, filter: "brightness(3)" }
+    ], { duration: 720, easing: "cubic-bezier(0.6, 0, 0.8, 0.4)" }).onfinish = function () { ghost.remove(); land(); };
+  }
+  // The wake word: the eyes flare, the face looks up, the stage's corners snap in.
+  function wakeFlare() {
+    if (window.JarvisHead && JarvisHead.flare) JarvisHead.flare();
+    feel("alert", 1.6);
+    burst(null, 1, 0.5, 1.3);
+    flash("wake");
+  }
+  // A step the run took leaves the face as a spark and lands on its chip in the conversation.
+  function launchPacket(target, waiting) {
+    var from = faceCentre();
+    if (!from || !showy() || !target.animate || !target.getClientRects().length) return;
+    var to = target.getBoundingClientRect();
+    if (to.bottom < 0 || to.top > window.innerHeight) return;
+    var dot = el("span", "packet" + (waiting ? " wait" : ""));
+    dot.setAttribute("aria-hidden", "true");
+    dot.style.left = from.x + "px";
+    dot.style.top = from.y + "px";
+    document.body.appendChild(dot);
+    var dx = to.left + Math.min(to.width / 2, 28) - from.x, dy = to.top + to.height / 2 - from.y;
+    var lift = -Math.min(180, Math.abs(dx) * 0.4);
+    dot.animate([
+      { transform: "translate(-50%, -50%) scale(0.3)", opacity: 0 },
+      { transform: "translate(calc(-50% + " + dx * 0.45 + "px), calc(-50% + " + (dy * 0.45 + lift) + "px)) scale(1.3)", opacity: 1, offset: 0.45 },
+      { transform: "translate(calc(-50% + " + dx + "px), calc(-50% + " + dy + "px)) scale(0.5)", opacity: 0.9 }
+    ], { duration: 820, easing: "cubic-bezier(0.3, 0, 0.3, 1)" }).onfinish = function () {
+      dot.remove();
+      target.classList.add("landed");
+      setTimeout(function () { target.classList.remove("landed"); }, 900);
+    };
+    stateFx.waves.push({ born: stateFx.t || 0, from: 0.5, to: 0.95, life: 0.6, width: 1.5, rgb: waiting ? "239,192,120" : null });
+  }
+  // A long quiet: the face dims and a large clock fades in behind it, until someone moves, types or JARVIS has something to do.
+  var lastStir = Date.now();
+  ["pointermove", "pointerdown", "keydown", "wheel", "touchstart"].forEach(function (name) {
+    window.addEventListener(name, function () { lastStir = Date.now(); }, { passive: true });
+  });
+  function paintAmbient() {
+    var mode = uiState();
+    if (mode !== "idle") lastStir = Date.now();
+    var dozing = Date.now() - lastStir > 90000 && $("settings").hidden && $("ops").hidden;
+    if (dozing) {
+      var now = new Date();
+      $("ambient-time").textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      $("ambient-date").textContent = now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
+    }
+    $("stage").classList.toggle("ambient", dozing);
+  }
+  setInterval(paintAmbient, 1000);
 
   function frame(stamp) {
     if (document.hidden || !$("settings").hidden || !$("ops").hidden || window.innerHeight <= 600 && window.innerWidth <= 960) {

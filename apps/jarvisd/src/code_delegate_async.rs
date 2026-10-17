@@ -8,10 +8,10 @@ use jarvis_core::{IsolatedText, Sensitivity, SystemClock, UtcTimestamp};
 use jarvis_runtimes::acp::{ToolActivity, ToolNote};
 use jarvis_storage::{DelegatedTaskFinish, NewDelegatedTask, SqliteDatabase, StoredDelegatedTask};
 use jarvis_tools::{
-    AdapterError, ApprovalPolicy, Availability, EffectSet, Idempotency, ProviderEvidence,
-    RetryDeclaration, Scope, ScopeSet, ToolCallResult, ToolDefinition, ToolDefinitionParts,
-    ToolEffect, ToolExecutionRequest, ToolExecutor, ToolId, ToolOutcomeRecord, ToolSchema,
-    ToolSensitivity, ToolSource,
+    AdapterError, ApprovalPolicy, Availability, DelegationBoundary, EffectSet, Idempotency,
+    ProviderEvidence, RetryDeclaration, Scope, ScopeSet, ToolCallResult, ToolDefinition,
+    ToolDefinitionParts, ToolEffect, ToolExecutionRequest, ToolExecutor, ToolId, ToolOutcomeRecord,
+    ToolSchema, ToolSensitivity, ToolSource,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -65,17 +65,20 @@ impl AsyncCodeDelegateTool {
                     approval: ApprovalPolicy,
                     timeout: u32|
          -> Result<ToolDefinition, crate::code_delegate::CodeDelegateToolError> {
+            let boundary =
+                (effect == ToolEffect::Delegation).then_some(DelegationBoundary::HostProcess);
             Ok(ToolDefinition::new(ToolDefinitionParts {
                 id: ToolId::new(id)?,
-                version: "1.0.0".into(),
+                version: if boundary.is_some() { "1.1.0" } else { "1.0.0" }.into(),
                 title: title.into(),
                 description: description.into(),
                 input_schema: ToolSchema::parse(input)?,
                 output_schema: ToolSchema::parse(OUTPUT)?,
-                effects: EffectSet::single(effect),
-                risk,
+                effects: boundary
+                    .map_or_else(|| EffectSet::single(effect), DelegationBoundary::effects),
+                risk: boundary.map_or(risk, |boundary| boundary.effects().risk_floor()),
                 required_scopes: scope.clone(),
-                approval,
+                approval: boundary.map_or(approval, DelegationBoundary::approval),
                 timeout_seconds: timeout,
                 retry: RetryDeclaration::none(),
                 idempotency: Idempotency::Unsupported,
@@ -91,7 +94,7 @@ impl AsyncCodeDelegateTool {
                 "Start a background coding task",
                 "Starts a durable queued coding job in the folder permitted in Settings, in place by default and without an overall deadline. Commands and dependency setup are enabled by default for the approved task. Use delegate_status for progress and independent verification, delegate_stop to cancel. No Git operations unless worktree mode is explicitly selected. Finish website delivery with a managed preview and real browser checks; an agent summary is not evidence.",
                 START_INPUT,
-                ToolEffect::CodeExecution,
+                ToolEffect::Delegation,
                 3,
                 ApprovalPolicy::Ask,
                 60,
@@ -141,7 +144,7 @@ impl AsyncCodeDelegateTool {
                 "Continue an interrupted coding task",
                 "Starts a new agent on the saved request and existing files of an interrupted, failed or cancelled in-place job. Requires fresh owner approval. Not restoration of its old process or conversation; inspect current state before repeating effects.",
                 ID_INPUT,
-                ToolEffect::CodeExecution,
+                ToolEffect::Delegation,
                 3,
                 ApprovalPolicy::Ask,
                 60,

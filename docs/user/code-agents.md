@@ -4,7 +4,22 @@
 
 JARVIS hands substantial coding work to your selected ACP agent. The default working directory is **the first folder permitted in Settings, Folders & code**. It is not the daemon source directory, profile directory or a generated checkout. Reorder/change your permitted folders to change that default.
 
+Coding launch and continuation are delegation plus host execution at risk 3. They
+ask by default; explicit trust in Permissions applies only to the named tool, so
+trusting launch does not also trust continuation. A worktree or disabled command
+setting does not lower that risk. Native sub-agents cannot launch coding jobs.
+See [delegation policy](../adr/0235-delegation-declares-work-and-its-execution-authority.md).
+
+An upgrade to delegation tool version 1.1.0 preserves saved jobs and results, but
+a pending launch approved for 1.0.0 cannot execute under the new contract. Inspect
+and cancel the old request, then request only the remaining work again.
+
 ## Workspace and Git
+
+For reproducible full website verification, see the opt-in
+[real coding-agent website acceptance gate](../quality/coding-website-acceptance.md).
+It uses a disposable profile, actual approvals, independent checks and desktop/mobile
+browser interactions; ordinary unit tests do not establish that complete journey.
 
 - Omit the task's repository field, or use a dot, to select the first permitted folder.
 - An existing absolute path selects a folder inside any permitted root. Relative paths resolve within those roots; an ambiguous match is refused instead of guessed.

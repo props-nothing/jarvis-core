@@ -46,6 +46,8 @@ jobs:
         run: |
           node --test scripts/test-docs.mjs
           node scripts/check-docs.mjs
+      - name: Check live coding gate opt-in guards
+        run: node --test scripts/test-coding-website-gate.mjs
       - name: Check the console scripts parse
         # The console is plain JavaScript embedded in the daemon, so a syntax slip would otherwise show only as a blank page.
         shell: bash

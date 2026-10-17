@@ -102,9 +102,10 @@ impl RunService {
     pub(crate) async fn start_delegated(
         &self,
         request: &StartRunRequest,
+        parent_run_id: &str,
     ) -> Result<RunReply, RunServiceError> {
         let limits = RunAdmissionLimits::new(
-            crate::delegate::DELEGATED_NOTICE,
+            parent_run_id,
             crate::delegate::MAX_ACTIVE_SUBAGENTS,
             crate::delegate::MAX_UNSETTLED_SUBAGENTS,
         )
@@ -232,19 +233,19 @@ impl RunService {
         Ok(reply::from_stored(&run))
     }
 
-    /// Requests cancellation of one run.
+    /// Requests cancellation of a run and its unfinished native children.
     ///
     /// Takes no expected version, deliberately, and `request_run_cancellation` documents why: a
     /// cancellation is **operator intent**, and every progress write advances a running run's version,
     /// so a client's version is stale immediately and the request would be refused with a conflict the
-    /// client cannot resolve. The guard that remains is the one that cannot go stale — a **settled** run
-    /// refuses a cancellation, because there is no work left to stop.
+    /// client cannot resolve. A settled parent may still own background children; Stop cancels those
+    /// children while preserving the parent's outcome. A fully settled family refuses cancellation.
     ///
     /// A repeat request is idempotent: the first request time is preserved.
     ///
     /// # Errors
     ///
-    /// Returns [`RunServiceError`] when the run is absent or has already settled.
+    /// Returns [`RunServiceError`] when the run is absent or its family has fully settled.
     pub async fn cancel(&self, id: &str) -> Result<RunReply, RunServiceError> {
         let now = UtcTimestamp::now(&SystemClock);
         let run = request_run_cancellation(&self.database, id, now)
@@ -340,6 +341,8 @@ pub mod reply {
     #[must_use]
     pub fn from_stored(run: &StoredRun) -> jarvis_protocol::RunReply {
         jarvis_protocol::RunReply {
+            parent_run_id: run.parent_run_id().map(ToOwned::to_owned),
+            is_delegated: run.is_delegated(),
             run_id: run.id().to_owned(),
             session_id: run.session_id().to_owned(),
             workspace_id: run.workspace_id().to_owned(),
@@ -361,6 +364,8 @@ pub mod reply {
     #[must_use]
     pub fn from_started(run: &StartedRun) -> jarvis_protocol::RunReply {
         jarvis_protocol::RunReply {
+            parent_run_id: run.parent_run_id().map(ToOwned::to_owned),
+            is_delegated: run.parent_run_id().is_some(),
             run_id: run.run_id().to_owned(),
             session_id: run.session_id().to_owned(),
             workspace_id: run.workspace_id().to_owned(),

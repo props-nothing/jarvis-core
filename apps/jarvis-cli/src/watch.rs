@@ -319,6 +319,8 @@ mod tests {
         outcome: Option<jarvis_core::RunOutcome>,
     ) -> jarvis_protocol::RunSummaryReply {
         jarvis_protocol::RunSummaryReply {
+            parent_run_id: None,
+            is_delegated: false,
             run_id: id.to_owned(),
             session_id: "s".to_owned(),
             objective: objective.to_owned(),

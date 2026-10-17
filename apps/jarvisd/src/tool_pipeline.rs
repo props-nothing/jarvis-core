@@ -772,6 +772,17 @@ impl ToolPipeline {
         // 1. Validate. `P3-001` compiled the validator at registration, so this is a check, not a parse.
         Self::validate(&definition, tool, &arguments)?;
 
+        // Stored role is authoritative even for a direct call with full local grants.
+        // Approval/trust cannot turn a child into a parent (ADR-0235).
+        if self
+            .refuses_child_delegation(&definition, actor.run_id())
+            .await?
+        {
+            return Ok(ToolPipelineOutcome::Refused {
+                reason_code: "child_cannot_delegate",
+            });
+        }
+
         // 2. Decide. A pure function over the borrowed definition: no clock, no I/O, no repository.
         let decision = evaluate(&PolicyRequest {
             definition: &definition,
@@ -891,6 +902,8 @@ impl ToolPipeline {
     /// real question — re-evaluating would make an approval lapse silently, not re-evaluating lets a decided
     /// action run under a superseded policy — and it is deliberately **not** decided here. What *is* enforced
     /// is that the approval has not lapsed, which is the time bound `P3-004` already commits to.
+    /// Stored child role additionally forbids delegation, independent of an earlier approval
+    /// or the caller's reconstructed grants (ADR-0235).
     pub async fn resume(
         &self,
         call_id: &str,
@@ -984,6 +997,16 @@ impl ToolPipeline {
 
         let definition = self.definition_for(stored.tool())?;
 
+        if self
+            .refuses_child_delegation(&definition, stored.run_id())
+            .await?
+        {
+            return Err(ToolPipelineError::ResumeRefused {
+                call_id: call_id.to_owned(),
+                reason: "a native child cannot delegate, including through an earlier approval",
+            });
+        }
+
         // The decision the receipt derives from. It is **reconstructed** from the approval rather than
         // re-evaluated, and the reason is the honest one: policy is a function of the request, and the
         // request was evaluated when the call was held. Re-evaluating here would silently turn a policy
@@ -1029,6 +1052,21 @@ impl ToolPipeline {
             }
             other => other,
         }
+    }
+
+    async fn refuses_child_delegation(
+        &self,
+        definition: &jarvis_tools::ToolDefinition,
+        run_id: &str,
+    ) -> Result<bool, ToolPipelineError> {
+        if !definition
+            .effects()
+            .contains(jarvis_tools::ToolEffect::Delegation)
+        {
+            return Ok(false);
+        }
+        let run = jarvis_storage::find_run(&self.database, run_id).await?;
+        Ok(run.is_delegated())
     }
 
     /// Records what an approved call came to when the adapter refused it or could not say, and returns it as a result the parked run can

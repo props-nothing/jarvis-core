@@ -32,6 +32,7 @@ Effect classes are independent and composable:
 
 - `READ_ONLY`
 - `WRITE`
+- `DELEGATION`
 - `EXTERNAL_COMMUNICATION`
 - `DESTRUCTIVE`
 - `CODE_EXECUTION`
@@ -48,6 +49,14 @@ Default risk guidance:
 | 3 | delete, spend, deploy, change permissions, mass-send | always ask or deny |
 
 Context can raise risk but cannot lower a hard policy floor. Examples include an unusually large recipient set, production target, external domain, sensitive attachment, or ambiguous identity.
+
+Delegation creates independent work and is mutating at a minimum risk of 1.
+Native launches declare `write` and `delegation`; their children's later calls
+still pass through ordinary policy. Coding launches and continuations additionally
+declare `code_execution`, retain risk 3 and ask by default unless the owner has
+explicitly trusted that tool. Both use the shared `DelegationBoundary` contract,
+keep scope/denial/ceiling checks and prohibit blind non-idempotent retries.
+Inspection and Stop do not launch work. See [ADR-0235](../adr/0235-delegation-declares-work-and-its-execution-authority.md).
 
 ## Execution Pipeline
 

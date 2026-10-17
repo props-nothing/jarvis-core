@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-10-11
 
+**Later amendment:** [ADR-0234](0234-native-subagents-have-durable-lineage-and-parent-stop.md) replaces native child text identity with persisted lineage, defines parent Stop and restart behavior, and uses the stored role for child model routing. The original decision and evidence below remain historical.
+
 ## Context
 
 One model answered everything: the owner's question, a sub-agent's bounded errand, a scheduled check at 03:00 and a run a new mail started. The work differs. A scheduled sweep or a sub-agent that reads one file is often well served by a cheaper (or a faster) model, and the owner's own questions may deserve the strongest one. Autonomy raises the number of background runs, so the cost of using one model for all of them rises with it (`P11-006`). Nothing about this needs a new provider: the models are at the provider already configured.

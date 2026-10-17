@@ -97,7 +97,7 @@ impl ProjectContext {
         database: &SqliteDatabase,
         run: &StoredRun,
     ) -> Result<Option<Self>, DatabaseError> {
-        let delegated = crate::delegate::is_delegated_objective(run.objective());
+        let delegated = run.is_delegated();
         let Some(project) = project_for(database, LinkKind::Session, run.session_id()).await?
         else {
             // A sub-agent does one bounded task and is not offered the index.

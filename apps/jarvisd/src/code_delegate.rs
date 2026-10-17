@@ -20,10 +20,10 @@ use jarvis_runtimes::acp::{
 use jarvis_runtimes::worktree::{self, Outcome, Repository, Worktree};
 use jarvis_storage::AppPaths;
 use jarvis_tools::{
-    AdapterError, ApprovalPolicy, Availability, BoundedOutput, EffectSet, Idempotency,
-    ProviderEvidence, RetryDeclaration, SchemaError, Scope, ScopeError, ScopeSet, ToolCallResult,
-    ToolDefinition, ToolDefinitionError, ToolDefinitionParts, ToolEffect, ToolExecutionRequest,
-    ToolExecutor, ToolId, ToolIdError, ToolOutcomeRecord, ToolSchema, ToolSensitivity, ToolSource,
+    AdapterError, Availability, BoundedOutput, Idempotency, ProviderEvidence, RetryDeclaration,
+    SchemaError, Scope, ScopeError, ScopeSet, ToolCallResult, ToolDefinition, ToolDefinitionError,
+    ToolDefinitionParts, ToolExecutionRequest, ToolExecutor, ToolId, ToolIdError,
+    ToolOutcomeRecord, ToolSchema, ToolSensitivity, ToolSource,
 };
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -397,18 +397,16 @@ impl CodeDelegateTool {
     pub fn definition() -> Result<ToolDefinition, CodeDelegateToolError> {
         Ok(ToolDefinition::new(ToolDefinitionParts {
             id: ToolId::new(DELEGATE_TOOL)?,
-            version: "1.0.0".to_owned(),
+            version: "1.1.0".to_owned(),
             title: "Hand a coding task to the coding agent".to_owned(),
             description: "Starts an owner's coding-agent job and returns its task id immediately. Uses the working folder permitted in Settings (the first one by default), in place with existing files visible. No Git requirement or automatic Git mutation. Commands, project-local dependency installation and documentation fetches are enabled by default as part of this approved host-execution task. No overall deadline by default: monitor with jarvis.code.delegate_status, cancel with jarvis.code.delegate_stop. Prefer a full implementation brief and independent checks. An agent finishing is not a verified website; inspect verification, run a managed preview and check desktop/mobile behavior before claiming delivery. If skills are needed, discover/install compatible bundles first. Missing tools and sign-in are blockers, not success.".to_owned(),
             input_schema: ToolSchema::parse(INPUT_SCHEMA)?,
             output_schema: ToolSchema::parse(OUTPUT_SCHEMA)?,
-            // It edits files and the agent may start programs: the code-execution floor, risk 3.
-            effects: EffectSet::new([ToolEffect::Write, ToolEffect::CodeExecution])
-                .unwrap_or_else(|| EffectSet::single(ToolEffect::CodeExecution)),
-            risk: 3,
+            effects: jarvis_tools::DelegationBoundary::HostProcess.effects(),
+            risk: jarvis_tools::DelegationBoundary::HostProcess.effects().risk_floor(),
             required_scopes: ScopeSet::single(Scope::new(DELEGATE_SCOPE)?),
             // `Ask`: a person decides, every time, until the owner marks the tool as trusted in Permissions.
-            approval: ApprovalPolicy::Ask,
+            approval: jarvis_tools::DelegationBoundary::HostProcess.approval(),
             timeout_seconds: TOOL_TIMEOUT_SECONDS,
             // A retry would start a second agent on the same task.
             retry: RetryDeclaration::none(),

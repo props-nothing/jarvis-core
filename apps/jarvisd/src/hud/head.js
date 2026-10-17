@@ -76,6 +76,17 @@
     sideW[i] = brow[i] * (vx > 0 ? 1 : -1);
   }
 
+  // Each triangle's centre in the rest pose, for the effects that travel across the surface (sparks and ripples).
+  var TRI_C = new Float32Array(TRIS * 2);
+  for (i = 0; i < TRIS; i += 1) {
+    TRI_C[i * 2] = (BASE[TRI[i * 3] * 3] + BASE[TRI[i * 3 + 1] * 3] + BASE[TRI[i * 3 + 2] * 3]) / 3;
+    TRI_C[i * 2 + 1] = (BASE[TRI[i * 3] * 3 + 1] + BASE[TRI[i * 3 + 1] * 3 + 1] + BASE[TRI[i * 3 + 2] * 3 + 1]) / 3;
+  }
+  // Working: triangles light up and fade like neurons firing. Purely decorative; nothing here reports progress.
+  var sparks = [], sparkDebt = 0, lastSparkT = 0;
+  // The wake word flares the eyes: brighter and wider for a moment, then back.
+  var flareFrom = -9, flareNow = 0;
+
   var cur = new Float32Array(N * 3);   // deformed model space
   var sx = new Float32Array(N), sy = new Float32Array(N), sz = new Float32Array(N);
   var rx = new Float32Array(N), ry = new Float32Array(N);
@@ -207,7 +218,7 @@
     var open = Math.max(0, Math.min(1, pose.eyeOpen));
     var gx = pose.look[0] * scale * 0.55, gy = -pose.look[1] * scale * 0.3;
     // wider eyes glow larger and brighter, a squint or a blink flattens the glow, so the light reads as an eye and not a lamp
-    var r = scale * (1.35 + 0.5 * Math.min(1.4, pose.eyeOpen));
+    var r = scale * (1.35 + 0.5 * Math.min(1.4, pose.eyeOpen)) * (1 + 1.1 * flareNow);
     ctx.save();
     ctx.translate(ex + gx, ey + gy);
     ctx.scale(1, Math.max(0.1, Math.min(1.25, pose.eyeOpen)));
@@ -345,6 +356,7 @@
 
     // the mind decides the expression, the gaze, the blinks and the lean of the head
     var live = think(t, mode, state);
+    flareNow = state.calm ? 0 : Math.max(0, 1 - (t - flareFrom) / 0.9);
     cy += live.bob * size;
     size *= live.breath;
     var scale = size / 24;
@@ -421,6 +433,49 @@
     ctx.lineWidth = 1.2; ctx.strokeStyle = rgba(0.95 * dim); ctx.stroke();
     ctx.fillStyle = rgba(0.22 * dim); ctx.fill();
 
+    // ripples across the surface: outward from the mouth while speaking (as loud as the voice), inward from the edge while
+    // listening (as loud as the room)
+    if (!calm && (mode === "speaking" || mode === "listening")) {
+      var speakingNow = mode === "speaking";
+      var strength = speakingNow ? Math.max(0.25, state.mouth) : Math.min(1, 0.3 + state.energy);
+      var MC = MOUTH_C, waves = speakingNow ? 3 : 2, span = 12;
+      for (var wv = 0; wv < waves; wv += 1) {
+        var phaseW = ((t * (speakingNow ? 0.9 : 0.55)) + wv / waves) % 1;
+        var radius = speakingNow ? phaseW * span : (1 - phaseW) * span;
+        var fade = Math.sin(Math.PI * phaseW) * strength;
+        if (fade < 0.04) continue;
+        ctx.beginPath();
+        for (b2 = 0; b2 < BUCKETS; b2 += 1) {
+          for (k = 0; k < fills[b2].length; k += 1) {
+            var ti = fills[b2][k];
+            var ox = TRI_C[ti * 2] - (speakingNow ? MC[0] : 0), oy = TRI_C[ti * 2 + 1] - (speakingNow ? MC[1] : 0);
+            if (Math.abs(Math.sqrt(ox * ox + oy * oy) - radius) < 0.55) tri(ti);
+          }
+        }
+        ctx.lineWidth = 1; ctx.strokeStyle = rgba(0.75 * fade * dim); ctx.stroke();
+        ctx.fillStyle = rgba(0.14 * fade * dim); ctx.fill();
+      }
+    }
+
+    // working: sparks firing across the near side of the face
+    var sdt = Math.max(0, Math.min(0.1, t - lastSparkT));
+    lastSparkT = t;
+    if (mode === "working" && !calm) {
+      sparkDebt += sdt * 60;
+      while (sparkDebt >= 1 && sparks.length < 90) {
+        sparkDebt -= 1;
+        var pickB = fills[BUCKETS - 1 - Math.floor(Math.random() * 3)] || [];
+        if (pickB.length) sparks.push({ tri: pickB[Math.floor(Math.random() * pickB.length)], born: t, life: 0.35 + Math.random() * 0.55 });
+      }
+    } else sparkDebt = 0;
+    sparks = sparks.filter(function (spark) { return t - spark.born < spark.life && t >= spark.born; });
+    for (k = 0; k < sparks.length; k += 1) {
+      var life = 1 - (t - sparks[k].born) / sparks[k].life;
+      ctx.beginPath(); tri(sparks[k].tri);
+      ctx.lineWidth = 1.4; ctx.strokeStyle = "rgba(255,255,255," + (0.85 * life * life) + ")"; ctx.stroke();
+      ctx.fillStyle = rgba(0.55 * life * dim); ctx.fill();
+    }
+
     // the features, drawn heavier so the face has expression
     var feat = (0.55 + state.energy * 0.4) * dim;
     strip(ctx, EYE_L, true, 1.4, feat, rgba);
@@ -454,9 +509,10 @@
   function shake() { mind.shakeFrom = mind.lastT; }
   function speakMood(name) { if (EMO[name]) mind.speakMood = name; }
   function current() { return mind.emotion; }
+  function flare() { flareFrom = mind.lastT; }
 
   window.JarvisHead = {
     draw: draw, triangles: TRIS, vertices: N, emotions: Object.keys(EMO),
-    mood: mood, emote: emote, nod: nod, shake: shake, speakMood: speakMood, current: current
+    mood: mood, emote: emote, nod: nod, shake: shake, speakMood: speakMood, current: current, flare: flare
   };
 })();

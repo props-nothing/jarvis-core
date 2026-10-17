@@ -14,6 +14,8 @@ mod contacts_service;
 mod contacts_tool;
 mod control;
 mod delegate;
+#[cfg(test)]
+mod delegation_policy_tests;
 mod digest_service;
 mod dispatch;
 mod document_tool;

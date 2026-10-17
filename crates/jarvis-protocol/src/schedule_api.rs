@@ -105,6 +105,12 @@ pub struct ScheduleListReply {
 /// One run in the recent-runs list, with what it answered.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunSummaryReply {
+    /// Immutable native parent, absent for roots and legacy children with unknown parents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    /// Durable sub-agent role, including legacy children.
+    #[serde(default)]
+    pub is_delegated: bool,
     /// The run's identifier.
     pub run_id: String,
     /// The conversation it belongs to.

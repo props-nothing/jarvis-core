@@ -628,7 +628,7 @@ pub async fn read_unrepeatable_calls(
 ///   outcome differs. **A recorded effect is not re-reportable**: replacing it is how an `Unknown`
 ///   becomes a `Failed` and one sent message becomes two.
 /// - [`DatabaseError::ToolCallConflict`] when the guarded write matched nothing because another writer
-///   advanced the version.
+///   advanced the version, or cancellation prevents authorization or submission.
 /// - [`DatabaseError::StoredToolCallInvalid`] when the stored row cannot be decoded.
 ///
 /// A **terminal stored outcome with the same value** is accepted as a no-op, so a retried write of the
@@ -665,11 +665,17 @@ pub async fn record_tool_outcome(
         None => (None, false),
     };
 
+    // Submission serializes against Stop. Owner-approved direct calls may still
+    // resume after an interrupted run, so terminal state alone is not a refusal.
+    // Reporting an effect already submitted must remain possible after cancellation.
     let result = sqlx::query(
         "UPDATE tool_calls SET \
             outcome = ?3, evidence = ?4, reason = ?5, output = ?6, output_truncated = ?7, \
             reported_at = ?8, updated_at = ?9, version = version + 1 \
-         WHERE id = ?1 AND version = ?2",
+         WHERE id = ?1 AND version = ?2 \
+           AND (?3 NOT IN ('authorized', 'submitted') OR EXISTS \
+               (SELECT 1 FROM agent_runs WHERE agent_runs.id = tool_calls.run_id \
+                AND cancellation_requested_at IS NULL AND state <> 'cancelled'))",
     )
     .bind(id)
     .bind(existing.version)

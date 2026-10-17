@@ -138,25 +138,23 @@ impl SessionTarget {
     }
 }
 
-/// Capacity policy for runs identified by a durable objective prefix.
-///
-/// The prefix preserves the existing native-subagent identity until an explicit
-/// parent/child relation is introduced. Limits are checked inside the start transaction.
+/// Parent identity and workspace capacity for native sub-agents.
+/// Parent eligibility, capacity and child creation share one write transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunAdmissionLimits {
-    objective_prefix: String,
+    parent_run_id: String,
     max_working: u32,
     max_unsettled: u32,
 }
 
 impl RunAdmissionLimits {
-    /// Validates a nonempty prefix and positive working/unfinished limits.
+    /// Validates a parent identifier and positive working/unfinished limits.
     ///
     /// # Errors
-    /// Returns an invalid-request error for an empty prefix, zero/oversized limits,
+    /// Returns an invalid-request error for an invalid parent identifier, zero/oversized limits,
     /// or a working limit larger than the unfinished limit.
     pub fn new(
-        prefix: &str,
+        parent_run_id: &str,
         max_working: usize,
         max_unsettled: usize,
     ) -> Result<Self, DatabaseError> {
@@ -165,11 +163,11 @@ impl RunAdmissionLimits {
         };
         let max_working = u32::try_from(max_working).map_err(|_| invalid())?;
         let max_unsettled = u32::try_from(max_unsettled).map_err(|_| invalid())?;
-        if prefix.is_empty() || max_working == 0 || max_working > max_unsettled {
+        if parent_run_id.len() != ID_LENGTH || max_working == 0 || max_working > max_unsettled {
             return Err(invalid());
         }
         Ok(Self {
-            objective_prefix: prefix.to_owned(),
+            parent_run_id: parent_run_id.to_owned(),
             max_working,
             max_unsettled,
         })
@@ -300,7 +298,7 @@ impl StartRunInput {
         })
     }
 
-    /// Applies capacity limits to this start, refusing a mismatched objective marker.
+    /// Attaches parent identity and capacity limits to a new child session.
     ///
     /// # Errors
     /// Returns an invalid-request error when the run does not belong to the counted class.
@@ -308,9 +306,9 @@ impl StartRunInput {
         mut self,
         limits: RunAdmissionLimits,
     ) -> Result<Self, DatabaseError> {
-        if !self.objective.starts_with(&limits.objective_prefix) {
+        if self.target.is_existing() {
             return Err(DatabaseError::InvalidRunRequest {
-                field: "admission prefix",
+                field: "child session",
             });
         }
         self.admission_limits = Some(limits);
@@ -388,6 +386,7 @@ impl StoredSession {
 /// The run produced by [`start_run`], together with its first event's position.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartedRun {
+    parent_run_id: Option<String>,
     session_id: String,
     run_id: String,
     workspace_id: String,
@@ -400,6 +399,12 @@ pub struct StartedRun {
 }
 
 impl StartedRun {
+    /// Returns the immutable parent, if this is a newly delegated run.
+    #[must_use]
+    pub fn parent_run_id(&self) -> Option<&str> {
+        self.parent_run_id.as_deref()
+    }
+
     /// Returns the session the run belongs to.
     #[must_use]
     pub fn session_id(&self) -> &str {
@@ -596,22 +601,7 @@ pub async fn start_run(
             source,
         })?;
 
-    if let Some(limits) = &input.admission_limits {
-        let (unsettled, working): (i64, i64) = sqlx::query_as(
-            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN state <> 'awaiting_approval' THEN 1 ELSE 0 END), 0) \
-             FROM agent_runs WHERE workspace_id = ?1 AND state NOT IN ('completed', 'cancelled', 'failed') \
-             AND substr(COALESCE(full_objective, objective), 1, length(?2)) = ?2",
-        )
-        .bind(&input.workspace_id)
-        .bind(&limits.objective_prefix)
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|source| DatabaseError::Sqlite { operation: "check run admission capacity", source })?;
-        if working >= i64::from(limits.max_working) || unsettled >= i64::from(limits.max_unsettled)
-        {
-            return Err(DatabaseError::RunCapacityExceeded);
-        }
-    }
+    check_delegated_admission(&mut transaction, input).await?;
 
     // The identity is checked before writes so an unseeded profile reports its specific cause. The
     // foreign keys would refuse the insert anyway, but as an opaque constraint failure that
@@ -642,8 +632,8 @@ pub async fn start_run(
     sqlx::query(
         "INSERT INTO agent_runs (\
             id, session_id, workspace_id, user_id, objective, state, \
-                started_at, updated_at, correlation_id, version, full_objective\
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1, ?8)",
+                started_at, updated_at, correlation_id, version, full_objective, parent_run_id, delegation_kind\
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'received', ?6, ?6, ?7, 1, ?8, ?9, ?10)",
     )
     .bind(&input.run_id)
     .bind(&input.session_id)
@@ -653,6 +643,8 @@ pub async fn start_run(
     .bind(input.started_at.to_string())
     .bind(input.correlation_id.to_string())
     .bind(&input.objective)
+    .bind(input.admission_limits.as_ref().map(|limits| limits.parent_run_id.as_str()))
+    .bind(if input.admission_limits.is_some() { "native" } else { "none" })
     .execute(&mut *transaction)
     .await
     .map_err(|source| map_write_error("create a run", source))?;
@@ -694,6 +686,50 @@ pub async fn start_run(
         })?;
 
     read_started_run(database, &input.run_id).await
+}
+
+/// Checks lineage and capacity while the caller holds the immediate start transaction.
+async fn check_delegated_admission(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    input: &StartRunInput,
+) -> Result<(), DatabaseError> {
+    if let Some(limits) = &input.admission_limits {
+        // The lock serializes parent eligibility, capacity and creation against parent Stop.
+        let eligible: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE id = ?1 AND workspace_id = ?2 \
+             AND user_id = ?3 AND delegation_kind = 'none' AND cancellation_requested_at IS NULL \
+             AND state NOT IN ('completed', 'cancelled', 'failed'))",
+        )
+        .bind(&limits.parent_run_id)
+        .bind(&input.workspace_id)
+        .bind(&input.user_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|source| DatabaseError::Sqlite {
+            operation: "validate a delegation parent",
+            source,
+        })?;
+        if !eligible {
+            return Err(DatabaseError::InvalidRunRequest {
+                field: "delegation parent",
+            });
+        }
+        let (unsettled, working): (i64, i64) = sqlx::query_as(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN state <> 'awaiting_approval' THEN 1 ELSE 0 END), 0) \
+             FROM agent_runs WHERE workspace_id = ?1 AND state NOT IN ('completed', 'cancelled', 'failed') \
+             AND delegation_kind <> 'none'",
+        )
+        .bind(&input.workspace_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|source| DatabaseError::Sqlite { operation: "check run admission capacity", source })?;
+        if working >= i64::from(limits.max_working) || unsettled >= i64::from(limits.max_unsettled)
+        {
+            return Err(DatabaseError::RunCapacityExceeded);
+        }
+    }
+
+    Ok(())
 }
 
 /// Stores the accepted user message inside the transaction that creates its run.
@@ -789,7 +825,7 @@ async fn read_started_run(
 ) -> Result<StartedRun, DatabaseError> {
     let row = sqlx::query(
         "SELECT r.id, r.session_id, r.workspace_id, COALESCE(r.full_objective, r.objective) AS objective, r.state, r.version, \
-                r.correlation_id, r.started_at, \
+                r.parent_run_id, r.correlation_id, r.started_at, \
                 (SELECT MIN(sequence) FROM run_events WHERE run_id = r.id) AS first_sequence \
          FROM agent_runs AS r WHERE r.id = ?1",
     )
@@ -846,6 +882,7 @@ async fn read_started_run(
     })?;
 
     Ok(StartedRun {
+        parent_run_id: row.get("parent_run_id"),
         session_id: row.get("session_id"),
         run_id: row.get("id"),
         workspace_id: row.get("workspace_id"),
@@ -891,7 +928,7 @@ mod tests {
     use std::path::PathBuf;
 
     /// A temporary profile directory holding a migrated database.
-    struct TempProfile(PathBuf);
+    pub(super) struct TempProfile(PathBuf);
 
     impl TempProfile {
         fn new() -> Self {
@@ -902,7 +939,7 @@ mod tests {
             Self(path)
         }
 
-        fn database_path(&self) -> PathBuf {
+        pub(super) fn database_path(&self) -> PathBuf {
             self.0.join(crate::database::DEFAULT_DATABASE_FILENAME)
         }
     }
@@ -913,7 +950,7 @@ mod tests {
         }
     }
 
-    async fn database() -> (TempProfile, SqliteDatabase) {
+    pub(super) async fn database() -> (TempProfile, SqliteDatabase) {
         let profile = TempProfile::new();
         let database = SqliteDatabase::test_fixture(&profile.database_path())
             .await
@@ -921,13 +958,13 @@ mod tests {
         (profile, database)
     }
 
-    fn at(minute: i128) -> UtcTimestamp {
+    pub(super) fn at(minute: i128) -> UtcTimestamp {
         UtcTimestamp::from_unix_nanos(1_774_000_000_000_000_000 + minute * 60_000_000_000)
             .unwrap_or_else(|error| panic!("timestamp: {error}"))
     }
 
     /// Builds a start input, creating or continuing according to the target.
-    async fn start_input(
+    pub(super) async fn start_input(
         database: &SqliteDatabase,
         target: SessionTarget,
         session_id: String,
@@ -952,6 +989,27 @@ mod tests {
     }
 
     async fn limited_input(database: &SqliteDatabase, task: &str) -> StartRunInput {
+        let parent: Option<String> =
+            sqlx::query_scalar("SELECT id FROM agent_runs WHERE objective = 'fixture parent'")
+                .fetch_optional(database.pool())
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+        let parent = if let Some(id) = parent {
+            id
+        } else {
+            let input = start_input(
+                database,
+                SessionTarget::New,
+                jarvis_core::SessionId::new().to_string(),
+                "fixture parent",
+            )
+            .await;
+            start_run(database, &input)
+                .await
+                .unwrap_or_else(|error| panic!("{error}"))
+                .run_id()
+                .to_owned()
+        };
         start_input(
             database,
             SessionTarget::New,
@@ -960,13 +1018,13 @@ mod tests {
         )
         .await
         .with_admission_limits(
-            RunAdmissionLimits::new("child: ", 4, 16)
+            RunAdmissionLimits::new(&parent, 4, 16)
                 .unwrap_or_else(|error| panic!("limits: {error}")),
         )
         .unwrap_or_else(|error| panic!("limited input: {error}"))
     }
 
-    async fn start_counts(database: &SqliteDatabase) -> (i64, i64, i64, i64) {
+    pub(super) async fn start_counts(database: &SqliteDatabase) -> (i64, i64, i64, i64) {
         sqlx::query_as("SELECT (SELECT COUNT(*) FROM sessions), (SELECT COUNT(*) FROM agent_runs), (SELECT COUNT(*) FROM messages), (SELECT COUNT(*) FROM run_events)")
             .fetch_one(database.pool()).await.unwrap_or_else(|error| panic!("counts: {error}"))
     }
@@ -1006,10 +1064,9 @@ mod tests {
             before,
             "refusal must write no session, run, message or event"
         );
-        let listed =
-            crate::read_runs_by_objective_prefix(&database, &input.workspace_id, "child: ", 20)
-                .await
-                .unwrap_or_else(|error| panic!("list: {error}"));
+        let listed = crate::read_delegated_runs(&database, &input.workspace_id, 20)
+            .await
+            .unwrap_or_else(|error| panic!("list: {error}"));
         assert_eq!(listed.len(), 4);
         assert!(
             children
@@ -1017,13 +1074,19 @@ mod tests {
                 .all(|child| listed.iter().any(|run| run.id() == child.run_id()))
         );
         for index in 0..25 {
-            let finished = start_input(
-                &database,
-                SessionTarget::New,
-                jarvis_core::SessionId::new().to_string(),
-                &format!("child: finished {index}"),
-            )
-            .await;
+            let mut finished = limited_input(&database, &format!("finished {index}")).await;
+            // Build terminal history while the four real admission slots remain occupied.
+            finished.admission_limits = Some(
+                RunAdmissionLimits::new(
+                    finished
+                        .admission_limits
+                        .as_ref()
+                        .map_or("", |limits| limits.parent_run_id.as_str()),
+                    64,
+                    64,
+                )
+                .unwrap_or_else(|error| panic!("{error}")),
+            );
             let child = start_run(&database, &finished)
                 .await
                 .unwrap_or_else(|error| panic!("start finished fixture: {error}"));
@@ -1034,10 +1097,9 @@ mod tests {
                 .await
                 .unwrap_or_else(|error| panic!("finish fixture: {error}"));
         }
-        let listed =
-            crate::read_runs_by_objective_prefix(&database, &input.workspace_id, "child: ", 20)
-                .await
-                .unwrap_or_else(|error| panic!("list unfinished first: {error}"));
+        let listed = crate::read_delegated_runs(&database, &input.workspace_id, 20)
+            .await
+            .unwrap_or_else(|error| panic!("list unfinished first: {error}"));
         assert_eq!(listed.len(), 20);
         assert!(
             children
@@ -1410,3 +1472,7 @@ mod tests {
         database.close().await;
     }
 }
+
+#[cfg(test)]
+#[path = "native_lineage_tests.rs"]
+mod lineage_tests;

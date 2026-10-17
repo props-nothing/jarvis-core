@@ -353,6 +353,11 @@ fn render_runs(reply: &RunListReply, full: bool) {
         );
         println!("{}  {}  {}", run.run_id, outcome, run.started_at);
         println!("  {}", one_line(&run.objective, 100));
+        if let Some(parent) = &run.parent_run_id {
+            println!("  parent: {parent}");
+        } else if run.is_delegated {
+            println!("  parent: unknown (legacy sub-agent)");
+        }
         match &run.answer {
             Some(answer) if full => {
                 for line in answer.lines() {

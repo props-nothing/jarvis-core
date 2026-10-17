@@ -82,7 +82,7 @@ pub(crate) async fn continue_interrupted(state: &GatewayState, settled: &[String
         state.database(),
         settled,
         since,
-        &[RESUME_NOTICE, crate::delegate::DELEGATED_NOTICE],
+        &[RESUME_NOTICE],
         MAX_RESUMED,
     )
     .await

@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-10-12
 
+**Later amendment:** [ADR-0234](0234-native-subagents-have-durable-lineage-and-parent-stop.md) replaces native child text identity with persisted lineage, defines parent Stop and restart behavior, and uses the stored role for child model routing. The original decision and evidence below remain historical.
+
 ## Context
 
 A review of what JARVIS does as an autonomous project manager found gaps that make unattended work fragile or opaque:

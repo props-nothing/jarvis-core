@@ -5,6 +5,8 @@
 - Scope: native subagent admission and discovery
 - Related: [native subagents](0134-a-sub-agent-is-an-ordinary-run-one-level-deep.md)
 
+**Later amendment:** [ADR-0234](0234-native-subagents-have-durable-lineage-and-parent-stop.md) replaces native child text identity with persisted lineage, defines parent Stop and restart behavior, and uses the stored role for child model routing. The original decision and evidence below remain historical.
+
 ## Context
 
 Native delegation counted unfinished children only after loading the latest fifty runs of any kind. Enough unrelated activity hid older working or approval-waiting children from both admission and listing. Separate count and start operations also allowed concurrent parents to claim the same remaining slot.
