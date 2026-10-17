@@ -6,6 +6,7 @@ Every external integration requires a dated record based on current official sou
 
 | Integration | Official AI/docs index | Record | Status |
 | --- | --- | --- | --- |
+| Pinned prebuilt installation | curl/Microsoft indexes inaccessible; official docs | [prebuilt-install.md](prebuilt-install.md) | Explicit release and SHA-256, bounded extraction and existing per-user install; unsigned, native/clean-machine gates remain distinct |
 | Rust CI and release build cache | https://docs.github.com/llms.txt | [github-actions-rust-ci.md](github-actions-rust-ci.md) | Native CI repair, pinned cache, ZIP dependency repair and isolated database fixture research |
 | Owner-workspace coding delivery | https://agentclientprotocol.com/llms.txt; https://agentskills.io/llms.txt | [coding-delivery.md](coding-delivery.md) | In-place jobs, bundle resources, independent checks and managed previews; scoped agent tool bridge and real-account/browser acceptance remain open |
 | MCP | https://modelcontextprotocol.io/llms.txt | [mcp.md](mcp.md) | Implemented host/server with rmcp 3.4.0 and dated protocol-era negotiation; recorded real-server and independent-client evidence. Current credentials and remaining live/hot-registration gates are in the separate records below; full historical wire/SDK findings are archived with provenance. |

@@ -12,6 +12,7 @@
 | Install for your user | `jarvis install` copies the program and sets up PATH; no administrator rights required. |
 | Start at login | `jarvis service install` / `uninstall`; native platform details are in the [platform guide](../user/platforms.md). |
 | Portable profile | `--root` keeps managed state in an explicit directory and does not install a service. |
+| Pinned prebuilt first install | Opt-in scripts below download an existing unsigned archive using an explicit release, version and SHA-256. No development toolchain; curl 8.4+ required. |
 | CI archives | Platform workflow artifacts and automatically published unsigned prereleases after all five packages pass; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
 | Public signed binaries and updates | Not shipped; Apache-2.0 is selected, but signing, clean-machine evidence and update/rollback work remain. |
 
@@ -94,9 +95,50 @@ Inspect the same-host scripts before running them. They build source, preserve c
 
 Open a new terminal and run `jarvis` for setup. Without a terminal, follow the printed `jarvis init` command with private absolute key-file paths; run `jarvis start` and `jarvis doctor --live` only if setup succeeds. An installer success is not a completed profile or provider test.
 
+### Pinned prebuilt first install (unsigned)
+
+The separate [Bash](../../scripts/install-prebuilt.sh) and
+[PowerShell](../../scripts/install-prebuilt.ps1) scripts install an existing release
+without Git, Rust, Node or Python. Save and inspect the relevant script, select an
+exact [release](https://github.com/props-nothing/jarvis-core/releases), and obtain
+the SHA-256 for **your platform's archive** from that release's checksum asset.
+Current packages are unsigned. Checking a checksum from the same release verifies
+bytes; it does not establish a separate publisher signature.
+
+```bash
+# Linux/macOS: Bash 3.2+, curl 8.4+, tar, gzip and sha256sum or shasum
+bash install-prebuilt.sh ci-FULL_40_CHARACTER_COMMIT 0.1.0 PLATFORM_ARCHIVE_SHA256
+```
+
+```powershell
+# Windows x86_64: PowerShell 5.1+, curl.exe 8.4+
+.\install-prebuilt.ps1 -Tag ci-FULL_40_CHARACTER_COMMIT -Version 0.1.0 -Sha256 PLATFORM_ARCHIVE_SHA256
+```
+
+Replace the placeholders; `latest`, branches, malformed digests and unsupported
+platforms are refused. Linux/macOS x86_64 and ARM64 are selected automatically.
+Intel macOS archives remain cross-built without a native binary smoke. A missing
+or older curl produces an explicit prerequisite error; no tools are installed.
+The scripts bound HTTPS downloads, verify the supplied hash before opening the
+archive, materialize only one exact regular executable, check its version and
+delegate to `jarvis install` for the per-user destination and PATH. An existing
+destination executable is refused: schema-aware update/rollback is not implemented
+by this first-install path. `--dir ABSOLUTE_DIR --no-path` (PowerShell `-Dir ...
+-NoPath`) supports isolated installs. Failure remains nonzero and staging is removed.
+
+Setup and service startup stay separate. Follow the printed executable path for
+guided setup (currently requiring ElevenLabs and explicit folder grants); after
+successful setup run `jarvis start` and `jarvis doctor --live`. Installer success
+alone does not prove provider configuration. The website's default source scripts
+are unchanged. [ADR-0239](../adr/0239-prebuilt-installation-pins-the-release-and-digest.md)
+and the [research/evidence record](../research/integrations/prebuilt-install.md)
+describe the remaining signing, clean-machine and lifecycle gates.
+
 ### Signed-download bootstrap (future)
 
-The target bootstrap verifies a signed release manifest and binary before execution. It will not require a Rust source toolchain. That download/signature contract is not implemented by today's website scripts.
+The target bootstrap verifies a signed release manifest and binary before execution.
+Publisher signature verification is not implemented by either the source website
+bootstrap or the opt-in checksum-pinned scripts above.
 
 ### Native packages
 

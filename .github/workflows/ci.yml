@@ -163,6 +163,14 @@ jobs:
         if: matrix.suite == 'all' || matrix.suite == 'remaining'
         shell: bash
         run: bash scripts/test-package-release.sh
+      - name: Test prebuilt installation on Unix
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: bash scripts/test-install-prebuilt.sh
+      - name: Test prebuilt installation on Windows PowerShell 5.1
+        if: matrix.os == 'windows-latest' && matrix.suite == 'remaining'
+        shell: powershell
+        run: ./scripts/test-install-prebuilt.ps1
       - name: Build daemon test peer
         # Selecting jarvisd alone does not build another package's fixture binary.
         if: matrix.suite == 'daemon'

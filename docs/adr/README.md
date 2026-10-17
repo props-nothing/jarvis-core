@@ -256,6 +256,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0237](0237-delegation-dispatch-and-family-stop-are-durable.md) | Delegation dispatch and family Stop are durable | Accepted |
 
 | [0238](0238-shutdown-drains-owned-work-before-closing-dependencies.md) | Shutdown drains owned work before closing dependencies | Accepted |
+| [0239](0239-prebuilt-installation-pins-the-release-and-digest.md) | Prebuilt installation pins the release and digest | Accepted |
 
 ## Historical identifier aliases
 

@@ -31,6 +31,12 @@ Start the built program directly before it is on your PATH:
 ./target/release/jarvis
 ```
 
+For a first install without building source, the opt-in
+[pinned prebuilt scripts](../operations/install-and-release.md#pinned-prebuilt-first-install-unsigned)
+download an exact unsigned release, verify your supplied platform SHA-256 and run
+the per-user installer. They require curl 8.4+ and refuse an existing installation;
+signed distribution and automatic updates remain unfinished.
+
 After installation, the shorter `jarvis` commands below work in a new terminal.
 
 ## Installing it

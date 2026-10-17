@@ -6,6 +6,25 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
+## Completed local slice: pinned prebuilt first installation (2026-10-17)
+
+First bounded `P12-001` / `P9-004` slice in the owner's competitive catch-up order.
+
+- [x] Add opt-in Bash and PowerShell first-install scripts using an exact official release, package version and supplied SHA-256, without Git/Rust/Node/Python.
+- [x] Bound downloads/decompression; verify before opening/executing; select one regular executable, check its version, preserve existing installations, and hand off PATH/setup/doctor through existing commands.
+- [x] Execute real archive fixtures, corrupt-hash guard falsification and a real public Windows archive install into an isolated directory without PATH/profile changes.
+- [x] Pass focused scripts, 61 release tests, all 3,228 workspace tests (six existing opt-in ignores), formatting, strict Clippy, six documentation tests/link checks and dependency policy. Wire native Bash/PowerShell CI; the new script revision's hosted results remain separate from local evidence.
+
+Design and evidence: [ADR-0239](docs/adr/0239-prebuilt-installation-pins-the-release-and-digest.md),
+[research](docs/research/integrations/prebuilt-install.md),
+[usage](docs/operations/install-and-release.md#pinned-prebuilt-first-install-unsigned).
+Signed publisher verification, notarization, complete dependency notices/SBOM,
+atomic updates/schema rollback and clean Windows/macOS/Linux lifecycle remain
+open under `P12-001`. Website source bootstrap and ADR-0214 voice setup are unchanged.
+The public Windows archive also installed and ran both version commands with PATH
+restricted to Windows system tools, with no Git/Rust/Node/Python/GitHub CLI visible.
+This is not a clean-machine onboarding claim.
+
 ## Completed acceptance slice: audit, failure isolation and coordinated shutdown (2026-10-17)
 
 Owner-selected `P7-011` follow-up to durable cancellation and dispatch.
@@ -34,8 +53,10 @@ still times out, exits unsuccessfully and records `shutdown-failed`. Initial
 process/lint failures and final evidence are retained under
 `artifacts/p7-011/draining/`.
 
-This completes the selected local implementation/acceptance slice. Fresh native
-Windows/macOS/Linux CI remains a separate P7-011 gate; scripted ACP tests do not
+This completes the selected implementation/acceptance slice.
+Windows/macOS/Linux CI passed all ten jobs for `962cf079` in
+[run 39069495553](https://github.com/props-nothing/jarvis-core/actions/runs/39069495553),
+closing the native P7-011 gate. Scripted ACP tests do not
 certify live vendors, and native execution is not memory or panic-abort isolation.
 
 ## Completed acceptance slice: cross-runtime cancellation and dispatch (2026-10-17)
@@ -368,7 +389,7 @@ These are residual scopes, not an instruction to rebuild delivered features. His
 - [~] `P5-009` Google write/draft tools are delivered. For each new MCP/provider write, prove its policy/idempotency/outcome boundary and real approved/denied behavior rather than adding a bespoke connector by default.
 - [ ] `P5-010` Complete provider-seam tests and selected live checks for expiry, revoked scope, pagination, throttling, reauthorization and redacted diagnostics.
 - [~] `P6-007` Quiet hours and notifications exist. Add per-day proactive-message budgets, deduplication, per-kind/project controls and an owner-facing disable action when required.
-- [~] `P6-010` Native structured parent/child identity, explicit restart behavior and linked cancellation are delivered in `P7-009` / ADR-0234. Shared native/coding policy is delivered in `P7-010` / ADR-0235; broader delegation coordination/acceptance remains `P7-011`.
+- [~] `P6-010` Native structured parent/child identity, explicit restart behavior and linked cancellation are delivered in `P7-009` / ADR-0234. Shared native/coding policy is delivered in `P7-010` / ADR-0235; broader delegation coordination/acceptance is delivered in `P7-011`.
 - [~] `P6-012` Mail, file and webhook triggers exist; preserve their deduplication and ordinary-run policy. Atomic webhook budget reservations fix concurrent admission, not the claim-to-run crash-loss window. Reliable restart delivery remains a separate demand-gated handoff/outbox slice under the Phase 6 target; external-service acceptance remains `P11-017`.
 
 See [P5–P8 historical evidence](docs/history/todo-p5-p8-evidence-through-2026-10-16.md). Time-zone schedules and model-selected approved skills are delivered; the multi-step workflow engine remains parked.
@@ -382,9 +403,9 @@ See [P5–P8 historical evidence](docs/history/todo-p5-p8-evidence-through-2026-
 - [~] `P7-008` Adversarial Stop/timeout, agent error/exit, authentication retry, late permissions, owned descendant cleanup and setup-refusal tests are implemented, with cancellation and ownership falsification. Complete capability-skew, abrupt-crash and broader audit coverage for the supported ACP surface; native tools are not all intercepted.
 - [x] `P7-009` Replaced native objective-text identity with immutable parent/child records, conservative legacy migration, restart handling and parent Stop. Run/agent replies and CLI listings expose lineage; the completed acceptance slice above and [ADR-0234](docs/adr/0234-native-subagents-have-durable-lineage-and-parent-stop.md) record evidence and limits.
 - [x] `P7-010` Shared delegation effects and native/host execution contracts, per-tool trust and risk floors, and stored-child refusal on direct/approval-resumed launches are implemented. The completed acceptance slice above and [ADR-0235](docs/adr/0235-delegation-declares-work-and-its-execution-authority.md) record verification and upgrade behavior.
-- [ ] `P7-011` Complete broader depth/concurrency, duplicate-delivery, isolation, audit and cancellation coordination acceptance. ADR-0228 covers atomic native capacity; ADR-0234 adds stored one-level lineage, parent-admission falsification and native parent Stop/restart checks. ADR-0236 reserves admission before the stop/restart snapshot and closes it on acceptance. ADR-0237 adds cross-runtime family Stop and at-most-one dispatch per durable call. ADR-0238 adds child-audit/reopen, normalized native failure and scripted ACP crash acceptance plus bounded shutdown draining. Fresh native-platform acceptance remains open; in-process memory/panic-abort isolation and exactly-once external effects are not claimed.
+- [x] `P7-011` Complete broader depth/concurrency, duplicate-delivery, isolation, audit and cancellation coordination acceptance. ADR-0228 covers atomic native capacity; ADR-0234 adds stored one-level lineage, parent-admission falsification and native parent Stop/restart checks. ADR-0236 reserves admission before the stop/restart snapshot and closes it on acceptance. ADR-0237 adds cross-runtime family Stop and at-most-one dispatch per durable call. ADR-0238 adds child-audit/reopen, normalized native failure and scripted ACP crash acceptance plus bounded shutdown draining. All ten native CI jobs passed for `962cf079` in [run 39069495553](https://github.com/props-nothing/jarvis-core/actions/runs/39069495553), including Windows/macOS/Linux tests and process gates. In-process memory/panic-abort isolation and exactly-once external effects are not claimed.
 
-The disposable Windows Codex website gate above is verified through actual approval, independent checks, a managed loopback preview, desktop/mobile-emulated interactions and explicit cleanup. Fresh sign-in, notification reception and other-provider/platform acceptance remain separate. Native parent/child identity, restart and parent Stop are implemented in the acceptance slice above. Native/coding delegation policy alignment is complete in `P7-010`; ADR-0237 adds cross-runtime family cancellation and dispatch identity. ADR-0238 adds the audit/failure and coordinated-drain slice; fresh native-platform acceptance remains in `P7-011`.
+The disposable Windows Codex website gate above is verified through actual approval, independent checks, a managed loopback preview, desktop/mobile-emulated interactions and explicit cleanup. Fresh sign-in, notification reception and other-provider/platform acceptance remain separate. Native parent/child identity, restart and parent Stop are implemented in the acceptance slice above. Native/coding delegation policy alignment is complete in `P7-010`; ADR-0237 adds cross-runtime family cancellation and dispatch identity. ADR-0238 adds the audit/failure and coordinated-drain slice; its native CI acceptance now completes `P7-011` within the documented isolation limits.
 
 ### Voice and channels (P8)
 
@@ -399,7 +420,7 @@ The disposable Windows Codex website gate above is verified through actual appro
 
 - [~] `P9-002` Browser chat, settings, activity, approvals, memory and tool navigation exist. Continue user-flow/accessibility verification, canonical transcript browsing across browsers/devices and the remaining provider-specific setup work. A Tauri rewrite is not required.
 - [~] `P9-003` User service install/uninstall exists. Resolve documented service/manual-daemon ownership cases and verify native lifecycle; system-wide modes remain optional.
-- [ ] `P9-004` Verified prebuilt install path: native OS/architecture detection, checksums/signatures, PATH, onboarding and doctor. Source bootstrap scripts already exist and require a toolchain.
+- [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Publisher signatures, default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
 - [ ] `P9-005` Signed native artifacts, complete dependency notices/SBOM, provenance, checksums and release notes.
 - [ ] `P9-006` Atomic update, schema preflight/backup, health checks, rollback, channels and version/split-brain diagnosis.
 - [ ] `P9-007` Clean native install/update/rollback/repair/uninstall without a development toolchain.
@@ -442,7 +463,7 @@ The completed installation/UI evidence is in [P9–P11 history](docs/history/tod
 
 Owner-requested on 2026-10-17 after the [competitive gap review](docs/research/competitive-gap-2026-10-17.md) against Hermes Agent and OpenClaw. This is the owner's named requirement for the demand-gated items it references; it orders existing IDs rather than duplicating them. Every item keeps the authority boundary: no new path lets a model, page, skill or channel grant itself permission. External APIs/providers still need an official-source research record first.
 
-- [ ] `P12-001` **Install without a toolchain.** Deliver `P9-004`–`P9-007` first: signed prebuilt packages, checksums, PATH, onboarding, update and rollback. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
+- [~] `P12-001` **Install without a toolchain.** First slice: opt-in pinned unsigned prebuilt installation (ADR-0239). Still deliver the rest of `P9-004`–`P9-007`: signed packages, default install, onboarding acceptance, update and rollback. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
 - [ ] `P12-002` **Owner decision: voice at first run.** ADR-0214 records the owner's choice to require ElevenLabs for guided setup; both rivals start without a voice key. Ask the owner whether to keep it. If changed, amend ADR-0214 and prove setup completes with voice skipped and voice can be added later from Settings.
 - [ ] `P12-003` **Skills chosen by meaning.** Replace or complement the 75% word-overlap match with retrieval that finds an approved skill phrased differently from the request. Acceptance: a measured owner question set where paraphrased requests select the right skill without raising false selections; skills still never grant authority (ADR-0117).
 - [ ] `P12-004` **Skills that improve after use.** After a run that used an approved skill and needed corrections, JARVIS proposes a revised version (a diff the owner approves or dismisses). Acceptance: revision is proposal-only, history is kept, and a dismissed revision never applies.

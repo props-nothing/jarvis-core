@@ -81,3 +81,8 @@ remain outside graceful-cleanup guarantees (ADR-0233). Duplicate HTTP requests,
 exactly-once external effects and automatic worker takeover remain excluded
 (ADR-0237). No schema, public protocol or SDK version changes are needed. Native
 Windows/macOS/Linux CI and live-provider checks retain their own evidence gates.
+
+Native acceptance: all ten jobs in [CI run 39069495553](https://github.com/props-nothing/jarvis-core/actions/runs/39069495553)
+passed for commit `962cf0796bce1695e8cdc8a818d107c7c233e6ee` on 2026-10-17,
+including Windows/macOS/Linux tests and process gates. This closes the native
+P7-011 gate without changing the live-provider and isolation limits above.
