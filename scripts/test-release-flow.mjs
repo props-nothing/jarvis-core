@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { releaseSource } from './release-policy.mjs';
+import { manifest } from './release-manifest.mjs';
 
 const workflow = fs.readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const ci = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -58,7 +59,7 @@ test('the runner entry point writes only an eligible SHA to GitHub outputs', () 
       fs.writeFileSync(eventPath, JSON.stringify(event));
       fs.writeFileSync(output, '');
       const result = spawnSync(process.execPath, [fileURLToPath(new URL('./release-policy.mjs', import.meta.url))], {
-        encoding: 'utf8', env: { ...process.env, GITHUB_EVENT_NAME: 'workflow_run', GITHUB_EVENT_PATH: eventPath,
+        encoding: 'utf8', windowsHide: true, env: { ...process.env, GITHUB_EVENT_NAME: 'workflow_run', GITHUB_EVENT_PATH: eventPath,
           GITHUB_OUTPUT: output, GITHUB_REPOSITORY: context.repository, GITHUB_SHA: context.sha, GITHUB_REF: context.ref },
       });
       assert.equal(result.status, 0, result.stderr);
@@ -91,6 +92,15 @@ test('workflow wiring gates all packaging paths and keeps builds read-only', () 
   assert.match(job('draft'), /group: release-publish-\$\{\{ needs\.source\.outputs\.sha \}\}\n      cancel-in-progress: false/);
   assert.match(job('draft'), /RELEASE_SHA: \$\{\{ needs\.source\.outputs\.sha \}\}/);
   assert.match(job('draft'), /gh run download "\$GITHUB_RUN_ID"/);
+  assert.match(job('draft'), /id-token: write/);
+  assert.doesNotMatch(job('package'), /id-token: write/);
+  const install = job('verify-install');
+  assert.match(install, /needs: \[source, draft\]/);
+  assert.match(install, /needs\.draft\.result == 'success'/);
+  assert.match(install, /ref: \$\{\{ needs\.source\.outputs\.sha \}\}/);
+  assert.match(install, /os: \[ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest\]/);
+  assert.match(install, /node scripts\/test-published-install.mjs "\$RELEASE_TAG" "\$PACKAGE_VERSION"/);
+  assert.doesNotMatch(install, /id-token: write|contents: write/);
   for (const line of (workflow + ci).split('\n').filter(line => /uses:/.test(line) && !line.includes('./'))) {
     assert.match(line, /@[0-9a-f]{40}(?:\s|$)/);
   }
@@ -176,7 +186,7 @@ exit ${exitCode}
 `, { mode: 0o755 });
         const commandLine = match[1].replace('${{ matrix.packages }}', '--workspace');
         const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', 'export PATH="$PWD/bin:$PATH"\n' + commandLine], {
-          cwd: dir, encoding: 'utf8',
+          cwd: dir, encoding: 'utf8', windowsHide: true,
         });
         assert.ifError(result.error);
         assert.equal(result.status, exitCode, result.stderr);
@@ -244,6 +254,20 @@ function attachDraft(state, damage, overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-release-draft-'));
   try {
     fs.mkdirSync(path.join(dir, 'bin'));
+    fs.mkdirSync(path.join(dir, 'scripts'));
+    fs.copyFileSync(new URL('./release-manifest.mjs', import.meta.url), path.join(dir, 'scripts', 'release-manifest.mjs'));
+    fs.writeFileSync(path.join(dir, 'bin', 'cosign'), `#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> signing.log
+case "$1" in
+  sign-blob)
+    [ "$FIXTURE_STATE" != 'sign error' ] || exit 19
+    while [ "$1" != --bundle ]; do shift; done
+    printf 'fixture bundle' > "$2" ;;
+  verify-blob) [ "$FIXTURE_STATE" != 'verify error' ] ;;
+  *) exit 20 ;;
+esac
+`, { mode: 0o755 });
     fs.writeFileSync(path.join(dir, 'bin', 'gh'), [
       '#!/usr/bin/env bash',
       'printf \'%s\\n\' "$*" >> "$CALL_LOG"',
@@ -294,11 +318,19 @@ function attachDraft(state, damage, overrides = {}) {
       }
     }
     const tag = overrides.GITHUB_REF?.startsWith('refs/tags/v') ? overrides.GITHUB_REF_NAME : 'ci-' + testedSha;
+    if (!damage) {
+      const files = labels.map((label, i) => path.join(dir, 'dist', 'jarvis-' + label, 'jarvis-0.1.0-' + label + (i === 4 ? '.zip' : '.tar.gz')));
+      for (const [name, value] of [['release-manifest.txt', manifest(tag, testedSha, files)], ['release-manifest.sigstore.json', 'fixture bundle']]) {
+        const bytes = Buffer.from(value);
+        assets.push({ name, state: 'uploaded', size: bytes.length, digest: 'sha256:' + createHash('sha256').update(bytes).digest('hex') });
+      }
+    }
     const metadata = { draft: true, prerelease: true, target_commitish: testedSha, tag_name: tag, assets };
     if (state === 'remote missing asset') assets.pop();
     if (state === 'remote extra asset') assets.push({ ...assets[0], name: 'unexpected' });
     if (state === 'remote duplicate asset') assets[0] = { ...assets[1] };
     if (state === 'remote digest mismatch') assets[0].digest = 'sha256:' + '0'.repeat(64);
+    if (state === 'remote signature mismatch') assets.at(-1).digest = 'sha256:' + '0'.repeat(64);
     if (state === 'remote absent digest') delete assets[0].digest;
     if (state === 'remote size mismatch') assets[0].size++;
     if (state === 'remote incomplete asset') assets[0].state = 'starter';
@@ -308,13 +340,14 @@ function attachDraft(state, damage, overrides = {}) {
     if (state === 'remote wrong tag') metadata.tag_name = 'ci-' + context.sha;
     fs.writeFileSync(path.join(dir, 'metadata.json'), state === 'malformed metadata' ? '{' : JSON.stringify(metadata));
     const result = spawnSync(bash, ['-e', '-o', 'pipefail', '-c', 'export PATH="$PWD/bin:$PATH"\n' + draftScript], {
-      cwd: dir, encoding: 'utf8', env: { ...process.env, FIXTURE_STATE: state, FIXTURE_TAG: tag, CALL_LOG: 'calls.log',
+      cwd: dir, encoding: 'utf8', windowsHide: true, env: { ...process.env, FIXTURE_STATE: state, FIXTURE_TAG: tag, CALL_LOG: 'calls.log',
         GITHUB_REF: 'refs/heads/main', GITHUB_REF_NAME: 'main', GITHUB_REPOSITORY: context.repository,
-        GITHUB_SHA: context.sha, RELEASE_SHA: testedSha, GITHUB_RUN_ID: '123',
+        GITHUB_SHA: context.sha, RELEASE_SHA: testedSha, GITHUB_RUN_ID: '123', GITHUB_OUTPUT: 'outputs.txt',
         GITHUB_SERVER_URL: 'https://github.com', ...overrides },
     });
     assert.ifError(result.error);
-    return { ...result, calls: fs.existsSync(path.join(dir, 'calls.log')) ? fs.readFileSync(path.join(dir, 'calls.log'), 'utf8') : '' };
+    return { ...result, calls: fs.existsSync(path.join(dir, 'calls.log')) ? fs.readFileSync(path.join(dir, 'calls.log'), 'utf8') : '',
+      signing: fs.existsSync(path.join(dir, 'signing.log')) ? fs.readFileSync(path.join(dir, 'signing.log'), 'utf8') : '' };
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -326,6 +359,10 @@ for (const state of ['missing', 'draft']) {
     const mutation = result.calls.split('\n').find(line => line.startsWith('release ' + verb + ' '));
     assert.ok(mutation?.startsWith('release ' + verb + ' ci-' + testedSha + ' '), result.calls);
     assert.equal(mutation.match(/dist\/jarvis-/g).length, 10, 'all five archives and five checksums attach together');
+    assert.match(mutation, /dist\/release-manifest.txt dist\/release-manifest.sigstore.json/);
+    assert.match(result.signing, /sign-blob --yes --timeout 2m --new-bundle-format --bundle/);
+    assert.match(result.signing, /--certificate-identity https:\/\/github.com\/owner\/repository\/\.github\/workflows\/release.yml@refs\/heads\/main/);
+    assert.match(result.signing, /--certificate-oidc-issuer https:\/\/token.actions.githubusercontent.com/);
     assert.ok(!result.calls.includes(context.sha), 'the newer default-branch SHA must not select the draft');
     if (state === 'missing') {
       assert.ok(mutation.includes('--draft --prerelease --target ' + testedSha));
@@ -353,12 +390,20 @@ for (const state of ['missing', 'draft']) {
   });
 }
 
-test('manual branch packages use the tested commit, not the branch name', () => {
+test('manual feature branches cannot publish under the trusted main identity', () => {
   const result = attachDraft('missing', undefined, { GITHUB_REF: 'refs/heads/release-candidate', GITHUB_REF_NAME: 'release-candidate' });
-  assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.calls.includes('release create ci-' + testedSha + ' '));
-  assert.doesNotMatch(result.calls, /release-candidate/);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /Signed publication requires main or a version tag/);
+  assert.equal(result.signing, '');
+  assert.doesNotMatch(result.calls, /release create|release upload|release edit/);
 });
+for (const state of ['sign error', 'verify error']) {
+  test(state + ' prevents any draft mutation or publication', () => {
+    const result = attachDraft(state);
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.calls, /release create|release upload|release edit/);
+  });
+}
 for (const state of ['published', 'wrong target', 'existing tag', 'ref error']) {
   test(state + ' prevents draft mutation', () => {
     const result = attachDraft(state);
@@ -399,7 +444,7 @@ test('invalid tested SHA prevents all GitHub operations', () => {
 });
 
 for (const state of ['remote missing asset', 'remote extra asset', 'remote duplicate asset',
-  'remote digest mismatch', 'remote absent digest', 'remote size mismatch', 'remote incomplete asset',
+  'remote digest mismatch', 'remote signature mismatch', 'remote absent digest', 'remote size mismatch', 'remote incomplete asset',
   'remote published', 'remote stable', 'remote wrong target', 'remote wrong tag',
   'malformed metadata', 'metadata error', 'tag race']) {
   test(state + ' prevents publication after upload', () => {

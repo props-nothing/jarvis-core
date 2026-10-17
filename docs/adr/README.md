@@ -258,6 +258,8 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0238](0238-shutdown-drains-owned-work-before-closing-dependencies.md) | Shutdown drains owned work before closing dependencies | Accepted |
 | [0239](0239-prebuilt-installation-pins-the-release-and-digest.md) | Prebuilt installation pins the release and digest | Accepted |
 
+| [0240](0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md) | Release manifests bind artifacts to the publishing workflow | Accepted |
+
 ## Historical identifier aliases
 
 Two decisions accidentally reused phone-decision IDs. The canonical records are now ADR-0229 (file knowledge search, formerly the other ADR-0206) and ADR-0230 (coding delegation, formerly the other ADR-0207). Their old descriptive filenames remain link aliases; bare historical numbers require context. The accepted phone decisions retain ADR-0206 and ADR-0207.

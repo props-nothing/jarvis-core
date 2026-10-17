@@ -2,6 +2,7 @@
 param([string]$Installer = (Join-Path $PSScriptRoot 'install-prebuilt.ps1'))
 $ErrorActionPreference = 'Stop'
 . $Installer
+$script:realVerify = ${function:Test-JarvisReleaseSignature}
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $testRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
@@ -35,7 +36,15 @@ function Invoke-JarvisDownload([string]$Url, [string]$Destination) {
     $script:downloads += $Url
     $script:stages += [IO.Path]::GetDirectoryName($Destination)
     if ($script:failDownload) { throw 'fixture download failed' }
-    Copy-Item -LiteralPath $script:archiveFixture -Destination $Destination
+    if ($Url.EndsWith('/release-manifest.txt')) { [IO.File]::WriteAllText($Destination, $script:manifest) }
+    elseif ($Url.EndsWith('/release-manifest.sigstore.json')) { [IO.File]::WriteAllText($Destination, 'fixture bundle') }
+    elseif ($Url.EndsWith('/cosign-windows-amd64.exe')) { [IO.File]::WriteAllText($Destination, 'untrusted verifier') }
+    else { Copy-Item -LiteralPath $script:archiveFixture -Destination $Destination }
+}
+function Test-JarvisReleaseSignature([string]$Stage, [string]$ReleaseTag) {
+    if ($script:verifyPin) { & $script:realVerify $Stage $ReleaseTag; return }
+    $script:verified = $true
+    if ($script:failSignature) { throw 'fixture signature refused' }
 }
 function Invoke-JarvisProgram([string]$Program, [string[]]$Arguments) {
     Assert (([IO.File]::ReadAllText($Program)) -ceq 'inert executable fixture') 'only the selected ZIP member is executed'
@@ -68,6 +77,35 @@ try {
     Assert ($script:downloads.Count -eq 1) 'existing install refused before network'
     Remove-Item -LiteralPath (Join-Path $target 'jarvis.exe')
     $script:calls = @()
+    $rows = @('JARVIS-RELEASE-1', 'repository=props-nothing/jarvis-core', "tag=$tag", "commit=$($tag.Substring(3))", 'version=0.1.0')
+    foreach ($label in @('linux-x86_64', 'linux-aarch64', 'macos-aarch64', 'macos-x86_64', 'windows-x86_64')) {
+        $extension = if ($label.StartsWith('windows-')) { 'zip' } else { 'tar.gz' }
+        $rows += "$label`tjarvis-0.1.0-$label.$extension`t$((Get-Item -LiteralPath $script:archiveFixture).Length)`t$($script:sha.ToLowerInvariant())"
+    }
+    $goodManifest = ($rows -join "`n") + "`n"
+    $script:manifest = $goodManifest
+    $script:downloads = @()
+    Install-JarvisPrebuilt $tag '0.1.0' '' $target $true
+    Assert ($script:downloads.Count -eq 3) 'manifest and bundle precede archive'
+    Remove-Item -LiteralPath (Join-Path $target 'jarvis.exe')
+    $script:calls = @(); $script:downloads = @()
+    $script:failSignature = $true; Refused 'fixture signature refused' ''; $script:failSignature = $false
+    Assert ($script:calls.Count -eq 0 -and $script:downloads.Count -eq 2) 'signature failure precedes archive download/execution'
+    $script:downloads = @()
+    $script:verifyPin = $true; Refused 'Signature verifier checksum mismatch' ''; $script:verifyPin = $false
+    Assert ($script:calls.Count -eq 0 -and $script:downloads.Count -eq 3) 'untrusted verifier never executed'
+    foreach ($change in @(@('repository=props-nothing', 'repository=foreign'), @('tag=ci-', 'tag=ci-f'),
+        @('commit=0', 'commit=f'), @('version=0.1.0', 'version=0.2.0'), @('linux-x86_64', 'linux-unknown'), @('.tar.gz', '.zip'))) {
+        $script:downloads = @()
+        $script:manifest = $goodManifest.Replace($change[0], $change[1])
+        Refused 'manifest' ''
+        Assert ($script:calls.Count -eq 0 -and $script:downloads.Count -eq 2) 'invalid manifest precedes archive download/execution'
+    }
+    $script:manifest = $goodManifest + "extra`n"
+    Refused 'manifest' ''
+    $script:manifest = $goodManifest.Replace($script:sha.ToLowerInvariant(), ('0' * 64))
+    Refused 'SHA-256 mismatch' ''
+    Assert ($script:calls.Count -eq 0) 'signed digest still checked before execution'
     Refused 'SHA-256 mismatch' ('0' * 64)
     Assert ($script:calls.Count -eq 0) 'wrong checksum never executed'
     Refused 'exact ci-' $script:sha 'latest'

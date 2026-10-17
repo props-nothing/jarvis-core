@@ -1,5 +1,5 @@
-# Opt-in UNSIGNED prebuilt first install. Windows PowerShell 5.1+ and curl 8.4+.
-# .\install-prebuilt.ps1 -Tag ci-<commit> -Version 0.1.0 -Sha256 <archive digest>
+# Signed prebuilt install. An explicit -Sha256 selects historical unsigned mode.
+# .\install-prebuilt.ps1 -Tag ci-<commit> -Version 0.1.0
 [CmdletBinding()]
 param([string]$Tag, [string]$Version, [string]$Sha256, [string]$Dir, [switch]$NoPath)
 $ErrorActionPreference = 'Stop'
@@ -9,13 +9,66 @@ function Get-JarvisPlatform([string]$Architecture) {
     return 'windows-x86_64'
 }
 
-function Invoke-JarvisDownload([string]$Url, [string]$Destination) {
+function Invoke-JarvisDownload([string]$Url, [string]$Destination, [long]$Limit = 268435456) {
     $curl = (Get-Command curl.exe -CommandType Application -ErrorAction Stop).Source
     $info = (& $curl -q --version) -join "`n"
     if ($LASTEXITCODE -ne 0 -or $info -notmatch '\Acurl ([0-9]+)\.([0-9]+)\.') { throw 'Could not identify curl.exe.' }
     if ([int]$Matches[1] -lt 8 -or ([int]$Matches[1] -eq 8 -and [int]$Matches[2] -lt 4)) { throw 'curl 8.4 or newer is required for bounded downloads.' }
-    & $curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 5 --connect-timeout 15 --max-time 120 --max-filesize 268435456 --output $Destination $Url
+    & $curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 5 --connect-timeout 15 --max-time 120 --max-filesize $Limit --output $Destination $Url
     if ($LASTEXITCODE -ne 0) { throw 'Download failed; installation was not run.' }
+}
+
+function Test-JarvisReleaseSignature([string]$Stage, [string]$ReleaseTag) {
+    $verifier = Join-Path $Stage 'cosign.exe'
+    Invoke-JarvisDownload 'https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-windows-amd64.exe' $verifier
+    if ((Get-FileHash -LiteralPath $verifier).Hash -ine '9fe59be0eca1271873ce019061335eb1ac419b7059202e797828467ddabe33be') { throw 'Signature verifier checksum mismatch.' }
+    $ref = if ($ReleaseTag.StartsWith('v')) { "refs/tags/$ReleaseTag" } else { 'refs/heads/main' }
+    $arguments = @('verify-blob', '--timeout', '2m', '--bundle', (Join-Path $Stage 'release-manifest.sigstore.json'),
+        '--certificate-identity', "https://github.com/props-nothing/jarvis-core/.github/workflows/release.yml@$ref",
+        '--certificate-oidc-issuer', 'https://token.actions.githubusercontent.com', (Join-Path $Stage 'release-manifest.txt'))
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $verifier
+    $start.Arguments = ($arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    # Use only public default trust, with a fresh temporary TUF cache.
+    $trustHome = Join-Path $Stage 'trust-home'
+    $null = New-Item -ItemType Directory -Path $trustHome
+    $start.EnvironmentVariables.Clear()
+    foreach ($name in @('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA')) { $start.EnvironmentVariables[$name] = $trustHome }
+    $start.EnvironmentVariables['SystemRoot'] = $env:SystemRoot
+    $start.EnvironmentVariables['TEMP'] = $Stage
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(130000)) { $process.Kill(); $process.WaitForExit(); throw 'Release signature verification timed out.' }
+        $null = $stdout.GetAwaiter().GetResult()
+        $details = $stderr.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) { throw ('Release signature verification failed. ' + $details.Substring(0, [Math]::Min(1024, $details.Length))) }
+    } finally { $process.Dispose() }
+}
+
+function Get-JarvisManifestDigest([string]$Manifest, [string]$ReleaseTag, [string]$PackageVersion, [string]$Label) {
+    $lines = [IO.File]::ReadAllLines($Manifest)
+    if ($lines.Count -ne 10 -or $lines[0] -cne 'JARVIS-RELEASE-1' -or $lines[1] -cne 'repository=props-nothing/jarvis-core') { throw 'Invalid release manifest.' }
+    if ($lines[2] -cne "tag=$ReleaseTag") { throw 'Manifest release tag mismatch.' }
+    if ($lines[3] -cnotmatch '\Acommit=([0-9a-f]{40})\z') { throw 'Invalid manifest commit.' }
+    if ($ReleaseTag.StartsWith('ci-') -and $ReleaseTag -cne "ci-$($Matches[1])") { throw 'Manifest commit mismatch.' }
+    if ($lines[4] -cne "version=$PackageVersion" -or ($ReleaseTag.StartsWith('v') -and $ReleaseTag -cne "v$PackageVersion")) { throw 'Manifest version mismatch.' }
+    $platforms = @('linux-x86_64', 'linux-aarch64', 'macos-aarch64', 'macos-x86_64', 'windows-x86_64')
+    $selected = $null
+    for ($i = 0; $i -lt $platforms.Count; $i++) {
+        $fields = $lines[$i + 5].Split("`t")
+        $extension = if ($platforms[$i].StartsWith('windows-')) { 'zip' } else { 'tar.gz' }
+        if ($fields.Count -ne 4 -or $fields[0] -cne $platforms[$i] -or $fields[1] -cne "jarvis-$PackageVersion-$($platforms[$i]).$extension") { throw 'Manifest archive/platform mismatch.' }
+        if ($fields[2] -cnotmatch '\A[1-9][0-9]{0,8}\z' -or [long]$fields[2] -gt 268435456 -or $fields[3] -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Invalid manifest size/digest.' }
+        if ($fields[0] -ceq $Label) { $selected = $fields[3] }
+    }
+    if (-not $selected) { throw 'Missing manifest platform.' }
+    return $selected
 }
 
 function Expand-JarvisProgram([string]$Archive, [string]$Member, [string]$Destination) {
@@ -55,7 +108,7 @@ function Install-JarvisPrebuilt([string]$ReleaseTag, [string]$PackageVersion, [s
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Use install-prebuilt.sh on macOS/Linux.' }
     if ($ReleaseTag -cnotmatch '\A(ci-[0-9a-f]{40}|v[0-9]+\.[0-9]+\.[0-9]+)\z') { throw 'Choose an exact ci-<commit> or vMAJOR.MINOR.PATCH release tag.' }
     if ($PackageVersion -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') { throw 'Version must be MAJOR.MINOR.PATCH.' }
-    if ($Digest -notmatch '\A[0-9a-fA-F]{64}\z') { throw 'Supply the selected platform archive SHA-256 (64 hexadecimal characters).' }
+    if ($Digest -and $Digest -notmatch '\A[0-9a-fA-F]{64}\z') { throw 'Supply the selected platform archive SHA-256 (64 hexadecimal characters).' }
     $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     $label = Get-JarvisPlatform $architecture
     if (-not $Directory) {
@@ -72,7 +125,16 @@ function Install-JarvisPrebuilt([string]$ReleaseTag, [string]$PackageVersion, [s
     $stage = Join-Path $tempRoot ('jarvis-prebuilt-' + [Guid]::NewGuid().ToString('N'))
     $null = New-Item -ItemType Directory -Path $stage
     try {
-        Write-Host "Unsigned prebuilt install: $ReleaseTag, $label. Verifying the supplied SHA-256."
+        if (-not $Digest) {
+            Write-Host "Verifying signed release: $ReleaseTag, $label."
+            $manifest = Join-Path $stage 'release-manifest.txt'
+            Invoke-JarvisDownload "https://github.com/props-nothing/jarvis-core/releases/download/$ReleaseTag/release-manifest.txt" $manifest 8192
+            Invoke-JarvisDownload "https://github.com/props-nothing/jarvis-core/releases/download/$ReleaseTag/release-manifest.sigstore.json" (Join-Path $stage 'release-manifest.sigstore.json') 1048576
+            Test-JarvisReleaseSignature $stage $ReleaseTag
+            $Digest = Get-JarvisManifestDigest $manifest $ReleaseTag $PackageVersion $label
+        } else {
+            Write-Host "Unsigned prebuilt install: $ReleaseTag, $label. Verifying the supplied SHA-256."
+        }
         $archive = Join-Path $stage 'archive.zip'
         Invoke-JarvisDownload "https://github.com/props-nothing/jarvis-core/releases/download/$ReleaseTag/$name.zip" $archive
         if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $Digest) { throw 'SHA-256 mismatch; installation was not run.' }

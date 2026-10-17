@@ -1,6 +1,6 @@
 # Installation And Releases
 
-**A native program today. Signed, verified distribution is the release goal.**
+**A native program with signed release verification. Native OS signing and lifecycle acceptance remain open.**
 
 [Documentation](../README.md) / [Quick start](../user/quick-start.md) / [Platform evidence](../user/platforms.md) / [Roadmap](../../ROADMAP.md)
 
@@ -12,9 +12,9 @@
 | Install for your user | `jarvis install` copies the program and sets up PATH; no administrator rights required. |
 | Start at login | `jarvis service install` / `uninstall`; native platform details are in the [platform guide](../user/platforms.md). |
 | Portable profile | `--root` keeps managed state in an explicit directory and does not install a service. |
-| Pinned prebuilt first install | Opt-in scripts below download an existing unsigned archive using an explicit release, version and SHA-256. No development toolchain; curl 8.4+ required. |
-| CI archives | Platform workflow artifacts and automatically published unsigned prereleases after all five packages pass; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
-| Public signed binaries and updates | Not shipped; Apache-2.0 is selected, but signing, clean-machine evidence and update/rollback work remain. |
+| Pinned prebuilt first install | Opt-in scripts below verify a signed manifest for an exact release/version before downloading the selected archive. Explicit SHA-256 mode supports historical unsigned releases. No development toolchain; curl 8.4+ required. |
+| CI archives | Platform workflow artifacts and automatically published prereleases with a Sigstore-signed manifest after all five packages pass; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
+| Native OS signing and updates | Authenticode/notarization credentials are not configured. Clean-machine evidence and update/rollback remain open. |
 
 The separate product website serves working source-building scripts at `https://www.jarvisd.dev/install.sh` and `https://www.jarvisd.dev/install.ps1`, from `frontend/public/`. These clone/update a protected source checkout, build with the committed lockfile, then delegate per-user installation to `jarvis install`. They are not signed-binary downloaders. Source builds require Git, Rust via rustup and [native build tools](../development/getting-started.md#build-from-source); the installed executable needs no Rust. Build/install failure exits nonzero, without setup or a success claim. A successful installer prints interactive and noninteractive setup commands; it does not collect keys or run onboarding through piped stdin. New setup requires an ElevenLabs key and explicit folder grants before starting the assistant. Do not infer signed distribution or clean-machine readiness from this source path.
 
@@ -34,13 +34,13 @@ Earlier verified public prerelease (2026-10-16): [`c48da888`](https://github.com
 
 The 2026-10-16 repair also removes the Unix Clippy failure and yanked ZIP dependencies without weakening dependency policy. Ordinary test fixtures reuse a closed migration image while keeping independent files and production durability checks. Commit `8bf6cbb641fa8ada46bb39d0bfc09ac8cb5a1ee2` passed all ten [native CI jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38927374174) and all five [package jobs](https://github.com/props-nothing/jarvis-core/actions/runs/38929525053). All five downloaded artifacts and their archive checksums were verified. Four native archive smoke tests passed; Intel macOS is cross-built with its runtime smoke skipped. Warm native cache restores were observed. [Research and measurements](../research/integrations/github-actions-rust-ci.md) retain the earlier failures and local controls separately. That run predates automatic draft attachment and does not prove upload behavior. Later runtime changes require their own native CI and package evidence.
 
-After all five packages succeed, every eligible run uploads the complete set of five archives and five SHA-256 files into a draft, verifies the uploaded assets, and **automatically publishes a prerelease**. Checksums and expected platform names are verified before upload. GitHub's received asset names, sizes and SHA-256 digests must then match all ten local files, with the exact draft tag and target commit. Main and manual branch builds use `ci-<full tested commit SHA>`; publication creates that tag at the tested commit. Each commit has its own prerelease. Version-tag builds keep their existing `v*` tag, verifying that it still points to the tested commit.
+After all five packages succeed, every eligible run signs a manifest binding the exact repository, tested commit, tag, package version and five archive digests. It uploads the five archives, five SHA-256 files, manifest and signature bundle into a draft, verifies the uploaded assets, and **automatically publishes a prerelease**. Checksums and expected platform names are verified before upload. GitHub's received asset names, sizes and SHA-256 digests must then match all twelve local files, with the exact draft tag and target commit. Main builds (including manual main runs) use `ci-<full tested commit SHA>`; publication creates that tag at the tested commit. Each commit has its own prerelease. Version-tag builds keep their existing numeric `vMAJOR.MINOR.PATCH` tag, requiring its version to match the archives and verifying that it still points to the tested commit. Manual feature-branch publication is refused because it cannot use the trusted main identity.
 
-Published packages are visible on the repository's [Releases page](https://github.com/props-nothing/jarvis-core/releases). Notes identify the source commit, Actions run, unsigned status and the Intel macOS runtime-smoke limitation. Prereleases are not marked as the latest stable release. Automatic builds refuse an existing tag before publication, and no tag is moved. Existing published releases are never overwritten. A retry can replace assets only in a draft still targeting the tested SHA; a failed upload or metadata check leaves publication blocked. If publication fails ambiguously, inspect the release before retrying. The workflow verifies published metadata and the resulting tag's commit.
+Published packages are visible on the repository's [Releases page](https://github.com/props-nothing/jarvis-core/releases). Notes identify the source commit, Actions run, manifest signing, absence of native Authenticode/notarization and the Intel macOS runtime-smoke limitation. Prereleases are not marked as the latest stable release. Automatic builds refuse an existing tag before publication, and no tag is moved. Existing published releases are never overwritten. A retry can replace assets only in a draft still targeting the tested SHA; a failed upload or metadata check leaves publication blocked. If publication fails ambiguously, inspect the release before retrying. The workflow verifies published metadata and the resulting tag's commit. Four subsequent native jobs install the signed public assets with a fresh home and restricted PATH, run versions/first-run diagnosis and verify existing-install preservation. These jobs are release acceptance, not a clean-VM or live-provider onboarding claim; inspect their result before relying on that release.
 
-Release assets persist beyond the 14-day Actions retention. A permission failure against an older source commit stays a failure; the workflow never substitutes the newer main tip. Automatic unsigned prereleases are owner-authorized; signing/notarization, complete dependency notices/SBOM, updates and clean-machine acceptance remain unfinished stable-distribution requirements.
+Release assets persist beyond the 14-day Actions retention. A permission failure against an older source commit stays a failure; the workflow never substitutes the newer main tip. Automatic prereleases are owner-authorized; native signing/notarization, complete dependency notices/SBOM, updates and clean-machine acceptance remain unfinished stable-distribution requirements.
 
-Local regression checks: `node --test scripts/test-release-flow.mjs` and `bash scripts/test-package-release.sh`. The release tests execute the CI lint/test pipelines under Bash `-eo pipefail`, proving both live diagnostic output and nonzero Cargo exits survive `tee`. CI streams workspace output as well as retaining annotation files, so a runner timeout no longer hides which tests were still running. Do not bypass quality or merely extend a timeout without that evidence.
+Local regression checks: `node --test scripts/test-release-flow.mjs scripts/test-release-manifest.mjs` and `bash scripts/test-package-release.sh`. The release tests execute the CI lint/test pipelines under Bash `-eo pipefail`, proving both live diagnostic output and nonzero Cargo exits survive `tee`. CI streams workspace output as well as retaining annotation files, so a runner timeout no longer hides which tests were still running. Do not bypass quality or merely extend a timeout without that evidence.
 
 ## Dated CI repair evidence (2026-10-14–16)
 
@@ -95,50 +95,60 @@ Inspect the same-host scripts before running them. They build source, preserve c
 
 Open a new terminal and run `jarvis` for setup. Without a terminal, follow the printed `jarvis init` command with private absolute key-file paths; run `jarvis start` and `jarvis doctor --live` only if setup succeeds. An installer success is not a completed profile or provider test.
 
-### Pinned prebuilt first install (unsigned)
+### Pinned prebuilt first install
 
 The separate [Bash](../../scripts/install-prebuilt.sh) and
-[PowerShell](../../scripts/install-prebuilt.ps1) scripts install an existing release
-without Git, Rust, Node or Python. Save and inspect the relevant script, select an
-exact [release](https://github.com/props-nothing/jarvis-core/releases), and obtain
-the SHA-256 for **your platform's archive** from that release's checksum asset.
-Current packages are unsigned. Checking a checksum from the same release verifies
-bytes; it does not establish a separate publisher signature.
+[PowerShell](../../scripts/install-prebuilt.ps1) scripts need no Git, Rust, Node,
+Python or GitHub account. Download/review the bootstrap from a trusted repository
+revision, then select an exact published release and its package version:
 
 ```bash
 # Linux/macOS: Bash 3.2+, curl 8.4+, tar, gzip and sha256sum or shasum
-bash install-prebuilt.sh ci-FULL_40_CHARACTER_COMMIT 0.1.0 PLATFORM_ARCHIVE_SHA256
+bash install-prebuilt.sh ci-FULL_40_CHARACTER_COMMIT 0.1.0
 ```
 
 ```powershell
 # Windows x86_64: PowerShell 5.1+, curl.exe 8.4+
-.\install-prebuilt.ps1 -Tag ci-FULL_40_CHARACTER_COMMIT -Version 0.1.0 -Sha256 PLATFORM_ARCHIVE_SHA256
+.\install-prebuilt.ps1 -Tag ci-FULL_40_CHARACTER_COMMIT -Version 0.1.0
 ```
+
+Signed mode downloads a small manifest and Sigstore bundle, then a temporary
+SHA-256-pinned Cosign v3.1.3 verifier. It accepts only this repository's release
+workflow identity on main (or the exact selected version tag), with the GitHub
+Actions issuer. Verification uses fresh public trust metadata, isolated from
+ambient Cosign configuration. GitHub/Sigstore network access is required; an
+outage fails closed. The bootstrap and verifier pins are the initial trust root.
+
+The signed manifest must match the requested tag, commit, version and complete
+platform set. The selected archive's hash is verified before opening it; only one
+exact regular executable is materialized, version-checked and passed to
+`jarvis install`. Failed signatures never fall back to unsigned installation.
+Sigstore signatures authenticate the publishing workflow; they do not provide
+Windows Authenticode or Apple notarization. Those credentials are not configured.
+
+Historical releases without a signature remain explicitly opt-in: append the
+independently checked archive SHA-256 as the third Bash argument, or use
+`-Sha256 PLATFORM_ARCHIVE_SHA256` in PowerShell. This mode checks bytes only.
+A checksum downloaded from the same server is not a separate publisher signature.
 
 Replace the placeholders; `latest`, branches, malformed digests and unsupported
 platforms are refused. Linux/macOS x86_64 and ARM64 are selected automatically.
-Intel macOS archives remain cross-built without a native binary smoke. A missing
-or older curl produces an explicit prerequisite error; no tools are installed.
-The scripts bound HTTPS downloads, verify the supplied hash before opening the
-archive, materialize only one exact regular executable, check its version and
-delegate to `jarvis install` for the per-user destination and PATH. An existing
-destination executable is refused: schema-aware update/rollback is not implemented
-by this first-install path. `--dir ABSOLUTE_DIR --no-path` (PowerShell `-Dir ...
--NoPath`) supports isolated installs. Failure remains nonzero and staging is removed.
+Intel macOS remains cross-built without native binary smoke. A missing or older
+curl produces a prerequisite error. Downloads and extraction are bounded.
+An existing destination executable is refused: this first-install path does not
+implement schema-aware update/rollback. `--dir ABSOLUTE_DIR --no-path` (PowerShell
+`-Dir ... -NoPath`) supports isolated installs. Failure remains nonzero and staging
+is removed, including temporary verifier/trust metadata.
 
 Setup and service startup stay separate. Follow the printed executable path for
-guided setup (currently requiring ElevenLabs and explicit folder grants); after
-successful setup run `jarvis start` and `jarvis doctor --live`. Installer success
-alone does not prove provider configuration. The website's default source scripts
-are unchanged. [ADR-0239](../adr/0239-prebuilt-installation-pins-the-release-and-digest.md)
-and the [research/evidence record](../research/integrations/prebuilt-install.md)
-describe the remaining signing, clean-machine and lifecycle gates.
-
-### Signed-download bootstrap (future)
-
-The target bootstrap verifies a signed release manifest and binary before execution.
-Publisher signature verification is not implemented by either the source website
-bootstrap or the opt-in checksum-pinned scripts above.
+guided setup, requiring a model key, tested ElevenLabs key and explicit folder
+grants; after successful setup run `jarvis start` and `jarvis doctor --live`.
+Installer success alone does not prove provider configuration or clean-machine
+readiness. The website's default source scripts remain unchanged.
+[ADR-0239](../adr/0239-prebuilt-installation-pins-the-release-and-digest.md),
+[ADR-0240](../adr/0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md)
+and the [signature evidence record](../research/integrations/release-signing.md)
+separate script fixtures, real verifier tests and hosted publication evidence.
 
 ### Native packages
 

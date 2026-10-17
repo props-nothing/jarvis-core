@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real tar/gzip and shell execution; only the network transport is replaced.
+# Real tar/gzip and shell execution; network/signature seams test installer ordering.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 installer=${1:-$root/scripts/install-prebuilt.sh}
@@ -26,11 +26,23 @@ tar -cf "$fixture/good.tar" -C "$fixture/contents" "$name"
 gzip -c "$fixture/good.tar" > "$fixture/good.tar.gz"
 cat > "$fixture/run.sh" <<'RUN'
 source "$INSTALLER"
+original_verify=$(declare -f verify_release_signature)
+eval "${original_verify/verify_release_signature/real_verify_release_signature}"
+verify_release_signature() {
+  if [ "${FIXTURE_VERIFY_PIN:-0}" = 1 ]; then real_verify_release_signature "$@"; return; fi
+  printf 'verify\n' >> "$FIXTURE/signatures"
+  [ "${FIXTURE_SIGNATURE_FAIL:-0}" = 0 ] || die 'fixture signature refused'
+}
 uname() { if [ "$1" = -s ]; then printf '%s' "${FIXTURE_OS:-Linux}"; else printf '%s' "${FIXTURE_ARCH:-x86_64}"; fi; }
 download() {
   printf '%s\n' "$1" >> "$FIXTURE/downloads"
   [ "${FIXTURE_DOWNLOAD_FAIL:-0}" = 0 ] || die 'fixture download failed'
-  cp "$FIXTURE_ARCHIVE" "$2"
+  case "$1" in
+    */release-manifest.txt) cp "$FIXTURE/manifest" "$2" ;;
+    */release-manifest.sigstore.json) printf 'fixture bundle' > "$2" ;;
+    */cosign-*) printf 'untrusted verifier' > "$2" ;;
+    *) cp "$FIXTURE_ARCHIVE" "$2" ;;
+  esac
 }
 main "$@"
 RUN
@@ -39,8 +51,12 @@ if command -v sha256sum >/dev/null; then hash=(sha256sum); else hash=(shasum -a 
 digest() { local value; value=$("${hash[@]}" "$1"); printf '%s' "${value%% *}"; }
 sha=$(digest "$FIXTURE_ARCHIVE")
 tag=ci-0123456789012345678901234567890123456789
-run() { bash "$fixture/run.sh" "$tag" 0.1.0 "$sha" --dir "$fixture/install here" --no-path > "$fixture/output" 2>&1; }
-reset_case() { rm -rf "$fixture/install here" "$fixture/calls" "$fixture/downloads"; }
+run() {
+  local args=("$tag" 0.1.0)
+  [ -z "$sha" ] || args+=("$sha")
+  bash "$fixture/run.sh" "${args[@]}" --dir "$fixture/install here" --no-path > "$fixture/output" 2>&1
+}
+reset_case() { rm -rf "$fixture/install here" "$fixture/calls" "$fixture/downloads" "$fixture/signatures"; }
 refused() {
   local expected=$1
   if run; then cat "$fixture/output"; echo "expected refusal: $expected" >&2; exit 1; fi
@@ -59,6 +75,46 @@ grep -q "^https://github.com/props-nothing/jarvis-core/releases/download/$tag/$n
 [ -z "$(ls -A "$fixture/tmp")" ]
 if run; then echo 'replaced an existing install' >&2; exit 1; fi
 [ "$(wc -l < "$fixture/downloads")" -eq 1 ]
+reset_case
+
+# Signed mode never falls back to a checksum supplied by the same release server.
+{
+  printf 'JARVIS-RELEASE-1\nrepository=props-nothing/jarvis-core\ntag=%s\ncommit=%s\nversion=0.1.0\n' "$tag" "${tag#ci-}"
+  for label in linux-x86_64 linux-aarch64 macos-aarch64 macos-x86_64 windows-x86_64; do
+    extension=tar.gz; [ "$label" != windows-x86_64 ] || extension=zip
+    printf '%s\tjarvis-0.1.0-%s.%s\t%s\t%s\n' "$label" "$label" "$extension" "$(wc -c < "$FIXTURE_ARCHIVE" | tr -d ' ')" "$sha"
+  done
+} > "$fixture/manifest.good"
+cp "$fixture/manifest.good" "$fixture/manifest"
+sha=''
+run
+[ -f "$fixture/install here/jarvis" ]
+[ "$(wc -l < "$fixture/downloads")" -eq 3 ]
+reset_case
+export FIXTURE_SIGNATURE_FAIL=1
+refused 'fixture signature refused'
+[ ! -e "$fixture/calls" ]; [ "$(wc -l < "$fixture/downloads")" -eq 2 ]
+unset FIXTURE_SIGNATURE_FAIL
+reset_case
+export FIXTURE_VERIFY_PIN=1
+refused 'Signature verifier checksum mismatch'
+[ ! -e "$fixture/calls" ]; [ "$(wc -l < "$fixture/downloads")" -eq 3 ]
+unset FIXTURE_VERIFY_PIN
+reset_case
+for replacement in 's/repository=props-nothing/repository=foreign/' 's/tag=ci-/tag=ci-f/' 's/commit=0/commit=f/' 's/version=0.1.0/version=0.2.0/' 's/linux-x86_64/linux-unknown/' 's/\.tar.gz/\.zip/'; do
+  sed "$replacement" "$fixture/manifest.good" > "$fixture/manifest"
+  refused 'manifest\|Manifest'
+  [ ! -e "$fixture/calls" ]; [ "$(wc -l < "$fixture/downloads")" -eq 2 ]
+  reset_case
+done
+cp "$fixture/manifest.good" "$fixture/manifest"
+printf 'extra\n' >> "$fixture/manifest"
+refused 'Unexpected manifest content'
+[ ! -e "$fixture/calls" ]
+reset_case
+sed "s/$(digest "$FIXTURE_ARCHIVE")/$(printf '%064d' 0)/g" "$fixture/manifest.good" > "$fixture/manifest"
+refused 'SHA-256 mismatch'
+[ ! -e "$fixture/calls" ]
 reset_case
 
 sha=$(printf '%064d' 0)

@@ -6,6 +6,23 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
+## Current acceptance slice: signed release manifests (2026-10-17)
+
+Owner-selected `P12-001` continuation. The owner confirmed no native signing
+credentials yet; Authenticode/notarization remain open without blocking keyless
+publisher verification.
+
+- [x] Record official Cosign v3.1.3/GitHub OIDC contracts and pins; bind all five archives to repository, tested commit, tag and version (ADR-0240).
+- [x] Sign and verify before publication; verify twelve uploaded assets. Installer signed mode checks publisher identity before archive download/execution and never falls back to unsigned mode.
+- [x] Exercise real upstream signature acceptance and tamper/wrong issuer/wrong identity rejection on Windows, plus rejection through the production installer. Add native Linux/macOS/Windows CI coverage.
+- [x] Pass 66 release/manifest tests, native Windows/Git Bash installer fixtures, real verifier tests, signature-guard falsification, 3,228 workspace tests (six existing opt-in ignores), formatting, strict Clippy, documentation and dependency policy.
+- [ ] Hosted repository-identity publication and public signed installation acceptance on Linux x86_64/ARM64, macOS ARM64 and Windows; restricted PATH/fresh-profile checks do not establish a clean VM or live-provider onboarding.
+- [ ] Continue atomic update/rollback and fresh-machine onboarding acceptance; no completion claim follows from signing alone.
+
+[Design](docs/adr/0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md),
+[research/evidence](docs/research/integrations/release-signing.md),
+[usage](docs/operations/install-and-release.md#pinned-prebuilt-first-install).
+
 ## Completed local slice: pinned prebuilt first installation (2026-10-17)
 
 First bounded `P12-001` / `P9-004` slice in the owner's competitive catch-up order.
@@ -13,12 +30,12 @@ First bounded `P12-001` / `P9-004` slice in the owner's competitive catch-up ord
 - [x] Add opt-in Bash and PowerShell first-install scripts using an exact official release, package version and supplied SHA-256, without Git/Rust/Node/Python.
 - [x] Bound downloads/decompression; verify before opening/executing; select one regular executable, check its version, preserve existing installations, and hand off PATH/setup/doctor through existing commands.
 - [x] Execute real archive fixtures, corrupt-hash guard falsification and a real public Windows archive install into an isolated directory without PATH/profile changes.
-- [x] Pass focused scripts, 61 release tests, all 3,228 workspace tests (six existing opt-in ignores), formatting, strict Clippy, six documentation tests/link checks and dependency policy. Wire native Bash/PowerShell CI; the new script revision's hosted results remain separate from local evidence.
+- [x] Pass focused scripts, 61 release tests, all 3,228 workspace tests (six existing opt-in ignores), formatting, strict Clippy, six documentation tests/link checks and dependency policy. Native Bash/PowerShell CI passed in all ten jobs for `0b7712d` ([run](https://github.com/props-nothing/jarvis-core/actions/runs/39070807329)); the signed continuation needs its own hosted evidence.
 
 Design and evidence: [ADR-0239](docs/adr/0239-prebuilt-installation-pins-the-release-and-digest.md),
 [research](docs/research/integrations/prebuilt-install.md),
-[usage](docs/operations/install-and-release.md#pinned-prebuilt-first-install-unsigned).
-Signed publisher verification, notarization, complete dependency notices/SBOM,
+[usage](docs/operations/install-and-release.md#pinned-prebuilt-first-install).
+At that slice, signed publisher verification, notarization, complete dependency notices/SBOM,
 atomic updates/schema rollback and clean Windows/macOS/Linux lifecycle remain
 open under `P12-001`. Website source bootstrap and ADR-0214 voice setup are unchanged.
 The public Windows archive also installed and ran both version commands with PATH
@@ -437,7 +454,7 @@ Order: `P8-018`–`P8-020` first (backup voice with no new account); `P8-022` ne
 
 - [~] `P9-002` Browser chat, settings, activity, approvals, memory and tool navigation exist. Continue user-flow/accessibility verification, canonical transcript browsing across browsers/devices and the remaining provider-specific setup work. A Tauri rewrite is not required.
 - [~] `P9-003` User service install/uninstall exists. Resolve documented service/manual-daemon ownership cases and verify native lifecycle; system-wide modes remain optional.
-- [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Publisher signatures, default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
+- [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Signed manifests are implemented in the opt-in path (ADR-0240); hosted publisher acceptance, default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
 - [ ] `P9-005` Signed native artifacts, complete dependency notices/SBOM, provenance, checksums and release notes.
 - [ ] `P9-006` Atomic update, schema preflight/backup, health checks, rollback, channels and version/split-brain diagnosis.
 - [ ] `P9-007` Clean native install/update/rollback/repair/uninstall without a development toolchain.
@@ -480,7 +497,7 @@ The completed installation/UI evidence is in [P9–P11 history](docs/history/tod
 
 Owner-requested on 2026-10-17 after the [competitive gap review](docs/research/competitive-gap-2026-10-17.md) against Hermes Agent and OpenClaw. This is the owner's named requirement for the demand-gated items it references; it orders existing IDs rather than duplicating them. Every item keeps the authority boundary: no new path lets a model, page, skill or channel grant itself permission. External APIs/providers still need an official-source research record first.
 
-- [~] `P12-001` **Install without a toolchain.** First slice: opt-in pinned unsigned prebuilt installation (ADR-0239). Still deliver the rest of `P9-004`–`P9-007`: signed packages, default install, onboarding acceptance, update and rollback. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
+- [~] `P12-001` **Install without a toolchain.** Opt-in prebuilt installation (ADR-0239) now verifies signed release manifests (ADR-0240); native signing credentials are not configured. Still deliver the rest of `P9-004`–`P9-007`: signed packages, default install, onboarding acceptance, update and rollback. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
 - [ ] `P12-002` **Owner decision: voice at first run.** ADR-0214 records the owner's choice to require ElevenLabs for guided setup; both rivals start without a voice key. Ask the owner whether to keep it. If changed, amend ADR-0214 and prove setup completes with voice skipped and voice can be added later from Settings. ADR-0214 says to revisit once a verified local voice adapter exists; `P8-018`–`P8-022` deliver that, so setup can then offer ElevenLabs, a local voice or skip.
 - [ ] `P12-003` **Skills chosen by meaning.** Replace or complement the 75% word-overlap match with retrieval that finds an approved skill phrased differently from the request. Acceptance: a measured owner question set where paraphrased requests select the right skill without raising false selections; skills still never grant authority (ADR-0117).
 - [ ] `P12-004` **Skills that improve after use.** After a run that used an approved skill and needed corrections, JARVIS proposes a revised version (a diff the owner approves or dismisses). Acceptance: revision is proposal-only, history is kept, and a dismissed revision never applies.
