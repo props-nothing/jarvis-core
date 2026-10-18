@@ -306,3 +306,13 @@ jobs:
       - name: Install signed public assets with a fresh home and restricted PATH
         shell: bash
         run: node scripts/test-published-install.mjs "$RELEASE_TAG" "$PACKAGE_VERSION"
+
+  verify-update:
+    name: Verify published update and rollback
+    needs: [source, draft]
+    if: ${{ !cancelled() && needs.draft.result == 'success' }}
+    uses: ./.github/workflows/update-acceptance.yml
+    with:
+      tag: ${{ needs.draft.outputs.tag }}
+      version: ${{ needs.draft.outputs.version }}
+      source_sha: ${{ needs.source.outputs.sha }}

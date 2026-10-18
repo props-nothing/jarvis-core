@@ -23,8 +23,15 @@ function run(program, args, timeout = 180000) {
 }
 function digest(file) { return createHash('sha256').update(fs.readFileSync(file)).digest('hex'); }
 try {
+  // Embedded ELF debug information can exceed the production 256 MiB limit.
+  // Strip only the disposable development copy, never a signed release artifact.
+  if (process.platform === 'linux') {
+    fs.chmodSync(target, 0o700);
+    const stripped = run('strip', [target]);
+    assert.equal(stripped.status, 0, stripped.stderr);
+  }
   const before = digest(target);
-  const result = run(binary, ['update', 'stage', tag, '0.1.0', '--dir', install], 600000);
+  const result = run(target, ['update', 'stage', tag, '0.1.0', '--dir', install], 600000);
   assert.equal(result.status, 0, result.stderr);
   const { stage, updater } = JSON.parse(result.stdout);
   const stageDir = path.join(install, '.jarvis-update', stage.id);

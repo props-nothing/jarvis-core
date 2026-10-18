@@ -92,7 +92,9 @@ try {
   assert.match(doctor.stdout, /config|configuration/);
   assert.equal(fs.existsSync(path.join(profile, 'config', 'jarvis.toml')), false, 'diagnosis does not perform onboarding');
   assert.equal(fs.existsSync(path.join(profile, 'data', 'jarvis.sqlite3')), false, 'diagnosis does not create canonical data');
-  const repeated = run(shell, installArgs);
+  // Windows PowerShell's cold error formatting/module discovery can exceed the
+  // ordinary CLI deadline even when the bootstrap refuses before downloading.
+  const repeated = run(shell, installArgs, windows ? 120000 : 30000);
   assert.notEqual(repeated.status, 0, 'first-install bootstrap must not replace an installation');
   assert.match(repeated.stderr, /already exists/);
   assert.equal(createHash('sha256').update(fs.readFileSync(program)).digest('hex'), before);

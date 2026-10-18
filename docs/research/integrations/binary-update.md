@@ -7,6 +7,42 @@ selected_sdk: "Rust 1.98.1; Cosign 3.1.3; reqwest 0.13.5; atomic-write-file 0.3.
 
 # Signed staging and offline binary activation
 
+## Native acceptance follow-up (2026-10-18)
+
+Live authority rechecked before implementing the native acceptance harness:
+
+| Contract | Exact official source | Version / operations |
+| --- | --- | --- |
+| systemd | https://www.freedesktop.org/software/systemd/man/latest/systemctl.html | 262 reference; user daemon-reload, enable/start/stop, show MainPID/ExecStart, is-active; runner version recorded by the gate |
+| launchd | https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html and https://raw.githubusercontent.com/apple-oss-distributions/launchd/main/man/launchctl.1 | LaunchAgent ProgramArguments, RunAtLoad, KeepAlive; load/unload/list; runner macOS version recorded |
+| Windows login launcher | https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys | HKCU Run executes at login; registration alone does not prove a running daemon |
+| PowerShell | https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process?view=powershell-5.1 | 5.1; inherited environment, hidden process launch; no administrator credential needed |
+| Node SQLite harness | https://raw.githubusercontent.com/nodejs/node/v24.19.0/doc/api/sqlite.md | Node 24.19.0; DatabaseSync, exec, prepared statements, close; disposable database sentinel only |
+| Test executable size | https://sourceware.org/binutils/docs/binutils/strip.html and https://raw.githubusercontent.com/apple-oss-distributions/cctools/main/man/strip.1 | Native strip removes debug symbols from a disposable unsigned development copy only; signed archives and candidates stay byte-for-byte intact |
+| GitHub | https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows and https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28 | Release calls reusable acceptance after publication with the exact tested source, tag and version; manual dispatch supports a pinned candidate; read-only permissions |
+
+The systemd repository `llms.txt` and Apple developer `llms.txt` returned 404;
+Microsoft's index and Node's HTML reference were inaccessible, so the official
+pages and versioned Node source above control. No relevant deprecation affecting
+the existing launcher was observed; launchctl load/unload are legacy operations
+and their actual behavior must pass the native runner gate.
+
+No provider credentials, external effects or live onboarding are involved. Tests
+use a provider-free profile and authenticate status/health with its generated
+local credential, never printed or uploaded. Service tests require a disposable
+GitHub-hosted runner and an absent JARVIS profile/definition/registry entry before
+mutation. Local execution uses a portable temporary profile only. Manager and
+client commands have timeouts; failure is never converted to a skipped pass.
+
+Discriminating checks: distinct old/new executable digests; official signature
+reverification; actual manager-launched process and authenticated readiness before
+and after activation/rollback; active-daemon exclusion; pending-journal startup
+refusal; retained pre-update snapshot; database writes after activation retained
+by rollback; service-definition preservation and foreign-definition refusal.
+The Windows test executes and inspects the registered login command without
+claiming a reboot/logon test. Hosted runners are native machines with development
+tools, not clean-machine onboarding or Authenticode/notarization evidence.
+
 ## Question and authority
 
 Verify an exact public release, stage one executable, and replace it while keeping
