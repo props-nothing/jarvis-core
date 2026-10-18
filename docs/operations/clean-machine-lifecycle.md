@@ -40,6 +40,9 @@ In Windows PowerShell, replace the named values with the selected public release
 test-host details. The report directory must be new. Setup prompts for your keys.
 
 ```powershell
+$baseTag = 'ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0'
+$candidateTag = 'ci-a176e79843a22eae2802d97aafba74a0bf6e282f'
+$newReportDirectory = Join-Path $env:USERPROFILE 'jarvis-clean-report'
 .\test-clean-lifecycle.ps1 -Disposable `
   -BaseTag $baseTag -CandidateTag $candidateTag `
   -BaseVersion '0.1.0' -CandidateVersion '0.1.0' `
@@ -49,6 +52,9 @@ test-host details. The report directory must be new. Setup prompts for your keys
 ## Run on macOS or Linux
 
 ```bash
+BASE_TAG=ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0
+CANDIDATE_TAG=ci-a176e79843a22eae2802d97aafba74a0bf6e282f
+NEW_REPORT_DIRECTORY="$HOME/jarvis-clean-report"
 bash test-clean-lifecycle.sh --disposable \
   "$BASE_TAG" "$CANDIDATE_TAG" 0.1.0 0.1.0 "$NEW_REPORT_DIRECTORY"
 ```
@@ -70,6 +76,9 @@ must restore the previous digest without changing the database. Repeated uninsta
 must remove the executable/service/PATH entry while preserving configuration and data.
 No key values or conversation text are written to the report. The profile and recovery
 evidence remain private on the test host, and failed runs remain available for diagnosis.
+Report the OS version/architecture, the two release tags, `state.txt`, and the exact
+failed step/error if any. These results can be recorded without sharing keys or the
+profile directory.
 
 Also observe interactive first run with hidden terminal key entry, restart/logon and
 post-logon readiness on each platform. The script executes Windows's persisted Run
@@ -78,6 +87,12 @@ of treating optional adapters as installed. Linux ARM64/Intel macOS need their o
 runtime records if included in a release support claim.
 
 ## Evidence ledger
+
+The pinned candidate [release](https://github.com/props-nothing/jarvis-core/releases/tag/ci-a176e79843a22eae2802d97aafba74a0bf6e282f)
+passes all native quality, package/publication, public-install and extended lifecycle
+jobs in [Release 39127486126](https://github.com/props-nothing/jarvis-core/actions/runs/39127486126).
+That establishes the downloadable candidate; the clean-machine rows below still
+require the owner's live reports.
 
 | Target | Image/no-toolchain inventory | Live onboarding | Lifecycle driver | Reboot/logon |
 | --- | --- | --- | --- | --- |

@@ -16,19 +16,21 @@
 | Pinned prebuilt first install | Opt-in scripts below verify a signed manifest for an exact release/version before downloading the selected archive. Explicit SHA-256 mode supports historical unsigned releases. No development toolchain; curl 8.4+ required. |
 | CI archives | Platform workflow artifacts and automatically published prereleases with a Sigstore-signed manifest after all five packages pass; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
 | Signed binary update and rollback | Explicit staging, compatible offline activation, retained-binary rollback and recovery; native service/readiness gates pass on Windows x86_64, macOS ARM64 and Linux x86_64. See the [runbook](binary-update.md). |
-| Native OS signing and clean-machine lifecycle | Authenticode/notarization credentials are not configured. Clean-machine onboarding and complete repair/uninstall remain open. |
+| Repair and removal | `update repair` restores the selected retained image; a separate helper's `uninstall` checks stopped ownership and cleanup before removal. Both preserve profile/update evidence. [Runbook](binary-update.md#repair-and-removal). |
+| Native OS signing and clean-machine lifecycle | Authenticode/notarization credentials are not configured. Hosted repair/removal passes; [owner-run clean-machine tests](clean-machine-lifecycle.md) with interactive keys remain open. |
 
 The separate product website serves working source-building scripts at `https://www.jarvisd.dev/install.sh` and `https://www.jarvisd.dev/install.ps1`, from `frontend/public/`. These clone/update a protected source checkout, build with the committed lockfile, then delegate per-user installation to `jarvis install`. They are not signed-binary downloaders. Source builds require Git, Rust via rustup and [native build tools](../development/getting-started.md#build-from-source); the installed executable needs no Rust. Build/install failure exits nonzero, without setup or a success claim. A successful installer prints interactive and noninteractive setup commands; it does not collect keys or run onboarding through piped stdin. New setup requires an ElevenLabs key and explicit folder grants before starting the assistant. Do not infer signed distribution or clean-machine readiness from this source path.
 
 ## Current CI Archive Flow
 
 Current accepted signed release (2026-10-18):
-[`b9d8773`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0)
+[`a176e79`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-a176e79843a22eae2802d97aafba74a0bf6e282f)
 passes all 14 native quality jobs, five packages, twelve-asset publication, four
-public signed-install checks and Windows/macOS/Linux service/update/rollback
-acceptance in [Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427).
+public signed-install checks and Windows/macOS/Linux service/update/rollback,
+repair and repeated uninstall acceptance in
+[Release 39127486126](https://github.com/props-nothing/jarvis-core/actions/runs/39127486126).
 Maintenance protocol 2 requires exact migration history; the real signed mismatch
-refusal also preserves the executable/database and leaves the old daemon ready.
+refusal recorded for baseline `b9d8773` preserves the executable/database and leaves the old daemon ready.
 See the [update runbook](binary-update.md) for compatibility and platform limits.
 
 The [CI workflow](../../.github/workflows/ci.yml) runs native quality checks on Windows, macOS and Linux plus dependency policy. After a successful **push** run on this repository's `main`, the [release workflow](../../.github/workflows/release.yml) packages that run's exact commit, not whichever commit happens to be newest when packaging starts. Failed/cancelled CI, pull requests and foreign repositories cannot trigger packaging. Documentation-only main pushes also follow this flow.

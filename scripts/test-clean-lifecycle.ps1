@@ -69,11 +69,11 @@ if ($ModelKeyFile) { $initArguments += @('--api-key-file',$ModelKeyFile) }
 if ($VoiceKeyFile) { $initArguments += @('--voice-key-file',$VoiceKeyFile) }
 Invoke-Jarvis $initArguments
 $configFile = Join-Path $config 'config.toml'
-$configBefore = Digest $configFile
 Invoke-Jarvis @('service','install')
 Start-Jarvis
 $null = Invoke-Jarvis @('ask','Reply with the single word READY. Do not use tools or make changes.')
 Invoke-Jarvis @('stop')
+$configBefore = Digest $configFile
 $initial = Digest $binary
 $stage = (Invoke-Jarvis @('update','stage',$CandidateTag,$CandidateVersion,'--dir',$install)) | ConvertFrom-Json
 $helper = $stage.updater

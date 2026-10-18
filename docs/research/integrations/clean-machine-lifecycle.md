@@ -64,3 +64,42 @@ The shell drivers therefore support interactive `init` without key files; option
 batch key-file arguments remain available. They copy the verified activated candidate
 into a separate maintenance helper, so an older compatible baseline helper need not
 already implement repair. No provider protocol or onboarding policy was changed.
+
+## Implementation evidence (2026-10-18)
+
+- Local Windows workspace: 3,267 tests passed, six existing opt-in ignores; 23
+  updater tests and 74 script/documentation tests passed. Formatting, strict
+  workspace/all-targets/all-features Clippy, workflow lint and script syntax passed.
+  The subsequent Windows PATH canonicalization passed its five focused tests and
+  strict Clippy, and is covered by the native lifecycle below.
+- Falsification: removing the uninstall target-digest guard made
+  `removal_refuses_unknown_bytes_wrong_profile_and_active_owners` fail at the expected
+  unknown-image assertion. Restoring the exact source restored the pass. Injected
+  service cleanup failure preserves the definition and returns failure.
+- [Native lifecycle 39126418196](https://github.com/props-nothing/jarvis-core/actions/runs/39126418196)
+  passed Windows x86_64, macOS ARM64 and Linux x86_64 using source `82e27be` and the
+  real compatible signed `b9d8773` candidate. All three summaries report signed
+  candidate repair, missing/damaged previous-image repair, executable removal,
+  repeat uninstall, snapshot verification, data-preserving rollback, recovery,
+  service preservation/removal and authenticated readiness. Windows checked seven
+  distinct daemon lifecycles; macOS and Linux checked nine. Windows also checked
+  removal of the exact installation's persisted PATH entry.
+- These are hosted developer runners and provider-free profiles. The clean drivers'
+  syntax and developer-host refusal checks pass; their positive live-provider runs
+  and actual logon observations remain for the owner's clean machines.
+- Final implementation `a176e79843a22eae2802d97aafba74a0bf6e282f` passed all fourteen
+  quality jobs in [CI 39126454548](https://github.com/props-nothing/jarvis-core/actions/runs/39126454548).
+  Its `.gitattributes` rule preserves the Unix clean-driver line endings on Windows.
+- [Release 39127486126](https://github.com/props-nothing/jarvis-core/actions/runs/39127486126)
+  completed successfully: five packages, twelve signed-release assets, four public
+  first-install jobs and all three extended lifecycle jobs against published
+  `ci-a176e79843a22eae2802d97aafba74a0bf6e282f`. Release metadata independently
+  confirms exact target SHA, public prerelease/non-draft state and twelve assets.
+  The same seven Windows/nine Unix startup counts and all repair/removal/data
+  preservation assertions pass. Intel macOS is cross-built; its runtime and Linux
+  ARM64 update/repair remain outside these three lifecycle jobs.
+- The owner self-test pins signed `b9d8773` as its baseline and signed `a176e79` as
+  candidate, both version 0.1.0. Its actual two-signed-build/live-onboarding run is
+  still pending. The Windows driver captures configuration after initial startup,
+  matching Unix and allowing legitimate first-start initialization before comparing
+  preservation across maintenance; syntax and developer-host refusal checks pass.

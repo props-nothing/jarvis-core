@@ -35,6 +35,17 @@ and the five packages, four public-install checks and three update gates in
 [Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427)
 passed. See the [runbook](docs/operations/binary-update.md) and [bounded evidence](docs/research/integrations/binary-update.md).
 
+The lifecycle continuation adds exact retained-image repair and guarded removal
+under [ADR-0243](docs/adr/0243-repair-and-removal-preserve-installation-evidence.md).
+All three [hosted native lifecycle jobs](https://github.com/props-nothing/jarvis-core/actions/runs/39126418196)
+pass missing/damaged binary repair, repeated removal and data preservation.
+[Release `a176e79`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-a176e79843a22eae2802d97aafba74a0bf6e282f)
+also passes all fourteen quality jobs, five packages, signed publication, four public
+install checks and all three extended native lifecycle gates in
+[Release 39127486126](https://github.com/props-nothing/jarvis-core/actions/runs/39127486126). The
+owner will perform the [clean-machine self-test](docs/operations/clean-machine-lifecycle.md),
+entering provider keys in hidden prompts. Those reports remain required.
+
 `P12-001` still needs clean-machine onboarding/install/repair/uninstall, native
 certificate signing and complete notices/SBOM. Hosted runners with provider-free
 profiles do not close those gates. Schema-changing updates and release channels

@@ -180,5 +180,12 @@ The previous executable is a distinct source build; both package versions are
 0.1.0. Hosted runners contain development tools, and Windows executes the persisted
 login command without a reboot/logon. This is not acceptance of schema-changing
 updates, two different signed package versions, clean-machine onboarding,
-complete binary repair/uninstall, Linux ARM64 updates, Intel macOS runtime or
+Linux ARM64 updates, Intel macOS runtime or
 native Authenticode/notarization. Startup remains explicit after offline settlement.
+
+The ADR-0243 continuation at `a176e79` passes all fourteen quality jobs and all
+[release gates](https://github.com/props-nothing/jarvis-core/actions/runs/39127486126),
+including signed candidate repair, missing/damaged previous-image repair, repeated
+binary/service/PATH removal and unchanged current data on Windows, macOS ARM64 and
+Linux x86_64. Clean-machine/live-onboarding evidence remains in the separate
+[owner self-test ledger](clean-machine-lifecycle.md#evidence-ledger).

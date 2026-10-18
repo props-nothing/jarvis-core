@@ -21,6 +21,22 @@ evidence remain pending; repository discovery found no configured self-hosted
 runners or test secrets. The owner chose to run the clean-machine tests personally
 and enter keys in hidden prompts; those reports will close the gate.
 
+Local verification: 3,267 workspace tests, 23 updater tests and 74 script/docs
+tests pass, plus formatting, strict Clippy, workflow lint and guard falsification.
+All three extended hosted-native lifecycle jobs pass in
+[run 39126418196](https://github.com/props-nothing/jarvis-core/actions/runs/39126418196):
+seven Windows and nine macOS/Linux daemon lifecycles, both repair paths, repeated
+binary/service/PATH removal, and unchanged current data. This is implementation
+evidence, not a checked clean-machine item.
+
+Published candidate for the owner's self-test:
+[`a176e79843a22eae2802d97aafba74a0bf6e282f`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-a176e79843a22eae2802d97aafba74a0bf6e282f).
+All fourteen [quality jobs](https://github.com/props-nothing/jarvis-core/actions/runs/39126454548)
+and [Release 39127486126](https://github.com/props-nothing/jarvis-core/actions/runs/39127486126)
+pass: five packages, twelve public assets, four public installation checks and three
+extended native lifecycle gates. Baseline `b9d8773` and candidate `a176e79` are pinned
+in the guide. They share package version 0.1.0; a two-version upgrade is not claimed.
+
 Native certificate signing still needs owner-provided credentials. Schema-changing
 updates, release channels and whole-profile recovery remain separate work.
 
