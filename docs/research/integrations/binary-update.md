@@ -17,7 +17,9 @@ Live authority rechecked before implementing the native acceptance harness:
 | launchd | https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html and https://raw.githubusercontent.com/apple-oss-distributions/launchd/main/man/launchctl.1 | LaunchAgent ProgramArguments, RunAtLoad, KeepAlive; load/unload/list; runner macOS version recorded |
 | Windows login launcher | https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys | HKCU Run executes at login; registration alone does not prove a running daemon |
 | PowerShell | https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process?view=powershell-5.1 | 5.1; inherited environment, hidden process launch; no administrator credential needed |
+| Windows process evidence | https://learn.microsoft.com/en-us/powershell/module/cimcmdlets/get-ciminstance?view=powershell-5.1, https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process and https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/convertto-json?view=powershell-5.1 | Local Win32_Process name filter, ExecutablePath/CommandLine/ProcessId; explicit JSON array input; current-user process inspection, no remote authentication or provider credential |
 | Node SQLite harness | https://raw.githubusercontent.com/nodejs/node/v24.19.0/doc/api/sqlite.md | Node 24.19.0; DatabaseSync, exec, prepared statements, close; disposable database sentinel only |
+| Node native path resolution | https://raw.githubusercontent.com/nodejs/node/v24.19.0/doc/api/fs.md | Node 24.19.0; realpathSync.native for the Windows process identity comparison; local 8.3/long-path regression reproduced, no network/authentication |
 | Test executable size | https://sourceware.org/binutils/docs/binutils/strip.html and https://raw.githubusercontent.com/apple-oss-distributions/cctools/main/man/strip.1 | Native strip removes debug symbols from a disposable unsigned development copy only; signed archives and candidates stay byte-for-byte intact |
 | GitHub | https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows and https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28 | Release calls reusable acceptance after publication with the exact tested source, tag and version; manual dispatch supports a pinned candidate; read-only permissions |
 
@@ -49,6 +51,11 @@ service owners. `ServicePlan::build` now resolves existing Windows executable
 paths consistently and removes only the drive-path verbatim prefix for launcher
 rendering. UNC paths retain their canonical prefix. The test checks both the
 definition and registration commands; it failed before the fix and passes after.
+The native harness also resolves CIM's executable path with `realpathSync.native`
+before comparing it with the temporary installation path: Windows may report a
+long path for an 8.3 input. Locally, plain `realpathSync` preserved the short spelling;
+the native variant resolved both spellings to the same existing executable.
+An empty process result remains an explicit failed assertion, not a skipped check.
 
 The first native macOS run found that `launchctl load -w` returned success for an
 already-loaded agent after a clean stop, but did not restart it. The authenticated

@@ -57,7 +57,7 @@ function ok(program, args, timeout) {
 }
 function cli(args) { return ok(target, [...args, ...scoped]); }
 function hash(file) { return createHash('sha256').update(fs.readFileSync(file)).digest('hex'); }
-function samePath(a, b) { return fs.realpathSync(a).replace(/^\\\\\?\\/, '').toLowerCase() === fs.realpathSync(b).replace(/^\\\\\?\\/, '').toLowerCase(); }
+function samePath(a, b) { return fs.realpathSync.native(a).replace(/^\\\\\?\\/, '').toLowerCase() === fs.realpathSync.native(b).replace(/^\\\\\?\\/, '').toLowerCase(); }
 const registry = String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
 function ps(script) { return ok('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]); }
 async function readiness() {
