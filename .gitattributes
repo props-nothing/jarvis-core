@@ -4,3 +4,4 @@
 /scripts/test-package-release.sh text eol=lf
 /scripts/install-prebuilt.sh text eol=lf
 /scripts/test-install-prebuilt.sh text eol=lf
+/scripts/test-clean-lifecycle.sh text eol=lf
