@@ -105,3 +105,110 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ```
+
+## Optional embedded speech
+
+The `local-tts` feature includes ort 2.0.0-rc.12 (MIT OR Apache-2.0) and misaki-rs 0.6.0 (MIT), with its eSpeak feature disabled. Original Misaki pronunciation resources are Apache-2.0 (https://github.com/hexgrad/misaki). This is an independent Rust port, not historical JARVIS prototype code.
+
+Kokoro-82M v1.0 weights (Apache-2.0) and ONNX Runtime 1.31.0 (MIT) are downloaded at first use, not bundled. The runtime LICENSE and ThirdPartyNotices.txt are kept with its verified native library in the profile cache. See [embedded speech research](docs/research/integrations/embedded-speech.md) for exact sources, pins and platform limits.
+
+misaki-rs license:
+
+```text
+MIT License
+
+Copyright (c) 2026 Michele Yin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+ort MIT option:
+
+```text
+MIT License
+
+Copyright (c) 2023-2026 pyke.io
+Copyright (c) 2020 Nicolas Bigaouette
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+language-tokenizer 0.1.0 (transitive through misaki-rs), with an exact-version license exception:
+
+        DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+                    Version 2, December 2004
+
+Copyright (C) 2026 Pavlov Danil <savannstm@gmail.com>
+
+Everyone is permitted to copy and distribute verbatim or modified
+copies of this license document, and changing it is allowed as long
+as the name is changed.
+
+            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+
+TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+0. You just DO WHAT THE FUCK YOU WANT TO.
+
+
+## Optional description-based voice runtime
+
+VoxCPM 2.0.3 and OpenBMB VoxCPM2 are Apache-2.0:
+https://github.com/OpenBMB/VoxCPM/tree/2.0.3 and
+https://huggingface.co/openbmb/VoxCPM2/tree/32279effe8c19989596f05d353d1447f51d9e915 .
+
+The optional Windows inference installation uses SoundFile 0.13.1 (BSD-3-Clause)
+with its platform wheel's libsndfile DLL (LGPL-2.1-or-later). Its bundled license
+is retained under `_soundfile_data/COPYING`; the runtime is installed separately
+and is not linked into JARVIS executables. Upstream source and notices:
+https://github.com/bastibe/python-soundfile/tree/0.13.1 and
+https://github.com/libsndfile/libsndfile .
+The optional Windows installer fetches wheels from their publishers and preserves
+package license files in the private environment; it does not bundle that runtime
+or model into the Rust executable. The inference dependency lock is
+`scripts/voice-designer-windows.lock`; model digests are in
+`crates/jarvis-voice/src/description_assets.json`. PyTorch 2.10.0 CPU is distributed
+under its BSD-style license, with third-party notices inside its wheel. VoiceStudio
+was an interaction reference only; no AGPL VoiceStudio application code was copied.
+
+Optional Windows GPU installation uses the separately downloaded AMD ROCm 7.2.1
+SDK packages and PyTorch 2.9.1 ROCm wheels, or official PyTorch 2.10.0 CUDA 12.8
+wheels for NVIDIA. Publisher archives and SHA-256 digests are pinned in
+`scripts/voice-designer-amd.lock`, `scripts/voice-designer-rocm.lock` and
+`scripts/voice-designer-nvidia.lock`; common packages are pinned separately in
+`scripts/voice-designer-common.lock`. Bundled AMD/LLVM and NVIDIA CUDA library
+notices remain inside the installed packages. These dependencies are not embedded
+in or redistributed with the Rust executable; GPU drivers are owner-installed.
+See [runtime sources and acceptance](docs/research/integrations/voice-gpu.md).

@@ -261,6 +261,14 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0242](0242-binary-activation-retains-evidence-and-requires-offline-ownership.md) | Binary activation retains evidence and requires offline ownership | Accepted |
 | [0243](0243-repair-and-removal-preserve-installation-evidence.md) | Repair and removal preserve installation evidence | Accepted |
 | [0244](0244-website-installation-pins-a-signed-prebuilt-release.md) | Website installation pins a signed prebuilt release (amends ADR-0239) | Accepted |
+| [0245](0245-speech-fallback-selects-a-provider-before-audio-starts.md) | Speech fallback selects a provider before audio starts (amends ADR-0138) | Accepted |
+| [0246](0246-embedded-speech-loads-only-pinned-local-assets.md) | Embedded speech loads only pinned local assets | Accepted |
+| [0247](0247-voice-previews-and-saved-voices-use-the-same-validated-adapters.md) | Voice previews and saved voices use the same validated adapters | Accepted |
+| [0248](0248-local-voice-design-saves-a-versioned-blend-recipe.md) | Local voice design saves a versioned blend recipe | Accepted |
+| [0249](0249-description-designed-voices-retain-the-generated-reference.md) | Description-designed voices retain the generated reference | Accepted |
+| [0250](0250-local-voice-gpu-failure-retries-in-an-isolated-cpu-runtime.md) | Local voice GPU failure retries in an isolated CPU runtime | Accepted |
+
+| [0251](0251-local-voice-streams-retain-admission-until-completion.md) | Local voice streams retain admission until completion | Accepted |
 
 ## Historical identifier aliases
 

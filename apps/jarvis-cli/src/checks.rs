@@ -249,7 +249,9 @@ async fn daemon(paths: &AppPaths, credential: Option<&str>) -> Vec<Finding> {
     )];
     let voice_set = settings::key_state(paths, settings::SecretKind::Voice)
         .is_ok_and(|state| state.state == "set");
-    if voice_set && let Some(credential) = credential {
+    if (voice_set || !loaded.config().daemon().speech_providers().is_empty())
+        && let Some(credential) = credential
+    {
         let reply = reqwest::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(5))
@@ -282,7 +284,7 @@ async fn daemon(paths: &AppPaths, credential: Option<&str>) -> Vec<Finding> {
             _ => finding(
                 "voice",
                 Level::Warn,
-                "a voice key is saved but the running daemon does not have it yet",
+                "speech is configured but the running daemon does not have it yet",
                 Some("jarvis restart"),
             ),
         });
@@ -309,9 +311,76 @@ fn environment() -> Option<Finding> {
     ))
 }
 
+// Synthesis is opt-in through --live: each provider receives only this fixed probe.
+async fn speech(paths: &AppPaths) -> Vec<Finding> {
+    let Ok(loaded) = ConfigStore::from_paths(paths).load() else {
+        return Vec::new();
+    };
+    let providers = match jarvisd::speech_providers(loaded.config().daemon(), paths.cache()) {
+        Ok(providers) => providers,
+        Err(error) => {
+            return vec![finding(
+                "speech",
+                Level::Fail,
+                error.to_string(),
+                Some("check daemon.speech.providers and its key files"),
+            )];
+        }
+    };
+    let mut findings = Vec::new();
+    for (id, provider) in providers {
+        match tokio::time::timeout(Duration::from_secs(300), provider.prepare()).await {
+            Ok(Ok(())) => {}
+            result => {
+                let message = match result {
+                    Ok(Err(error)) => error.to_string(),
+                    _ => "speech asset preparation timed out".into(),
+                };
+                findings.push(finding(
+                    "speech",
+                    Level::Fail,
+                    format!("{id}: {message}"),
+                    Some("check embedded speech assets and allow_download"),
+                ));
+                continue;
+            }
+        }
+        let result = tokio::time::timeout(Duration::from_secs(25), async {
+            jarvis_voice::collect_audio(provider.open("Systems online.", None).await?).await
+        })
+        .await;
+        findings.push(match result {
+            Ok(Ok(audio)) => finding(
+                "speech",
+                Level::Ok,
+                format!(
+                    "{id}: made {} bytes of {} audio",
+                    audio.bytes().len(),
+                    audio.content_type()
+                ),
+                None,
+            ),
+            Ok(Err(error)) => finding(
+                "speech",
+                Level::Fail,
+                format!("{id}: {error}"),
+                Some("check the speech provider, model, voice and key file"),
+            ),
+            Err(_) => finding(
+                "speech",
+                Level::Fail,
+                format!("{id}: speech probe timed out"),
+                Some("check speech provider availability and local model readiness"),
+            ),
+        });
+    }
+    findings
+}
+
 /// Runs every live check.
 pub async fn run(paths: &AppPaths, credential: Option<&str>) -> Vec<Finding> {
     let mut out = vec![model(paths).await, folders(paths)];
+    out.extend(speech(paths).await);
     out.extend(environment());
     out.extend(docker(paths));
     out.extend(daemon(paths, credential).await);

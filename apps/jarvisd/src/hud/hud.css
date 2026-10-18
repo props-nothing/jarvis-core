@@ -16,6 +16,36 @@
 }
 :root[data-accent="ice"] { --cyan: #7dd3fc; --accent-rgb: 125, 211, 252; --accent-2-rgb: 129, 140, 248; --line-hot: #4a6577; }
 :root[data-accent="amethyst"] { --cyan: #c4b5fd; --accent-rgb: 196, 181, 253; --accent-2-rgb: 240, 128, 200; --line-hot: #665b80; }
+.voice-form { min-width: 0; margin: 0; padding: 0; border: 0; }
+.voice-picker-row, .voice-backup-row { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.voice-picker-row .voice-field, .voice-backup-row .voice-field { flex: 1; min-width: 190px; }
+.voice-editor-grid, .voice-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 18px 0; }
+.voice-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-bottom: 12px; }
+.voice-field label { color: var(--text); font-weight: 500; }
+.voice-field input, .voice-field select, .voice-field textarea { width: 100%; min-width: 0; min-height: 40px; padding: 8px 10px; font: inherit; color: var(--text); background: var(--control-bg); border: 1px solid var(--line); border-radius: var(--control-radius); }
+.voice-field textarea { resize: vertical; }
+.voice-field :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.voice-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.voice-preview-audio { width: 100%; max-width: 480px; margin: 8px 0; }
+.voice-routes { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
+.voice-library .help { max-width: 70ch; }
+.voice-blend { margin: 18px 0; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.voice-blend h4 { margin: 0; color: var(--text); }
+.voice-description { margin: 18px 0; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.voice-description h4 { margin: 0; color: var(--text); }
+.voice-description textarea { resize: vertical; min-height: 70px; }
+.voice-options { margin: 12px 0; border-top: 1px solid var(--line); padding-top: 12px; }
+.voice-options summary { cursor: pointer; color: var(--dim); font-weight: 500; padding: 4px 0; }
+.voice-options summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.voice-options[open] summary { margin-bottom: 14px; color: var(--text); }
+.voice-options > button + button { margin-left: 10px; }
+.voice-progress { color: var(--cyan); padding: 10px 12px; border-left: 2px solid var(--cyan); background: var(--surface); }
+.voice-description .help.bad { padding: 10px 12px; border-left: 2px solid var(--red); }
+.voice-blend .voice-editor-grid { margin: 12px 0 0; }
+.voice-blend input[type="range"] { padding: 0; border: 0; background: transparent; accent-color: var(--cyan); cursor: pointer; }
+.voice-blend-readout { margin: 4px 0 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+.voice-form > button + button { margin-left: 10px; }
+@media (max-width: 700px) { .voice-editor-grid, .voice-controls { grid-template-columns: minmax(0, 1fr); gap: 4px; } .voice-backup-row button { flex: 1; } }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -1405,6 +1435,7 @@ button.danger:hover:not(:disabled) { box-shadow: 0 0 18px rgba(250, 129, 123, 0.
 #settings :is(input:not([type="checkbox"]), select, textarea):focus { outline: 0; border-color: rgba(var(--accent-rgb), 0.85); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14); }
 #settings input[type="password"] { letter-spacing: 0.08em; }
 #settings textarea { font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+#settings .voice-library textarea { font-family: var(--display); }
 #settings input::placeholder, #settings textarea::placeholder { color: rgba(147, 166, 177, 0.6); }
 #settings select { padding-right: 36px; }
 
@@ -1617,3 +1648,5 @@ button.danger:hover:not(:disabled) { box-shadow: 0 0 18px rgba(250, 129, 123, 0.
   #settings .integration-chevron { grid-column: 2; grid-row: 1 / 3; }
 }
 #settings .card .card, #settings .spanel-body div > .card { margin-top: 18px; }
+
+.voice-warm-progress { width: min(100%, 480px); height: 6px; accent-color: var(--cyan); }

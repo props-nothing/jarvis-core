@@ -86,6 +86,7 @@ mod tool_pipeline;
 mod tool_search;
 mod transcript_budget;
 mod trigger_service;
+mod voice_library;
 
 #[cfg(test)]
 mod approval_fixture;
@@ -474,6 +475,13 @@ async fn daemon_main(arguments: Vec<String>) -> ExitCode {
 /// restart) can say why instead of "exited at startup".
 pub const STARTUP_ERROR_FILE: &str = "startup-error.txt";
 
+/// Whether a startup report means an existing daemon owns the profile and may still be initializing.
+/// Clients can wait for readiness without weakening singleton ownership or hiding other failures.
+#[must_use]
+pub fn startup_error_is_existing_owner(reason: &str) -> bool {
+    reason.trim() == SingletonError::AlreadyRunning.to_string()
+}
+
 /// Writes why startup failed: the error and its causes, on one line. Best effort: a failure to write it must not hide the original one.
 fn record_startup_error(root: Option<&Path>, error: &DaemonError) {
     use std::error::Error as _;
@@ -503,8 +511,8 @@ struct Services {
     /// grant must fail the daemon rather than the first tool call.
     tools: Option<Arc<crate::tool_pipeline::ToolPipeline>>,
     processes: Option<Arc<crate::process_tools::ProcessTools>>,
-    /// The speech provider, resolved at start so a missing key file fails the daemon rather than the first sentence.
-    speech: Option<Arc<jarvis_voice::ElevenLabsSpeech>>,
+    /// Validated speech destinations and the profile's editable voices.
+    voice_library: Arc<voice_library::VoiceRuntime>,
     /// Phone calls to the owner and their records (`ADR-0200`).
     phone: Arc<crate::phone_service::PhoneService>,
     /// The runs recovery just settled as interrupted, which may get one continuation once runs can be driven.
@@ -785,7 +793,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     // function because the live provider adds a file read and a credential, and `start` was already at the
     // length where clippy's `too_many_lines` signals a function carrying a second responsibility.
     let executor = compose_executor(daemon)?;
-    let speech = compose_speech(daemon)?;
+    let voice_library = compose_voice_library(daemon, &paths)?;
     let phone = compose_phone(&paths, &database, &mcp_access);
 
     // The tool pipeline and MCP host are composed HERE, for the same reason the executor is: an unusable
@@ -833,7 +841,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
             executor,
             tools,
             processes,
-            speech,
+            voice_library,
             phone,
             interrupted,
             mcp_snapshot,
@@ -932,24 +940,123 @@ fn compose_model_provider(
 /// The key is read once here and goes straight into the adapter, whose `Debug` redacts it; it is in no log line or
 /// error. A missing or blank file stops the daemon at startup (the same policy as the model key), so a configured
 /// voice that cannot speak is found at once and not on the first sentence.
+#[cfg(test)]
 fn compose_speech(
     daemon: &jarvis_storage::DaemonConfig,
-) -> Result<Option<Arc<jarvis_voice::ElevenLabsSpeech>>, DaemonError> {
-    let Some(key_ref) = daemon.speech_api_key_ref() else {
+    cache: &std::path::Path,
+) -> Result<Option<Arc<dyn jarvis_voice::SpeechProvider>>, DaemonError> {
+    let providers =
+        speech_providers(daemon, cache).map_err(|error| DaemonError::Speech(error.to_string()))?;
+    if providers.is_empty() {
         return Ok(None);
-    };
-    let key = fs::read_to_string(key_ref)
-        .map_err(|_| DaemonError::Speech("the key file could not be read".to_owned()))?;
-    let speech = jarvis_voice::ElevenLabsSpeech::new(
-        jarvis_voice::ELEVENLABS_BASE_URL,
-        daemon
-            .speech_voice_id()
-            .unwrap_or(jarvis_voice::DEFAULT_VOICE_ID),
-        daemon.speech_model().unwrap_or(jarvis_voice::DEFAULT_MODEL),
-        &key,
-    )
-    .map_err(|error| DaemonError::Speech(error.to_string()))?;
+    }
+    let speech = jarvis_voice::FallbackSpeech::new(providers)
+        .map_err(|error| DaemonError::Speech(error.to_string()))?;
     Ok(Some(Arc::new(speech)))
+}
+
+fn compose_voice_library(
+    daemon: &jarvis_storage::DaemonConfig,
+    paths: &jarvis_storage::AppPaths,
+) -> Result<Arc<voice_library::VoiceRuntime>, DaemonError> {
+    let providers =
+        speech_providers(daemon, paths.cache()).map_err(|e| DaemonError::Speech(e.to_string()))?;
+    voice_library::VoiceRuntime::new(paths, providers)
+        .map(Arc::new)
+        .map_err(|e| DaemonError::Speech(e.to_string()))
+}
+
+/// Construct configured providers for daemon routing and independent live probes.
+///
+/// # Errors
+/// Invalid settings or unreadable key files produce redacted startup errors.
+#[allow(clippy::type_complexity)]
+pub fn speech_providers(
+    daemon: &jarvis_storage::DaemonConfig,
+    cache: &std::path::Path,
+) -> Result<Vec<(String, Arc<dyn jarvis_voice::SpeechProvider>)>, jarvis_voice::SpeechError> {
+    use jarvis_voice::{ElevenLabsSpeech, OpenAiCompatibleSpeech, SpeechProvider};
+    #[cfg(not(feature = "local-tts"))]
+    let _ = cache;
+    let read_key = |path: &std::path::Path| {
+        fs::read_to_string(path)
+            .map_err(|_| jarvis_voice::SpeechError::Settings("the key file could not be read"))
+    };
+    if daemon.speech_providers().is_empty() {
+        let Some(key_ref) = daemon.speech_api_key_ref() else {
+            return Ok(Vec::new());
+        };
+        let key = read_key(key_ref)?;
+        let speech = ElevenLabsSpeech::new(
+            jarvis_voice::ELEVENLABS_BASE_URL,
+            daemon
+                .speech_voice_id()
+                .unwrap_or(jarvis_voice::DEFAULT_VOICE_ID),
+            daemon.speech_model().unwrap_or(jarvis_voice::DEFAULT_MODEL),
+            &key,
+        )?;
+        return Ok(vec![("elevenlabs".into(), Arc::new(speech))]);
+    }
+    daemon
+        .speech_providers()
+        .iter()
+        .map(|config| {
+            let key = config.key_ref.as_deref().map(read_key).transpose()?;
+            let speech: Arc<dyn SpeechProvider> = match config.kind.as_str() {
+                "elevenlabs" => Arc::new(ElevenLabsSpeech::new(
+                    config
+                        .base_url
+                        .as_deref()
+                        .unwrap_or(jarvis_voice::ELEVENLABS_BASE_URL),
+                    config
+                        .voice
+                        .as_deref()
+                        .unwrap_or(jarvis_voice::DEFAULT_VOICE_ID),
+                    config
+                        .model
+                        .as_deref()
+                        .unwrap_or(jarvis_voice::DEFAULT_MODEL),
+                    key.as_deref().unwrap_or(""),
+                )?),
+                "openai-compatible" => Arc::new(OpenAiCompatibleSpeech::new(
+                    config.base_url.as_deref().unwrap_or(""),
+                    config.voice.as_deref().unwrap_or(""),
+                    config.model.as_deref().unwrap_or(""),
+                    key.as_deref(),
+                )?),
+                "local-voxcpm2" => Arc::new(jarvis_voice::DescriptionSpeech::new(
+                    config
+                        .runtime_dir
+                        .as_deref()
+                        .ok_or(jarvis_voice::SpeechError::Settings(
+                            "local voice design needs an installed runtime directory",
+                        ))?,
+                )?),
+                "embedded-kokoro" => {
+                    #[cfg(feature = "local-tts")]
+                    {
+                        Arc::new(jarvis_voice::EmbeddedSpeech::new(
+                            cache,
+                            config.voice.as_deref().unwrap_or("af_heart"),
+                            config.allow_download.unwrap_or(true),
+                        )?)
+                    }
+                    #[cfg(not(feature = "local-tts"))]
+                    {
+                        return Err(jarvis_voice::SpeechError::Settings(
+                            "embedded-kokoro requires a build with --features local-tts",
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(jarvis_voice::SpeechError::Settings(
+                        "unknown speech provider kind",
+                    ));
+                }
+            };
+            Ok((config.id.clone(), speech))
+        })
+        .collect()
 }
 
 /// Builds the run executor from the daemon configuration.
@@ -1863,7 +1970,7 @@ impl HttpTransport {
             executor,
             tools,
             processes,
-            speech,
+            voice_library,
             interrupted,
             mcp_snapshot,
             mcp_access,
@@ -1887,9 +1994,8 @@ impl HttpTransport {
         if let Some(processes) = processes {
             state = state.with_processes(processes);
         }
-        if let Some(speech) = speech {
-            state = state.with_speech(speech);
-        }
+        state = state.with_speech(voice_library.clone());
+        state = state.with_voice_library(voice_library);
         // Google sign-in lives beside the settings: it reads its client id and secret from the same saved configuration.
         match google_account::GoogleAccount::shared(settings.paths()) {
             Ok(google) => state = state.with_google(google),
@@ -2534,6 +2640,54 @@ shutdown_timeout_seconds = 30
         jarvis_storage::Config::parse_with_environment(&document, Vec::<(String, String)>::new())
             .unwrap_or_else(|error| panic!("the fixture document must load: {error}"))
             .into_config()
+    }
+
+    #[test]
+    fn speech_composition_uses_local_without_keys_and_explicit_order_over_legacy() {
+        let explicit = "[[daemon.speech.providers]]\nid = 'local'\nkind = 'openai-compatible'\nbase_url = 'http://127.0.0.1:8880/v1'\nmodel = 'kokoro'\nvoice = 'af_heart'";
+        let missing =
+            std::env::temp_dir().join(format!("missing-speech-key-{}", jarvis_core::scratch_tag()));
+        let path =
+            serde_json::to_string(&missing.to_string_lossy()).unwrap_or_else(|e| panic!("{e}"));
+        let config = config_with_policy(&format!("speech_api_key_ref = {path}\n{explicit}"));
+        let providers = speech_providers(config.daemon(), &std::env::temp_dir())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].0, "local");
+        assert_eq!(providers[0].1.describe().model, "kokoro");
+        let legacy = config_with_policy(&format!("speech_api_key_ref = {path}"));
+        let error = speech_providers(legacy.daemon(), &std::env::temp_dir())
+            .err()
+            .unwrap_or_else(|| panic!("missing key must fail"));
+        assert!(
+            !error
+                .to_string()
+                .contains(&missing.to_string_lossy().to_string())
+        );
+        assert!(
+            compose_speech(config_with_policy("").daemon(), &std::env::temp_dir())
+                .unwrap_or_else(|e| panic!("{e}"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn embedded_speech_composition_requires_the_feature_without_loading_assets() {
+        let config = config_with_policy(
+            "[[daemon.speech.providers]]\nid = 'local'\nkind = 'embedded-kokoro'\nallow_download = false",
+        );
+        let result = speech_providers(config.daemon(), &std::env::temp_dir());
+        #[cfg(feature = "local-tts")]
+        {
+            let providers = result.unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(providers[0].1.describe().provider, "embedded-kokoro");
+        }
+        #[cfg(not(feature = "local-tts"))]
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| error.to_string().contains("--features local-tts"))
+        );
     }
 
     #[test]

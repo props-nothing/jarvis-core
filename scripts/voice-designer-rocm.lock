@@ -1,0 +1,2 @@
+# Official pure-Python ROCm loader is distributed as source only.
+rocm @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz --hash=sha256:9084902eaa69213a00a90784ad89e6e5fe73c702df0cc6cc3a70d777c7a6142b

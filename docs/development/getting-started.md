@@ -26,6 +26,11 @@ cd jarvis-core
 cargo build --release -p jarvis-cli --locked
 ```
 
+Normal CLI and daemon builds include embedded local speech (`local-tts`). Use
+`--no-default-features` only for an intentional cloud/server-only build; it cannot
+start an `embedded-kokoro` profile. Compilation does not download model/runtime
+assets. See [embedded speech setup](../user/speech.md#embedded-speech-without-a-server).
+
 Run `./target/release/jarvis` on Linux/macOS or `.\target\release\jarvis.exe` on Windows. New onboarding chooses a model, requires your ElevenLabs API key privately and asks for explicit folder grants; only successful setup starts the daemon and opens the console. Existing profiles skip new setup. No `jarvis` command is on your PATH until you install it or add the build directory. The website source installers run only `jarvis install` and print the setup handoff, including absolute key-file flags for unattended use; they never run setup through piped stdin. The [quick start](../user/quick-start.md) explains both options.
 
 Docker is optional for containerized code execution; Tesseract is optional for OCR. A working model server is needed for actual model answers, but the default offline tests use scripted models and do not need provider credentials.
@@ -65,7 +70,7 @@ Since Phase 1 the product slices below were built ahead of their original phases
 
 Later slices also delivered user-level installation and service registration, managed MCP abilities, app connections, Telegram, approved skills, time-zone schedules, triggers, model routing, spend guards and full-text search over granted files. The owner's outbound-call path through an ElevenLabs agent has been run live. ACP coding delegation has recorded real ordinary/background Codex tasks, a dependency-install/check smoke and Windows Codex cancellation with descendant termination and durable state. The current default is in-place queued work, with opt-in worktrees and no imposed total deadline. Complete owner website delivery, fresh sign-in and other-provider/platform cancellation remain open; TODO records the native lifecycle gate separately. Host execution is not confinement.
 
-Still pending or deliberately parked: the multi-step durable workflow engine, native Microsoft/GitHub connectors, browser-independent local voice, the desktop client, public signed installers and the complete server profile. Google's unused push/watch framework remains tracked for retirement (`P5-005b`). See [TODO.md](../../TODO.md) for specific remaining checks rather than treating an entire phase as shipped.
+Still pending or deliberately parked: the multi-step durable workflow engine, native Microsoft/GitHub connectors, local speech recognition, the desktop client, public signed installers and the complete server profile. Local synthesis, editable voice settings and preset blending are available; remaining native-platform and disconnected-network acceptance is tracked separately. Google's unused push/watch framework remains tracked for retirement (`P5-005b`). See [TODO.md](../../TODO.md) for specific remaining checks rather than treating an entire phase as shipped.
 
 The next implementation task is the first unchecked item in [TODO.md](../../TODO.md).
 
@@ -548,3 +553,9 @@ Use [the migration inventory](../migration/python-prototype.md) to translate beh
 - leave no required server/watch process running unintentionally
 - leave the first incomplete TODO task explicit
 - do not commit unless the user asks
+
+### Backup and local speech providers
+
+See [speech configuration](../user/speech.md) for the ordered cloud/local-server
+provider list, failure behavior and `jarvis doctor --live` synthesis probes.
+Embedded local synthesis and a changed guided-setup requirement remain separate work.

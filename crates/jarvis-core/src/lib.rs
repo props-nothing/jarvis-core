@@ -18,7 +18,14 @@ mod timestamp;
 #[cfg(any(unix, windows))]
 mod transport;
 mod update;
+mod voice;
 mod work_admission;
+
+pub use voice::{SavedVoice, VoiceChannels, VoiceLibrary, VoiceQuality, VoiceSettings};
+mod voice_design;
+pub use voice_design::{VoiceBlend, VoiceBlendSource};
+mod designed_voice;
+pub use designed_voice::DesignedVoice;
 
 pub use id::UpdateId;
 pub use update::{BinaryImage, BinaryUpdate, BinaryUpdateState, UpdateCompatibility};

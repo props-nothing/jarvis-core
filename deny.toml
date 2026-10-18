@@ -38,6 +38,14 @@ include-dev = true
 unused-allowed-license = "allow"
 private = { ignore = true }
 
+# misaki-rs's tokenizer publishes WTFPL v2 in LICENSE.md. The reviewed license is
+# permissive; keep this allowance scoped to this exact dependency/version.
+# See docs/research/integrations/embedded-speech.md.
+[[licenses.exceptions]]
+name = "language-tokenizer"
+version = "=0.1.0"
+allow = ["WTFPL"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

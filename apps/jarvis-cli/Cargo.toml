@@ -11,9 +11,13 @@ license.workspace = true
 name = "jarvis"
 path = "src/main.rs"
 
+[features]
+default = ["local-tts"]
+local-tts = ["jarvisd/local-tts"]
+
 [dependencies]
 # One executable (ADR-0144): jarvis daemon runs the daemon, so a person installs a single file.
-jarvisd = { path = "../jarvisd" }
+jarvisd = { path = "../jarvisd", default-features = false }
 jarvis-voice.workspace = true
 rpassword = "=7.5.4"
 jarvis-core.workspace = true

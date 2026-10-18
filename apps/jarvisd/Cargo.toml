@@ -7,6 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+default = ["local-tts"]
+local-tts = ["jarvis-voice/local-tts"]
+
 [dependencies]
 serde_yaml_ng.workspace = true
 # Routing lives here, not in a domain crate: ADR-0011 places the HTTP gateway in the

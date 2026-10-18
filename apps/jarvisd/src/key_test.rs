@@ -126,9 +126,11 @@ async fn check_voice(base: &str, voice: &str, model: &str, key: &str) -> Outcome
         Ok(Err(jarvis_voice::SpeechError::KeyRejected)) => Outcome::problem(
             "ElevenLabs rejected the key, or the key is not allowed to make speech. Check it in your ElevenLabs account.",
         ),
-        Ok(Err(jarvis_voice::SpeechError::OverLimit)) => Outcome::problem(
-            "ElevenLabs says this account is out of credit or rate limited. The key itself may be fine.",
-        ),
+        Ok(Err(jarvis_voice::SpeechError::OverLimit | jarvis_voice::SpeechError::OutOfCredit)) => {
+            Outcome::problem(
+                "ElevenLabs says this account is out of credit or rate limited. The key itself may be fine.",
+            )
+        }
         Ok(Err(jarvis_voice::SpeechError::Provider(status))) => Outcome::problem(&format!(
             "ElevenLabs answered with status {status}. Check the voice and the model in this tab."
         )),

@@ -7,15 +7,33 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+local-tts = ["dep:ort", "dep:misaki-rs", "dep:sha2", "dep:zip", "dep:tar", "dep:flate2", "dep:atomic-write-file"]
+
 [dependencies]
+jarvis-core.workspace = true
+base64.workspace = true
+process-wrap.workspace = true
+ort = { workspace = true, optional = true }
+misaki-rs = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+atomic-write-file = { workspace = true, optional = true }
+futures-util.workspace = true
+serde.workspace = true
 bytes = { workspace = true }
 reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "sync", "rt", "process", "io-util"] }
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time", "test-util"] }
 
 [lints]
 workspace = true

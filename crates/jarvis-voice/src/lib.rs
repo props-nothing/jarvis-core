@@ -1,4 +1,4 @@
-//! Speech synthesis: text in, audio out, through a hosted provider; and phone calls through the same provider's agents ([`phone`]).
+//! Provider-neutral speech synthesis through configured cloud or local servers; and `ElevenLabs` agent calls ([`phone`]).
 //!
 //! The provider's key is held here, in the daemon, and never reaches a browser or any other client: the page asks the
 //! daemon to speak and gets audio back. See `docs/research/integrations/elevenlabs.md` (the text-to-speech section) for
@@ -7,7 +7,25 @@
 use std::fmt;
 use std::time::Duration;
 
-use bytes::Bytes;
+mod description;
+mod design;
+pub use description::{DESIGN_MODEL_REVISION, DescriptionSpeech};
+#[cfg(feature = "local-tts")]
+mod embedded;
+mod fallback;
+mod openai;
+mod settings;
+pub use design::{BLEND_MODEL_REVISION, default_voice_blend};
+mod speech;
+#[cfg(feature = "local-tts")]
+pub use embedded::EmbeddedSpeech;
+pub use fallback::FallbackSpeech;
+pub use openai::OpenAiCompatibleSpeech;
+pub use settings::{VoiceControl, validate_voice, voice_controls, voice_models};
+pub use speech::{
+    DesignEvent, DesignFuture, DesignStream, PCM_CONTENT_TYPE, SpeechAudio, SpeechDescription,
+    SpeechExecution, SpeechFuture, SpeechProvider, SpeechStatus, SpeechStream, collect_audio,
+};
 
 pub mod phone;
 
@@ -49,9 +67,15 @@ pub enum SpeechError {
     /// The provider refused the key (a 401 or 403).
     #[error("the speech provider rejected the key; check the key file")]
     KeyRejected,
-    /// The account is out of credit or over a rate limit (a 402 or 429).
+    /// The provider reported a rate limit (HTTP 429).
     #[error("the speech provider says the account is out of credit or rate limited")]
     OverLimit,
+    /// Local bounded admission is full; retry without treating the provider as unhealthy.
+    #[error("the speech engine is busy; wait for current speech to finish")]
+    Busy,
+    /// The provider explicitly reported exhausted credit (HTTP 402).
+    #[error("the speech provider account is out of credit")]
+    OutOfCredit,
     /// The provider answered with another failure status.
     #[error("the speech provider answered with status {0}")]
     Provider(u16),
@@ -70,26 +94,6 @@ impl fmt::Debug for ApiKey {
     }
 }
 
-/// Audio produced for one request.
-#[derive(Clone, Debug)]
-pub struct SpeechAudio {
-    bytes: Bytes,
-}
-
-impl SpeechAudio {
-    /// The encoded audio (MP3).
-    #[must_use]
-    pub fn bytes(&self) -> &Bytes {
-        &self.bytes
-    }
-
-    /// The media type of [`Self::bytes`].
-    #[must_use]
-    pub const fn content_type(&self) -> &'static str {
-        "audio/mpeg"
-    }
-}
-
 /// Speech synthesis through the text-to-speech endpoint of `ElevenLabs`.
 #[derive(Clone, Debug)]
 pub struct ElevenLabsSpeech {
@@ -98,6 +102,7 @@ pub struct ElevenLabsSpeech {
     voice_id: String,
     model_id: String,
     key: ApiKey,
+    settings: jarvis_core::VoiceSettings,
 }
 
 impl ElevenLabsSpeech {
@@ -136,24 +141,21 @@ impl ElevenLabsSpeech {
             ));
         }
         let base = base_url.trim_end_matches('/');
-        if !(base.starts_with("https://") || base.starts_with("http://"))
-            || base.contains(['?', '#', ' '])
-        {
+        let endpoint = reqwest::Url::parse(base)
+            .map_err(|_| SpeechError::Settings("invalid speech origin"))?;
+        if endpoint.path() != "/" {
             return Err(SpeechError::Settings(
-                "the address must be an http(s) origin",
+                "ElevenLabs requires an origin without a path",
             ));
         }
-        let client = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| SpeechError::Settings("the HTTP client could not be built"))?;
+        let client = speech::http_client(&endpoint)?;
         Ok(Self {
             client,
             base_url: base.to_owned(),
             voice_id: voice_id.to_owned(),
             model_id: model_id.to_owned(),
             key: ApiKey(key.to_owned()),
+            settings: jarvis_core::VoiceSettings::default(),
         })
     }
 
@@ -175,17 +177,7 @@ impl ElevenLabsSpeech {
     ///
     /// Returns a [`SpeechError`]: bad text, an unreachable or refusing provider, or unusable audio.
     pub async fn synthesize(&self, text: &str) -> Result<SpeechAudio, SpeechError> {
-        let mut stream = self.open(text, None).await?;
-        let mut audio: Vec<u8> = Vec::new();
-        while let Some(chunk) = stream.next_chunk().await? {
-            audio.extend_from_slice(&chunk);
-        }
-        if audio.is_empty() {
-            return Err(SpeechError::BadAudio);
-        }
-        Ok(SpeechAudio {
-            bytes: Bytes::from(audio),
-        })
+        collect_audio(self.open(text, None).await?).await
     }
 
     /// Starts synthesis and returns once the provider has accepted it, with the audio still arriving.
@@ -205,18 +197,15 @@ impl ElevenLabsSpeech {
         text: &str,
         previous_text: Option<&str>,
     ) -> Result<SpeechStream, SpeechError> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err(SpeechError::EmptyText);
-        }
-        if text.chars().count() > MAX_TEXT_CHARS {
-            return Err(SpeechError::TooLong);
-        }
+        let text = speech::validate_text(text)?;
         let url = format!(
             "{}/v1/text-to-speech/{}/stream",
             self.base_url, self.voice_id
         );
         let mut body = serde_json::json!({ "text": text, "model_id": self.model_id });
+        if self.settings != jarvis_core::VoiceSettings::default() {
+            body["voice_settings"] = serde_json::json!(self.settings);
+        }
         if let Some(previous) = previous_text
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -235,57 +224,31 @@ impl ElevenLabsSpeech {
             .send()
             .await
             .map_err(|_| SpeechError::Unreachable)?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(match status.as_u16() {
-                401 | 403 => SpeechError::KeyRejected,
-                402 | 429 => SpeechError::OverLimit,
-                other => SpeechError::Provider(other),
-            });
-        }
-        Ok(SpeechStream {
-            response,
-            received: 0,
-        })
+        speech::mp3_response(response)
     }
 }
 
-/// Audio on its way from the provider.
-#[derive(Debug)]
-pub struct SpeechStream {
-    response: reqwest::Response,
-    received: usize,
-}
-
-impl SpeechStream {
-    /// The next piece of audio, or `None` when the provider has finished.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SpeechError::Unreachable`] when the connection fails part-way, and [`SpeechError::BadAudio`] when the audio
-    /// would exceed [`MAX_AUDIO_BYTES`], which ends the stream rather than letting it grow without bound.
-    pub async fn next_chunk(&mut self) -> Result<Option<Bytes>, SpeechError> {
-        match self
-            .response
-            .chunk()
-            .await
-            .map_err(|_| SpeechError::Unreachable)?
-        {
-            None => Ok(None),
-            Some(chunk) => {
-                self.received += chunk.len();
-                if self.received > MAX_AUDIO_BYTES {
-                    return Err(SpeechError::BadAudio);
-                }
-                Ok(Some(chunk))
-            }
+impl SpeechProvider for ElevenLabsSpeech {
+    fn configured(
+        &self,
+        voice: &jarvis_core::SavedVoice,
+    ) -> Result<std::sync::Arc<dyn SpeechProvider>, SpeechError> {
+        validate_voice("elevenlabs", voice)?;
+        let mut adapter = Self::new(&self.base_url, &voice.voice, &voice.model, &self.key.0)?;
+        adapter.client = self.client.clone();
+        adapter.settings = voice.settings.clone();
+        Ok(std::sync::Arc::new(adapter))
+    }
+    fn describe(&self) -> SpeechDescription {
+        SpeechDescription {
+            id: "elevenlabs".into(),
+            provider: "elevenlabs".into(),
+            voice: self.voice_id.clone(),
+            model: self.model_id.clone(),
         }
     }
-
-    /// The MIME type of the audio.
-    #[must_use]
-    pub const fn content_type(&self) -> &'static str {
-        "audio/mpeg"
+    fn open<'a>(&'a self, text: &'a str, previous_text: Option<&'a str>) -> SpeechFuture<'a> {
+        Box::pin(ElevenLabsSpeech::open(self, text, previous_text))
     }
 }
 

@@ -88,6 +88,37 @@ pub const DEFAULT_HTTP_PORT: u16 = 8765;
 /// The public ntfy server, used when `daemon.push_server` is unset.
 pub const DEFAULT_PUSH_SERVER: &str = "https://ntfy.sh";
 
+/// Ordered sentence-speech providers, composed by the daemon.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeechConfig {
+    /// Explicit order; empty preserves legacy `ElevenLabs` settings.
+    #[serde(default)]
+    pub providers: Vec<SpeechProviderConfig>,
+}
+
+/// One owner-configured speech destination. Credentials are file references only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeechProviderConfig {
+    /// Unique plain identifier shown by speech status.
+    pub id: String,
+    /// elevenlabs, openai-compatible, embedded-kokoro or local-voxcpm2.
+    pub kind: String,
+    /// API base including /v1 for OpenAI-compatible servers.
+    pub base_url: Option<String>,
+    /// Absolute key-file path; optional for local servers.
+    pub key_ref: Option<PathBuf>,
+    /// Voice identifier; `ElevenLabs` may use its default.
+    pub voice: Option<String>,
+    /// Model identifier; `ElevenLabs` may use its default.
+    pub model: Option<String>,
+    /// Embedded assets may be downloaded on first use; defaults to true.
+    pub allow_download: Option<bool>,
+    /// Private installed worker environment; used only by local-voxcpm2.
+    pub runtime_dir: Option<PathBuf>,
+}
+
 /// Daemon lifecycle configuration.
 ///
 /// Not `Copy`, because `executor_model` holds a name and a `String` cannot be copied. `Clone`
@@ -258,6 +289,9 @@ pub struct DaemonConfig {
     /// The provider's speech model, or `None` for the built-in default. Needs [`Self::speech_api_key_ref`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     speech_model: Option<String>,
+    /// Explicit providers take precedence over legacy speech fields.
+    #[serde(default)]
+    speech: SpeechConfig,
     /// Whether a scheduled task's result is shown as a desktop notification when no console is open. Unset means yes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     notifications: Option<bool>,
@@ -467,6 +501,12 @@ impl DaemonConfig {
         self.speech_model.as_deref()
     }
 
+    /// Explicit speech providers; empty means use legacy settings.
+    #[must_use]
+    pub fn speech_providers(&self) -> &[SpeechProviderConfig] {
+        &self.speech.providers
+    }
+
     /// The Google OAuth client id, if Google sign-in is configured.
     #[must_use]
     pub fn google_client_id(&self) -> Option<&str> {
@@ -651,6 +691,7 @@ impl Default for DaemonConfig {
             speech_api_key_ref: None,
             speech_voice_id: None,
             speech_model: None,
+            speech: SpeechConfig::default(),
             notifications: None,
             resume_interrupted: None,
             push_topic: None,
@@ -1125,6 +1166,73 @@ impl Config {
     /// with no consumer) is refused.
     fn validate_speech(&self) -> Result<(), ConfigError> {
         let daemon = &self.daemon;
+        if daemon.speech.providers.len() > 8 {
+            return Err(ConfigError::InvalidSpeech);
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for provider in &daemon.speech.providers {
+            if provider.id.is_empty()
+                || provider.id.len() > 64
+                || !provider
+                    .id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+                || !ids.insert(&provider.id)
+                || provider
+                    .key_ref
+                    .as_ref()
+                    .is_some_and(|path| !path.is_absolute())
+                || !matches!(
+                    provider.kind.as_str(),
+                    "elevenlabs" | "openai-compatible" | "embedded-kokoro" | "local-voxcpm2"
+                )
+                || (provider.kind != "local-voxcpm2" && provider.runtime_dir.is_some())
+                || (provider.kind == "local-voxcpm2"
+                    && (provider
+                        .runtime_dir
+                        .as_ref()
+                        .is_none_or(|path| !path.is_absolute())
+                        || provider.base_url.is_some()
+                        || provider.key_ref.is_some()
+                        || provider.voice.is_some()
+                        || provider
+                            .model
+                            .as_deref()
+                            .is_some_and(|model| model != "voxcpm2")))
+                || (provider.kind != "embedded-kokoro" && provider.allow_download.is_some())
+                || (provider.kind == "embedded-kokoro"
+                    && (provider.base_url.is_some()
+                        || provider.key_ref.is_some()
+                        || provider
+                            .model
+                            .as_deref()
+                            .is_some_and(|model| model != "kokoro-v1.0")
+                        || provider
+                            .voice
+                            .as_deref()
+                            .is_some_and(|voice| !matches!(voice, "af_heart" | "bm_george"))))
+                || (provider.kind == "elevenlabs" && provider.key_ref.is_none())
+                || (provider.kind == "openai-compatible"
+                    && [
+                        provider.base_url.as_ref(),
+                        provider.voice.as_ref(),
+                        provider.model.as_ref(),
+                    ]
+                    .iter()
+                    .any(Option::is_none))
+                || [&provider.voice, &provider.model, &provider.base_url]
+                    .iter()
+                    .any(|value| {
+                        value.as_ref().is_some_and(|value| {
+                            value.is_empty()
+                                || value.len() > 2048
+                                || value.chars().any(char::is_control)
+                        })
+                    })
+            {
+                return Err(ConfigError::InvalidSpeech);
+            }
+        }
         match &daemon.speech_api_key_ref {
             Some(path) if !path.is_absolute() => Err(ConfigError::InvalidSpeech),
             None if daemon.speech_voice_id.is_some() || daemon.speech_model.is_some() => {
@@ -1522,10 +1630,9 @@ pub enum ConfigError {
     /// The Telegram token path was not absolute.
     #[error("daemon.telegram_token_ref must be an absolute path")]
     InvalidTelegramKey,
-    /// The speech settings were unusable: a relative key path, or a voice or model with no key.
+    /// Speech settings had invalid provider entries or unusable legacy key references.
     #[error(
-        "daemon.speech_api_key_ref must be an absolute path, and daemon.speech_voice_id and daemon.speech_model \
-         need it"
+        "speech requires at most eight uniquely named providers with a known kind, required model/voice/base and absolute key references; legacy voice/model settings require speech_api_key_ref"
     )]
     InvalidSpeech,
     /// A code sandbox value was blank, oversized, contained a control character, or the image had whitespace.
@@ -1720,6 +1827,7 @@ fn reject_unknown_keys(table: &Table, version: u32) -> Result<(), ConfigError> {
                 "speech_api_key_ref",
                 "speech_voice_id",
                 "speech_model",
+                "speech",
                 "notifications",
                 "resume_interrupted",
                 "push_topic",
@@ -2058,7 +2166,7 @@ fn inspect_config_file(path: &Path) -> Result<ConfigFileState, ConfigError> {
     }
 }
 
-fn reject_unsafe_write_endpoint(path: &Path) -> Result<(), ConfigError> {
+pub(crate) fn reject_unsafe_write_endpoint(path: &Path) -> Result<(), ConfigError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(ConfigError::SymbolicLink),
         Ok(metadata) if !metadata.is_file() => Err(ConfigError::NotFile),
@@ -2080,7 +2188,7 @@ fn read_bounded_document(path: &Path) -> Result<String, ConfigError> {
     String::from_utf8(bytes).map_err(|_| ConfigError::InvalidEncoding)
 }
 
-fn stage_document(path: &Path, bytes: &[u8]) -> Result<AtomicWriteFile, ConfigError> {
+pub(crate) fn stage_document(path: &Path, bytes: &[u8]) -> Result<AtomicWriteFile, ConfigError> {
     let mut file = open_atomic_file(path)?;
     file.write_all(bytes)
         .map_err(|error| config_io("write", &error))?;
@@ -3071,6 +3179,74 @@ shutdown_timeout_seconds = 20
                 .speech_api_key_ref()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn speech_provider_lists_round_trip_and_refuse_ambiguous_configuration() {
+        let provider = "[[daemon.speech.providers]]\nid = 'local'\nkind = 'openai-compatible'\nbase_url = 'http://127.0.0.1:8880/v1'\nmodel = 'kokoro'\nvoice = 'af_heart'\n";
+        let parse = |extra: &str| {
+            Config::parse_with_environment(
+                &format!("{V1_CONFIG}\n{extra}"),
+                Vec::<(String, String)>::new(),
+            )
+        };
+        let loaded = parse(provider).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(loaded.config().daemon().speech_providers().len(), 1);
+        let encoded = toml::to_string(loaded.config()).unwrap_or_else(|e| panic!("{e}"));
+        let reopened = Config::parse_with_environment(&encoded, Vec::<(String, String)>::new())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            reopened.config().daemon().speech_providers(),
+            loaded.config().daemon().speech_providers()
+        );
+        for invalid in [
+            format!("{provider}{provider}"),
+            provider.replace("'local'", "'bad id'"),
+            provider.replace("'openai-compatible'", "'unknown'"),
+            provider.replace("voice = 'af_heart'", ""),
+            format!("{provider}key_ref = 'relative.key'"),
+            format!("{provider}api_key = 'never-inline'"),
+        ] {
+            assert!(parse(&invalid).is_err(), "invalid provider accepted");
+        }
+        let too_many = (0..9)
+            .map(|i| provider.replace("'local'", &format!("'local{i}'")))
+            .collect::<String>();
+        assert!(parse(&too_many).is_err());
+        let embedded = "[[daemon.speech.providers]]\nid = 'local'\nkind = 'embedded-kokoro'\nvoice = 'af_heart'\nallow_download = false\n";
+        assert!(parse(embedded).is_ok());
+        let root = if cfg!(windows) {
+            "C:/voice-runtime"
+        } else {
+            "/voice-runtime"
+        };
+        let designer = format!(
+            "[[daemon.speech.providers]]\nid = 'designer'\nkind = 'local-voxcpm2'\nruntime_dir = '{root}'\n"
+        );
+        assert!(parse(&designer).is_ok());
+        for invalid in [
+            designer.replace(root, "relative"),
+            designer.replace(&format!("runtime_dir = '{root}'"), ""),
+            format!("{designer}base_url = 'https://example.test'"),
+            format!("{designer}key_ref = '{root}/key'"),
+            format!("{designer}allow_download = true"),
+            format!("{designer}model = 'other'"),
+            format!("{designer}voice = 'other'"),
+            format!("{embedded}runtime_dir = '{root}'"),
+        ] {
+            assert!(
+                parse(&invalid).is_err(),
+                "invalid designer configuration accepted"
+            );
+        }
+        for invalid in [
+            format!("{embedded}base_url = 'http://127.0.0.1:8880'"),
+            format!("{embedded}model = 'arbitrary-model'"),
+            embedded.replace("af_heart", "../../other"),
+            format!("{provider}allow_download = true"),
+        ] {
+            assert!(parse(&invalid).is_err());
+        }
     }
 
     /// Push needs a topic ntfy accepts and a server that is https, or http on this machine; anything else fails closed.

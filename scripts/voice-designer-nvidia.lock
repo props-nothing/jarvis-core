@@ -1,0 +1,4 @@
+# NVIDIA CUDA 12.8; CPython 3.12 / Windows x64.
+-r voice-designer-common.lock
+torch @ https://download-r2.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp312-cp312-win_amd64.whl --hash=sha256:fbde8f6a9ec8c76979a0d14df21c10b9e5cab6f0d106a73ca73e2179bc597cae
+torchaudio @ https://download-r2.pytorch.org/whl/cu128/torchaudio-2.10.0%2Bcu128-cp312-cp312-win_amd64.whl --hash=sha256:9a890dfbc7a3301f5ce7930f3ce452841f0c34e51686609628e99ed52c5cc775

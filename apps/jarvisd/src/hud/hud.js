@@ -82,6 +82,150 @@
     });
   }
 
+  // ---- bounded PCM playback ----------------------------------------------------------------------------------
+  // A small Audio-like handle shared by previews and queued Console sentences.
+  function pcmPlayer(signal, onPlaying) {
+    var Context = window.AudioContext || window.webkitAudioContext;
+    if (!Context) throw new Error("This browser does not support local streaming playback");
+    var ctx = new Context(), analyser = ctx.createAnalyser(); analyser.fftSize = 256; analyser.connect(ctx.destination);
+    var queue = [], sources = new Set(), total = 0, carry = null, nextAt = 0, started = false, ended = false, stopped = false, announced = false;
+    var resolveDone, rejectDone, resolveFirst, rejectFirst;
+    var handle = { pcm: true, context: ctx, analyser: analyser, onplaying: null, onended: null, onerror: null };
+    handle.finished = new Promise(function (resolve, reject) { resolveDone = resolve; rejectDone = reject; }); handle.finished.catch(function () {});
+    handle.first = new Promise(function (resolve, reject) { resolveFirst = resolve; rejectFirst = reject; }); handle.first.catch(function () {});
+    function cleanup() { if (signal) signal.removeEventListener("abort", abort); ctx.close().catch(function () {}); }
+    function finish() {
+      if (!stopped && ended && !queue.length && !sources.size) { stopped = true; cleanup(); resolveDone(); if (handle.onended) handle.onended(); }
+    }
+    function schedule(bytes) {
+      var count = bytes.length / 2, buffer = ctx.createBuffer(1, count, 48000), values = buffer.getChannelData(0), view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      for (var i = 0; i < count; i++) values[i] = view.getInt16(i * 2, true) / 32768;
+      var source = ctx.createBufferSource(); source.buffer = buffer; source.connect(analyser); sources.add(source);
+      source.onended = function () { sources.delete(source); source.disconnect(); finish(); };
+      nextAt = Math.max(nextAt, ctx.currentTime + 0.04); source.start(nextAt); nextAt += buffer.duration;
+      if (!announced) { announced = true; if (onPlaying) onPlaying(); if (handle.onplaying) handle.onplaying(); }
+    }
+    handle.push = function (chunk) {
+      if (stopped || ended) throw new Error("Audio arrived after completion");
+      total += chunk.length; if (total > 96000 * 60) throw new Error("Oversized PCM audio");
+      if (carry !== null) { var joined = new Uint8Array(chunk.length + 1); joined[0] = carry; joined.set(chunk, 1); chunk = joined; carry = null; }
+      if (chunk.length % 2) { carry = chunk[chunk.length - 1]; chunk = chunk.subarray(0, chunk.length - 1); }
+      for (var at = 0; at < chunk.length; at += 96000) {
+        var piece = chunk.slice(at, Math.min(at + 96000, chunk.length));
+        if (started) schedule(piece); else queue.push(piece);
+        resolveFirst();
+      }
+    };
+    handle.end = function () { if (!total || carry !== null) throw new Error("Truncated PCM audio"); ended = true; finish(); };
+    handle.play = async function () {
+      if (stopped) throw new Error("Playback stopped");
+      await ctx.resume(); if (stopped) return;
+      started = true; queue.splice(0).forEach(schedule); finish();
+    };
+    handle.fail = function (error) {
+      if (stopped) return; stopped = true; queue = [];
+      sources.forEach(function (source) { source.onended = null; source.stop(); source.disconnect(); }); sources.clear();
+      cleanup(); rejectDone(error); rejectFirst(error); if (handle.onerror) handle.onerror(error);
+    };
+    function abort() { handle.fail(new DOMException("Playback stopped", "AbortError")); }
+    handle.pause = abort;
+    if (signal) { signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort(); }
+    return handle;
+  }
+  function pcmBlob(parts, length) {
+    var header = new ArrayBuffer(44), view = new DataView(header);
+    function word(at, value) { for (var i = 0; i < value.length; i++) view.setUint8(at + i, value.charCodeAt(i)); }
+    word(0, "RIFF"); view.setUint32(4, 36 + length, true); word(8, "WAVEfmt "); view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, 48000, true); view.setUint32(28, 96000, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true); word(36, "data"); view.setUint32(40, length, true);
+    return new Blob([header].concat(parts), {type:"audio/wav"});
+  }
+  async function readPcm(response, player, retain) {
+    var reader = response.body.getReader(), parts = [], length = 0;
+    try {
+      while (true) { var result = await reader.read(); if (result.done) break; player.push(result.value); length += result.value.length; if (retain) parts.push(result.value); }
+      player.end(); return retain ? pcmBlob(parts, length) : null;
+    } catch (error) { await reader.cancel().catch(function () {}); player.fail(error); throw error; }
+  }
+  async function readDesign(response, onChunk) {
+    var reader = response.body.getReader(), decoder = new TextDecoder("utf-8", {fatal:true}), pending = "", complete = null, total = 0, audio = 0, events = 0;
+    try {
+      while (true) {
+        var result = await reader.read(); pending += decoder.decode(result.value, {stream:!result.done});
+        if (result.value) total += result.value.length;
+        if (total > 4 * 1024 * 1024 || pending.length > 2 * 1024 * 1024) throw new Error("Oversized voice design stream");
+        var at;
+        while ((at = pending.indexOf("\n")) >= 0) {
+          var line = pending.slice(0, at); pending = pending.slice(at + 1);
+          if (complete || ++events > 128) throw new Error("Invalid voice design stream");
+          var event = JSON.parse(line);
+          if (event.event === "audio" && typeof event.pcm === "string" && event.pcm.length <= 128000) {
+            var raw = atob(event.pcm), bytes = Uint8Array.from(raw, function (value) { return value.charCodeAt(0); });
+            audio += bytes.length; if (!bytes.length || bytes.length % 2 || audio > 960000) throw new Error("Invalid design audio"); onChunk(bytes);
+          } else if (event.event === "complete" && audio && event.design && typeof event.design.reference_audio === "string" && event.design.reference_audio.length <= 1280064) complete = event;
+          else throw new Error("Invalid voice design event");
+        }
+        if (result.done) break;
+      }
+      if (pending || !complete) throw new Error("Voice generation ended before completion");
+      return complete;
+    } catch (error) { await reader.cancel().catch(function () {}); throw error; }
+  }
+  // ---- voice requests ----------------------------------------------------------------------------------------
+  function voiceRequest(path, body, signal, json, player) {
+    var requestId = "voice-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    body = Object.assign({}, body, { request_id: requestId });
+    function cancel() {
+      fetch("/api/v1/settings/voices/cancel", { method: "POST", cache: "no-store", keepalive: true,
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId }) }).catch(function () {});
+    }
+    if (signal) signal.addEventListener("abort", cancel, { once: true });
+    return fetch("/api/v1/settings/voices/" + path, {
+      method: "POST", cache: "no-store", signal: signal,
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(async function (response) {
+      if (!response.ok) {
+        var reply = await response.json().catch(function () { return {}; });
+        var error = new Error(String(response.status)); error.status = response.status; error.body = reply.message;
+        throw error;
+      }
+      if (player && /application\/x-ndjson/.test(response.headers.get("content-type") || "")) {
+        var completed = await readDesign(response, player.push); player.end(); await player.finished; completed.streamed = true; return completed;
+      }
+      if (player && /^audio\/pcm;rate=48000;channels=1;format=s16le$/i.test(response.headers.get("content-type") || "")) {
+        var rendered = await readPcm(response, player, true); await player.finished; rendered.streamed = true; return rendered;
+      }
+      if (player) player.pause();
+      if (json) return response.json();
+      var blob = await response.blob();
+      if (!/^audio\/(wav|mpeg)$/.test(blob.type) || blob.size === 0 || blob.size > 8 * 1024 * 1024) throw new Error("Unusable preview audio");
+      return blob;
+    }).finally(function () { if (signal) signal.removeEventListener("abort", cancel); });
+  }
+
+  async function streamedVoice(path, body, signal, onPlaying) {
+    var player = (window.AudioContext || window.webkitAudioContext) ? pcmPlayer(signal, onPlaying) : null;
+    try { if (player) await player.play(); return await voiceRequest(path, Object.assign({}, body, {stream:!!player}), signal, path === "design", player); }
+    catch (error) { if (player) player.fail(error); throw error; }
+  }
+  function previewVoice(body, signal, onPlaying) { return streamedVoice("preview", body, signal, onPlaying); }
+  function designVoice(body, signal, onPlaying) { return streamedVoice("design", body, signal, onPlaying); }
+  function prepareVoice(body, signal) { return voiceRequest("prepare", body, signal, true); }
+  function voiceReferenceBlob(encoded) {
+    var decoded = atob(encoded), bytes = new Uint8Array(decoded.length);
+    for (var i = 0; i < decoded.length; i += 1) bytes[i] = decoded.charCodeAt(i);
+    return new Blob([bytes], { type: "audio/wav" });
+  }
+
+  function downloadVoiceRecipe(filename, recipe) {
+    var url = URL.createObjectURL(new Blob([JSON.stringify(recipe, null, 2) + "\n"], { type: "application/json" }));
+    var link = document.createElement("a"); link.href = url; link.download = filename;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
   // ---- markdown-lite, as DOM nodes ------------------------------------------------------------------------------
   function inline(text, parent) {
     var re = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>)\]]+)/g, last = 0, match;
@@ -708,14 +852,18 @@
 
   // Sentences grouped so the first group is short (it starts playing sooner) and later ones are longer (fewer requests).
   function groups(text) {
-    var sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
-    var out = [], current = "";
-    sentences.forEach(function (sentence) {
-      var limit = out.length === 0 ? 140 : 500;
-      if (current && (current + sentence).length > limit) { out.push(current.trim()); current = ""; }
-      current += sentence;
-    });
-    if (current.trim()) out.push(current.trim());
+    var out = [], rest = Array.from(text.trim());
+    while (rest.length) {
+      var limit = out.length === 0 ? 140 : MAX_PART, cut = Math.min(limit, rest.length);
+      if (cut < rest.length) {
+        var prefix = rest.slice(0, cut).join(""), boundary = /[.!?]["')\]]*\s+(?![\s\S]*[.!?]["')\]]*\s)/.exec(prefix);
+        var space = prefix.search(/\s+\S*$/);
+        if (boundary) cut = Array.from(prefix.slice(0, boundary.index + boundary[0].length)).length;
+        else if (space > 0) cut = Array.from(prefix.slice(0, space)).length;
+      }
+      var part = rest.splice(0, cut).join("").trim(); if (part) out.push(part);
+      while (rest.length && /\s/.test(rest[0])) rest.shift();
+    }
     return out;
   }
 
@@ -727,7 +875,7 @@
 
   function speakBrowser(text, after) {
     if (!synth) { finishSpeaking(after); return; }
-    var sentences = text.slice(0, 1800).match(/[^.!?]+[.!?]*/g) || [];
+    var sentences = groups(text);
     if (!sentences.length) { S.speaking = false; return; }
     S.voiceKind = "browser";
     var voice = pickVoice();
@@ -751,9 +899,10 @@
   // exists, instead of after the whole answer and the whole first group have been made. S.speaking is true only while sound is
   // actually playing, so the face is not "speaking" while it is still waiting for its voice (S.preparing says that instead).
   var HAS_MSE = !!(window.MediaSource && MediaSource.isTypeSupported && MediaSource.isTypeSupported("audio/mpeg"));
-  var MIN_PART = 25, MAX_PART = 1400, BATCH_CHARS = 160, GAP_GRACE_MS = 450, LOOKAHEAD = 2;
+  var MIN_PART = 25, MAX_PART = 400, BATCH_CHARS = 160, GAP_GRACE_MS = 450, LOOKAHEAD = 2;
 
   function attachAnalyser(element) {
+    if (element.pcm) { playing.analyser = element.analyser; playing.data = new Uint8Array(element.analyser.fftSize); return; }
     try {
       var Context = window.AudioContext || window.webkitAudioContext;
       if (!playing.context) playing.context = new Context();
@@ -769,6 +918,8 @@
 
   // Feeds a streaming response into an <audio> element, resolving once the first audio is buffered (so it can start at once).
   function streamInto(response, element) {
+    var resolveReceived, rejectReceived;
+    var received = new Promise(function (resolve, reject) { resolveReceived = resolve; rejectReceived = reject; }); received.catch(function () {});
     return new Promise(function (resolve, reject) {
       var source = new MediaSource();
       var url = URL.createObjectURL(source);
@@ -783,20 +934,21 @@
         if (finished && source.readyState === "open") { try { source.endOfStream(); } catch (ignored) { /* already ended */ } }
       }
       function fail(error) {
+        rejectReceived(error);
         URL.revokeObjectURL(url);
         if (!started) reject(error); else element.dispatchEvent(new Event("error"));
       }
       source.addEventListener("sourceopen", function () {
         try {
           buffer = source.addSourceBuffer("audio/mpeg");
-        } catch (error) { reject(error); return; }
+        } catch (error) { fail(error); return; }
         buffer.addEventListener("updateend", function () {
-          if (!started) { started = true; resolve(url); }
+          if (!started) { started = true; resolve({url:url,received:received}); }
           pump();
         });
         (function read() {
           reader.read().then(function (chunk) {
-            if (chunk.done) { finished = true; pump(); return; }
+            if (chunk.done) { finished = true; resolveReceived(); pump(); return; }
             queue.push(chunk.value);
             pump();
             read();
@@ -807,25 +959,59 @@
     });
   }
 
-  // One request for one piece of speech; resolves with an element that is ready to play.
+  function speechDelay(milliseconds, signal) {
+    return new Promise(function (resolve, reject) {
+      function aborted() { clearTimeout(timer); signal.removeEventListener("abort", aborted); reject(new DOMException("Speech stopped", "AbortError")); }
+      var timer = setTimeout(function () { signal.removeEventListener("abort", aborted); resolve(); }, milliseconds);
+      signal.addEventListener("abort", aborted, {once:true}); if (signal.aborted) aborted();
+    });
+  }
+  async function speechResponse(session, body) {
+    var deadline = Date.now() + 90000, limited = 0;
+    for (;;) {
+      var response = await fetch("/api/v1/speech", {
+        method: "POST", cache: "no-store", signal: session.controller.signal,
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(body)
+      });
+      var retry = response.headers.get("retry-after"), localBusy = response.status === 503 && retry !== null;
+      if (!localBusy && !(response.status === 429 && limited++ < 3)) return response;
+      var seconds = retry && /^\d+$/.test(retry) ? Number(retry) : retry ? (Date.parse(retry) - Date.now()) / 1000 : Math.pow(2, limited - 1);
+      var delay = Math.max(250, Number.isFinite(seconds) ? seconds * 1000 : 1000);
+      if (Date.now() + delay > deadline) return response;
+      if (response.body) await response.body.cancel().catch(function () {});
+      if (localBusy && alive(session)) say("The local voice is busy. Waiting to finish this answer in the same voice.");
+      await speechDelay(delay, session.controller.signal);
+    }
+  }
+
+  // Ready-to-play and synthesis EOF are separate: the latter releases the next request.
   function openSpeech(session, item) {
-    var body = { text: item.text };
+    var body = { text: item.text, stream: true };
+    if (session.provider) body.provider = session.provider;
     if (item.previous) body.previous_text = item.previous;
-    return fetch("/api/v1/speech", {
-      method: "POST", cache: "no-store", signal: session.controller.signal,
-      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    }).then(function (response) {
+    return speechResponse(session, body).then(function (response) {
       if (!response.ok) { var error = new Error(String(response.status)); error.status = response.status; throw error; }
+      var selected = response.headers.get("x-jarvis-speech-provider");
+      if (selected) session.provider = selected;
+      if (response.headers.get("x-jarvis-speech-backup") === "true" && !session.backupNoted && alive(session)) {
+        session.backupNoted = true;
+        say("Using a backup voice for this answer.");
+      }
+      if (/^audio\/pcm;rate=48000;channels=1;format=s16le$/i.test(response.headers.get("content-type") || "")) {
+        var pcm = pcmPlayer(session.controller.signal);
+        var received = readPcm(response, pcm, false); received.catch(function () {});
+        return pcm.first.then(function () { return {element:pcm,url:null,received:received}; });
+      }
       var element = new Audio();
       element.preload = "auto";
-      if (HAS_MSE && response.body && response.body.getReader) {
-        return streamInto(response, element).then(function (url) { return { element: element, url: url }; });
+      if (HAS_MSE && /^audio\/mpeg(?:;|$)/i.test(response.headers.get("content-type") || "") && response.body && response.body.getReader) {
+        return streamInto(response, element).then(function (stream) { return { element: element, url: stream.url, received: stream.received }; });
       }
+      // Embedded synthesis returns a complete PCM WAV; MediaSource's MPEG buffer cannot decode it.
       return response.blob().then(function (blob) {
         var url = URL.createObjectURL(blob);
         element.src = url;
-        return { element: element, url: url };
+        return { element: element, url: url, received: Promise.resolve() };
       });
     });
   }
@@ -837,7 +1023,7 @@
     stopListening();
     var session = {
       turn: playing.token, controller: new AbortController(), items: [], current: -1, playingItem: null,
-      fed: "", consumed: 0, ended: false, after: after, gap: null
+      fed: "", consumed: 0, ended: false, after: after, gap: null, provider: null, backupNoted: false
     };
     playing.controller = session.controller;
     playing.session = session;
@@ -858,25 +1044,20 @@
   }
 
   // The neural voice failed (key, quota, network, playback): say the rest with the browser's voice, so the answer is still heard.
-  function fallbackToBrowser(session, error, rest) {
+  function fallbackToBrowser(session, error) {
     if (!alive(session)) return;
     if (error && error.status === 404) neural.enabled = false;
     say("The neural voice is unavailable (" + ((error && error.status) || "no reply") + "), using the browser's voice.");
-    var after = session.after;
-    playing.token += 1;
+    session.browser = true;
     session.controller.abort();
-    playing.session = null;
-    S.voiceBusy = false;
+    session.items.slice(session.current + 1).forEach(function (item) {
+      if (item.handle) { item.handle.element.pause(); URL.revokeObjectURL(item.handle.url); item.handle = null; }
+      item.state = "idle";
+    });
+    session.loading = false;
     S.preparing = false;
     S.voiceKind = "browser";
-    var text = plain(rest);
-    if (text) speakBrowser(text, after); else { S.speaking = false; if (after) after(); }
-  }
-
-  function remainingText(session, from) {
-    var parts = session.items.slice(from).map(function (item) { return item.text; });
-    parts.push(plain(session.fed.slice(session.consumed)));
-    return parts.join(" ");
+    drive(session);
   }
 
   // Keeps the next few pieces loading, and starts the next one playing when its turn comes.
@@ -884,16 +1065,30 @@
     if (!alive(session)) return;
     var i;
     for (i = Math.max(0, session.current + 1); i < session.items.length && i <= session.current + 1 + LOOKAHEAD; i += 1) {
+      if (session.browser || session.loading) break;
       (function (item, index) {
         if (item.state !== "idle") return;
+        // Select the first voice before lookahead can launch competing requests.
+        if (index > 0 && !session.provider && session.items[0].state === "loading") return;
         item.state = "loading";
+        session.loading = true;
         openSpeech(session, item).then(function (handle) {
-          if (!alive(session)) { URL.revokeObjectURL(handle.url); return; }
+          if (!alive(session) || session.browser) { handle.element.pause(); URL.revokeObjectURL(handle.url); return; }
           item.handle = handle;
           item.state = "ready";
+          handle.received.then(function () {
+            if (!alive(session) || session.browser) return;
+            session.loading = false; drive(session);
+          }, function (error) {
+            if (!alive(session) || session.browser) return;
+            session.loading = false;
+            if (item.state === "ready") { item.state = "failed"; item.error = error; }
+            drive(session);
+          });
           drive(session);
         }, function (error) {
-          if (!alive(session)) return;
+          if (!alive(session) || session.browser) return;
+          session.loading = false;
           // A first piece that never arrives is a failure to speak at all; later ones fall back from where they were.
           item.state = "failed";
           item.error = error;
@@ -907,7 +1102,15 @@
       if (session.ended) endSession(session);
       return;
     }
-    if (next.state === "failed") { fallbackToBrowser(session, next.error, remainingText(session, session.current + 1)); return; }
+    if (session.browser) {
+      session.current += 1; session.playingItem = session.current; next.state = "playing";
+      speakBrowser(next.text, function () {
+        if (!alive(session) || next.state !== "playing") return;
+        next.state = "done"; session.playingItem = null; drive(session);
+      });
+      return;
+    }
+    if (next.state === "failed") { fallbackToBrowser(session, next.error); return; }
     if (next.state !== "ready") return;
     play(session, session.current + 1);
   }
@@ -922,12 +1125,13 @@
     playing.element = element;
     attachAnalyser(element);
     function done(error) {
+      if (!alive(session) || item.state !== "playing") return;
       URL.revokeObjectURL(item.handle.url);
       if (playing.element === element) playing.element = null;
       if (!alive(session)) return;
       session.playingItem = null;
       item.state = "done";
-      if (error) { fallbackToBrowser(session, null, remainingText(session, index + 1)); return; }
+      if (error) { fallbackToBrowser(session, error); return; }
       // A short silence between pieces is not "stopped speaking": the face holds its pose for a moment while the next arrives.
       session.gap = setTimeout(function () {
         if (!alive(session) || session.playingItem !== null) return;
@@ -1228,7 +1432,7 @@
       recognizer = null;
       S.listening = false;
       $("mic").classList.remove("on");
-      if (S.wake && !S.speaking) setTimeout(function () { startListening(true); }, 250);
+      if (S.wake) resumeWake();
       else if (!S.wake) stopMeter();
     };
     try {
@@ -1249,7 +1453,7 @@
   // Wake-word listening pauses while JARVIS speaks (its own voice would be heard as the user's) and resumes after.
   function resumeWake() {
     if (!S.wake) return;
-    setTimeout(function () { if (S.wake && !recognizer && !S.speaking) startListening(true); }, 300);
+    setTimeout(function () { if (S.wake && !recognizer && !S.speaking && !S.voiceBusy) startListening(true); }, 300);
   }
 
   $("mic").addEventListener("click", function () {
@@ -2339,7 +2543,7 @@
     }
   }, true);
   syncDialogs();
-  var settingsControls = JarvisSettings({ $: $, el: el, api: api, putJson: putJson, explain: explain, families: families, familyLabel: familyLabel, openActivity: function () { setOps(true); selectOpsSection("activity"); } });
+  var settingsControls = JarvisSettings({ $: $, el: el, api: api, putJson: putJson, previewVoice: previewVoice, designVoice: designVoice, prepareVoice: prepareVoice, voiceReferenceBlob: voiceReferenceBlob, downloadVoiceRecipe: downloadVoiceRecipe, stopSpeech: interruptSpeech, explain: explain, families: families, familyLabel: familyLabel, openActivity: function () { setOps(true); selectOpsSection("activity"); } });
   // ---- header and caption ---------------------------------------------------------------------------------------
   function uiState() {
     if (S.offline) return "offline";

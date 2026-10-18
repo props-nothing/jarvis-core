@@ -81,7 +81,8 @@ pub struct GatewayState {
     /// call (`docs/adr/0020-filesystem-confinement-is-a-handle.md`).
     tools: Option<Arc<crate::tool_pipeline::ToolPipeline>>,
     /// The speech provider, when a key file is configured (`ADR-0138`). `None` means the page speaks with the browser's own voice.
-    speech: Option<Arc<jarvis_voice::ElevenLabsSpeech>>,
+    speech: Option<Arc<dyn jarvis_voice::SpeechProvider>>,
+    voice_library: Option<Arc<crate::voice_library::VoiceRuntime>>,
     /// Where the profile's configuration is, for the Settings routes (`P9-015`). `None` in a bare transport test.
     settings: Option<crate::settings_service::SettingsContext>,
     /// The Google sign-in, when settings are available (ADR-0149).
@@ -119,6 +120,7 @@ impl GatewayState {
             executor: None,
             tools: None,
             speech: None,
+            voice_library: None,
             settings: None,
             google: None,
             github: None,
@@ -228,9 +230,21 @@ impl GatewayState {
 
     /// Attaches the speech provider.
     #[must_use]
-    pub fn with_speech(mut self, speech: Arc<jarvis_voice::ElevenLabsSpeech>) -> Self {
+    pub fn with_speech(mut self, speech: Arc<dyn jarvis_voice::SpeechProvider>) -> Self {
         self.speech = Some(speech);
         self
+    }
+
+    pub(crate) fn with_voice_library(
+        mut self,
+        library: Arc<crate::voice_library::VoiceRuntime>,
+    ) -> Self {
+        self.voice_library = Some(library);
+        self
+    }
+
+    pub(crate) fn voice_library(&self) -> Option<&Arc<crate::voice_library::VoiceRuntime>> {
+        self.voice_library.as_ref()
     }
 
     /// Attaches the profile location, which turns the Settings routes on.
@@ -288,7 +302,7 @@ impl GatewayState {
 
     /// Returns the speech provider, when one is configured.
     #[must_use]
-    pub fn speech(&self) -> Option<&Arc<jarvis_voice::ElevenLabsSpeech>> {
+    pub fn speech(&self) -> Option<&Arc<dyn jarvis_voice::SpeechProvider>> {
         self.speech.as_ref()
     }
 
@@ -449,10 +463,7 @@ pub fn router(state: GatewayState) -> Router {
             axum::routing::put(crate::settings_service::set_key)
                 .delete(crate::settings_service::remove_key),
         )
-        .route(
-            "/speech",
-            get(crate::speech_service::status).post(crate::speech_service::speak),
-        )
+        .merge(crate::voice_library::routes())
         .route("/tools", get(list_tools))
         .route("/tools/{tool}/calls", post(call_tool))
         .route("/tools/{tool}/preview", post(preview_tool))
@@ -2680,6 +2691,80 @@ mod tests {
             Some("audio/mpeg")
         );
         assert_eq!(body_text(spoken).await, "MP3-bytes");
+    }
+
+    #[derive(Debug)]
+    struct FixtureSpeech(bool);
+
+    impl jarvis_voice::SpeechProvider for FixtureSpeech {
+        fn describe(&self) -> jarvis_voice::SpeechDescription {
+            jarvis_voice::SpeechDescription {
+                id: "fixture".into(),
+                provider: "fixture".into(),
+                voice: "local-voice".into(),
+                model: "local-model".into(),
+            }
+        }
+        fn open<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> jarvis_voice::SpeechFuture<'a> {
+            Box::pin(async move {
+                if self.0 {
+                    return Err(jarvis_voice::SpeechError::KeyRejected);
+                }
+                Ok(jarvis_voice::SpeechStream::new(
+                    futures_util::stream::once(async {
+                        Ok(axum::body::Bytes::from_static(b"RIFF-audio"))
+                    }),
+                    "audio/wav",
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn speech_fallback_reports_selection_health_and_real_content_type() {
+        let profile = TempProfile::new();
+        let database = Arc::new(
+            jarvis_storage::SqliteDatabase::open(&profile.database_path())
+                .await
+                .unwrap_or_else(|e| panic!("{e}")),
+        );
+        let credential = ClientCredential::generate().unwrap_or_else(|e| panic!("{e}"));
+        let presented = credential.expose().to_owned();
+        let speech = jarvis_voice::FallbackSpeech::new(vec![
+            ("primary".into(), Arc::new(FixtureSpeech(true))),
+            ("local".into(), Arc::new(FixtureSpeech(false))),
+        ])
+        .unwrap_or_else(|e| panic!("{e}"));
+        let app = router(GatewayState::new(database, credential).with_speech(Arc::new(speech)));
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/v1/speech",
+                &presented,
+                r#"{"text":"hello"}"#,
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/wav");
+        assert_eq!(response.headers()["x-jarvis-speech-provider"], "local");
+        assert_eq!(response.headers()["x-jarvis-speech-backup"], "true");
+        assert_eq!(body_text(response).await, "RIFF-audio");
+        let response = app
+            .clone()
+            .oneshot(get_request("/api/v1/speech", Some(&presented)))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let status: serde_json::Value =
+            serde_json::from_str(&body_text(response).await).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(status["active"], "local");
+        assert_eq!(status["providers"][0]["health"], "cooling_down");
+        assert_eq!(status["providers"][1]["health"], "healthy");
+        let invalid = app
+            .oneshot(post_json("/api/v1/speech", &presented, r#"{"text":" "}"#))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     /// **Stopping the daemon needs the credential.** Without it the request is refused (and nothing is woken).

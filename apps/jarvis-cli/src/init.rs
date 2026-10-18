@@ -48,8 +48,9 @@ const KEY_FILE_NAME: &str = "model.key";
 /// The placeholder Ollama requires but ignores.
 const OLLAMA_PLACEHOLDER_KEY: &str = "ollama";
 
-/// How long `start` waits for the daemon to listen.
-const START_WAIT: Duration = Duration::from_secs(60);
+/// Windows permission checks and optional provider discovery can exceed one minute.
+/// Waiting is bounded, including when another invocation is already starting the profile.
+const START_WAIT: Duration = Duration::from_secs(180);
 
 /// What `init` was asked for.
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -577,6 +578,7 @@ pub fn start(paths: &AppPaths, arguments: &[String]) -> ExitStatus {
         }
     };
     let deadline = Instant::now() + START_WAIT;
+    let mut waiting_for_owner = false;
     while Instant::now() < deadline {
         if TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok() {
             println!("started; listening on {address}");
@@ -588,8 +590,21 @@ pub fn start(paths: &AppPaths, arguments: &[String]) -> ExitStatus {
         }
         // The daemon exiting is the answer, and a far better one than waiting out the clock: it refuses to start
         // for a reason (a bad folder, a missing key) that `jarvis daemon` itself would have printed.
-        if daemon.has_exited() {
+        if waiting_for_owner
+            && let Ok(reason) = std::fs::read_to_string(&startup_error)
+            && !reason.trim().is_empty()
+            && !startup_owner_is_initializing(&reason)
+        {
+            eprintln!("jarvis: the daemon could not start: {}", reason.trim());
+            return ExitStatus::Unavailable;
+        }
+        if !waiting_for_owner && daemon.has_exited() {
             match std::fs::read_to_string(&startup_error) {
+                Ok(reason) if startup_owner_is_initializing(&reason) => {
+                    waiting_for_owner = true;
+                    eprintln!("jarvis: this profile is already starting; waiting for it to listen");
+                    continue;
+                }
                 Ok(reason) if !reason.trim().is_empty() => {
                     eprintln!("jarvis: the daemon could not start: {}", reason.trim());
                 }
@@ -606,6 +621,10 @@ pub fn start(paths: &AppPaths, arguments: &[String]) -> ExitStatus {
         START_WAIT.as_secs()
     );
     ExitStatus::Unavailable
+}
+
+fn startup_owner_is_initializing(reason: &str) -> bool {
+    jarvisd::startup_error_is_existing_owner(reason)
 }
 
 #[cfg(test)]
@@ -806,5 +825,19 @@ mod tests {
         assert_eq!(request.voice_id.as_deref(), Some("abc"));
         assert!(request.elevenlabs);
         assert!(!parse_init(&words("--elevenlabs-key synthetic-key")).elevenlabs);
+    }
+
+    #[test]
+    fn competing_start_waits_but_real_startup_failures_are_not_hidden() {
+        let owned = "another jarvisd process already owns this profile";
+        assert!(startup_owner_is_initializing(&format!("{owned}\n")));
+        for reason in [
+            "",
+            "the speech settings are not usable",
+            "failed to bind the loopback HTTP transport",
+            "profile lock could not be read",
+        ] {
+            assert!(!startup_owner_is_initializing(reason));
+        }
     }
 }

@@ -35,6 +35,7 @@ pub mod settings;
 mod skill_repository;
 mod tool_call_repository;
 mod trigger_repository;
+pub mod voice_library;
 mod workspace_repository;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -55,8 +56,8 @@ pub use approval_repository::{
 pub use config::{
     CURRENT_CONFIG_VERSION, Config, ConfigError, ConfigMigration, ConfigStore,
     DEFAULT_PHONE_CALLS_PER_DAY, DEFAULT_PHONE_CALLS_PER_HOUR, DaemonConfig,
-    LIVE_PROVIDER_MODEL_NAME, LoadedConfig, LoggingConfig, ProfileConfig,
-    unrecognized_environment_keys,
+    LIVE_PROVIDER_MODEL_NAME, LoadedConfig, LoggingConfig, ProfileConfig, SpeechConfig,
+    SpeechProviderConfig, unrecognized_environment_keys,
 };
 pub use contact_repository::{
     ContactImportResult, ContactInput, ContactStatus, DuplicatePair, MAX_CONTACTS,

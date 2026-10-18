@@ -1,6 +1,6 @@
 # Voice And Telephony
 
-> **Current versus future:** browser voice and optional ElevenLabs synthesis are implemented; new CLI onboarding requires the owner's working ElevenLabs key. The owner has reported successful outbound calls through an ElevenLabs agent. Local browser-independent speech, general inbound/provider-neutral telephony and vendor-shaped streaming transports below remain separate unshipped or deferred targets. See [phone limits](../user/phone.md) and [the backlog](../../TODO.md).
+> **Current versus future:** browser voice, provider-neutral synthesis, cloud/local-server/embedded fallback and a saved console voice editor with preview are implemented (see [speech configuration](../user/speech.md)); new CLI onboarding requires the owner's working ElevenLabs key. The owner has reported successful outbound calls through an ElevenLabs agent. A browser-independent voice client, Telegram audio, general inbound/provider-neutral telephony and vendor-shaped streaming transports below remain separate unshipped or deferred targets. See [phone limits](../user/phone.md) and [the backlog](../../TODO.md).
 
 ## Boundary
 
@@ -138,6 +138,21 @@ JARVIS treats ElevenLabs as an external MCP client:
 Current ElevenLabs documentation says MCP is unavailable for Zero Retention Mode and HIPAA-required workspaces. This mode must not be offered where those constraints apply. Re-check at implementation time.
 
 ## ElevenLabs Mode C: Speech Provider Only
+
+Console synthesis can also use `embedded-kokoro` behind the `local-tts` feature.
+The daemon loads only pinned, hash-verified Kokoro and ONNX Runtime assets into
+its own process and uses a Rust English phonemizer. No separate speech process or
+port is required. It implements the same SpeechProvider/fallback boundary and
+returns PCM WAV to the console's blob playback path. See [ADR-0246](../adr/0246-embedded-speech-loads-only-pinned-local-assets.md)
+for initialization, cancellation, concurrency, native-code trust and offline limits.
+
+The profile-local voice library selects a default, an optional console override
+and ordered backups. Authenticated saves validate model capabilities, atomically
+persist a revision and publish a new routing snapshot without a restart. Draft
+preview synthesizes exactly the selected voice without fallback or persistence.
+Embedded variants share bounded native engine resources. Telegram and agent-call
+assignments remain unavailable until their delivery paths consume the library.
+See [ADR-0247](../adr/0247-voice-previews-and-saved-voices-use-the-same-validated-adapters.md).
 
 JARVIS may use ElevenLabs streaming STT/TTS or Speech Engine while retaining its own local/web session transport. This mode uses `VoiceProvider` and `SpeechProvider` ports and does not require an ElevenLabs-owned agent.
 
@@ -278,3 +293,32 @@ Failures are explicit: no answer, busy, voicemail, rejected, provider unavailabl
 
 - Provider evidence: [ElevenLabs](../research/integrations/elevenlabs.md), [Twilio](../research/integrations/twilio.md), [Deepgram](../research/integrations/deepgram.md), [LiveKit](../research/integrations/livekit.md), [Google Gemini Live](../research/integrations/google-gemini-live.md)
 - Decision: [ADR-0008](../adr/0008-provider-neutral-voice.md), [ADR-0010](../adr/0010-model-based-turn-detection.md)
+
+
+## Local voice design
+
+The console library supports pinned Kokoro blend recipes and VoxCPM2 description
+designs. Description generation uses a bounded, daemon-owned pipe worker; Rust
+retains validation, cancellation, routing and private persistence. A synthetic
+reference is saved with its description, seed and model revision and reused for
+ordinary speech. There is no independent server or startup task.
+See [ADR-0249](../adr/0249-description-designed-voices-retain-the-generated-reference.md)
+and its [GPU execution amendment](../adr/0250-local-voice-gpu-failure-retries-in-an-isolated-cpu-runtime.md).
+An optional pinned Windows GPU environment shares verified model files with the
+retained CPU runtime. Actual device/kernel probing precedes model loading. Rust
+retries a failed GPU attempt once on CPU within the overall deadline, before
+returning any audio, and retains that choice until restart. Cancellation kills the
+owned worker instead of retrying. Authenticated runtime metadata reports observed
+backend/device and PyTorch GPU allocation without returning paths or audio.
+The [speech guide](../user/speech.md#design-a-local-voice) covers installation and use.
+
+## Local preparation and incremental speech
+
+[ADR-0251](../adr/0251-local-voice-streams-retain-admission-until-completion.md)
+extends the owned local worker with bounded progress, metadata and PCM frames.
+Preparation exercises both design and reference speech before ready. Stream-owned
+locks and admission keep cancellation effective through EOF; only successful EOF
+returns the worker to the warm cache. CPU retry is restricted to before first audio.
+Fast/Balanced/Quality are explicit bounded generation budgets, persisted separately
+for reference creation and later delivery. The browser schedules PCM incrementally;
+a generated identity is admitted only on validated stream completion.

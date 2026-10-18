@@ -4,6 +4,60 @@ import vm from 'node:vm';
 import test from 'node:test';
 
 const source = fs.readFileSync(new URL('../apps/jarvisd/src/hud/hud.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+
+test('embedded WAV uses blob playback even when MPEG MediaSource is available', async () => {
+  const blob = { type: 'audio/wav' }, objects = [];
+  function MediaSource() { throw Error('WAV must not enter MPEG MediaSource'); }
+  MediaSource.isTypeSupported = () => true;
+  const context = {
+    window: { MediaSource }, MediaSource, S: {}, token: 'fixture', Audio: function () {}, say() {},
+    URL: { createObjectURL(value) { objects.push(value); return 'blob:pcm'; }, revokeObjectURL() {} },
+    fetch: async () => ({ ok: true, headers: { get: name => name === 'content-type' ? 'audio/wav' : null },
+      body: { getReader() { throw Error('WAV must use the complete blob'); } }, blob: async () => blob }),
+  };
+  vm.runInNewContext(section('  // ---- voice: speaking', '  // How loud the voice is right now'), context);
+  const handle = await context.openSpeech({ controller: { signal: {} } }, { text: 'Local voice.' });
+  assert.equal(handle.element.src, 'blob:pcm');
+  assert.deepEqual(objects, [blob]);
+});
+
+test('speech selects a voice before lookahead, retains it, and labels backup once', async () => {
+  const requests = [], notes = [];
+  const context = {
+    window: {}, S: {}, token: 'fixture', Audio: function () {},
+    URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
+    say: text => notes.push(text),
+    fetch(url, options) {
+      return new Promise(resolve => requests.push({ url, body: JSON.parse(options.body), resolve }));
+    },
+  };
+  vm.runInNewContext(section('  // ---- voice: speaking', '  // How loud the voice is right now'), context);
+  context.play = () => {};
+  const session = { turn: 0, controller: { signal: {} }, provider: null, current: -1, playingItem: null,
+    items: ['First sentence.', 'Second sentence.', 'Third sentence.'].map(text => ({ text, state: 'idle' })) };
+  context.drive(session);
+  assert.equal(requests.length, 1, 'no competing initial provider selections');
+  const response = { ok: true, headers: { get: name => ({ 'x-jarvis-speech-provider': 'local', 'x-jarvis-speech-backup': 'true', 'content-type': 'audio/mpeg' })[name] }, blob: async () => ({}) };
+  requests[0].resolve(response);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 2, 'only one unfinished synthesis request');
+  assert.equal(requests[1].body.provider, 'local');
+  requests[1].resolve(response);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests[2].body.provider, 'local');
+  requests[2].resolve(response);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(notes, ['Using a backup voice for this answer.']);
+});
+
+test('speech sends the actual content type to blob playback when it is not MP3', async () => {
+  const context = { window: { MediaSource: {} }, MediaSource: { isTypeSupported: () => true }, S: {}, token: 'fixture',
+    Audio: function () {}, URL: { createObjectURL: () => 'blob:wav' }, say() {},
+    fetch: async () => ({ ok: true, headers: { get: name => name === 'content-type' ? 'audio/wav' : null }, body: { getReader() { throw new Error('WAV must not enter MP3 MediaSource'); } }, blob: async () => ({ type: 'audio/wav' }) }) };
+  vm.runInNewContext(section('  // ---- voice: speaking', '  // How loud the voice is right now'), context);
+  const handle = await context.openSpeech({ controller: { signal: {} } }, { text: 'hello' });
+  assert.equal(handle.element.src, 'blob:wav');
+});
 function section(start, end) {
   const from = source.indexOf(start), to = source.indexOf(end, from);
   assert.ok(from >= 0 && to > from, `HUD test boundary missing: ${start}`);

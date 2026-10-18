@@ -5,6 +5,77 @@ use super::*;
 
 const KEY: &str = "sk_test_0123456789abcdef";
 
+#[tokio::test]
+async fn edited_voices_reach_the_wire_and_unsupported_settings_make_no_request() {
+    let (base, received) = serve_once(200, b"ID3-preview".to_vec()).await;
+    let mut voice = jarvis_core::SavedVoice {
+        blend: None,
+        design: None,
+        id: "reading".into(),
+        name: "Reading".into(),
+        provider: "cloud".into(),
+        model: "eleven_v4_turbo".into(),
+        voice: "changed_voice".into(),
+        settings: jarvis_core::VoiceSettings {
+            stability: Some(0.35),
+            similarity_boost: Some(0.8),
+            ..Default::default()
+        },
+    };
+    let adapter = speech(&base)
+        .configured(&voice)
+        .unwrap_or_else(|e| panic!("{e}"));
+    collect_audio(
+        adapter
+            .open("Preview.", None)
+            .await
+            .unwrap_or_else(|e| panic!("{e}")),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    let request = received.await.unwrap_or_default();
+    assert!(request.starts_with("POST /v1/text-to-speech/changed_voice/stream "));
+    let body: serde_json::Value =
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap_or_default();
+    assert_eq!(body["model_id"], "eleven_v4_turbo");
+    assert!(
+        (body["voice_settings"]["stability"]
+            .as_f64()
+            .unwrap_or_default()
+            - 0.35)
+            .abs()
+            < 0.0001
+    );
+    assert!(body["voice_settings"].get("speed").is_none());
+    voice.settings.speed = Some(1.1);
+    assert!(speech("http://127.0.0.1:1").configured(&voice).is_err());
+
+    let (base, received) = serve_once(200, b"ID3-preview".to_vec()).await;
+    voice.model = "tts-1".into();
+    voice.voice = "nova".into();
+    voice.settings = jarvis_core::VoiceSettings {
+        speed: Some(1.5),
+        ..Default::default()
+    };
+    let adapter = OpenAiCompatibleSpeech::new(&format!("{base}/v1"), "alloy", "tts-1", None)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let edited = adapter.configured(&voice).unwrap_or_else(|e| panic!("{e}"));
+    collect_audio(
+        edited
+            .open("Preview.", None)
+            .await
+            .unwrap_or_else(|e| panic!("{e}")),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    let request = received.await.unwrap_or_default();
+    assert!(request.starts_with("POST /v1/audio/speech "));
+    let body: serde_json::Value =
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap_or_default();
+    assert_eq!(body["voice"], "nova");
+    assert_eq!(body["speed"], 1.5);
+}
+
 /// Serves one canned HTTP response and returns the request it received.
 async fn serve_once(status: u16, body: Vec<u8>) -> (String, tokio::task::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -276,5 +347,207 @@ async fn the_previous_sentence_is_sent_only_to_a_model_that_accepts_it() {
             );
             assert!(value.ends_with("end of the last sentence."));
         }
+    }
+}
+
+#[tokio::test]
+async fn compatible_speech_uses_the_documented_binary_shape_with_optional_auth() {
+    for key in [None, Some(KEY)] {
+        let (base, request) = serve_once(200, b"ID3-audio".to_vec()).await;
+        let adapter = OpenAiCompatibleSpeech::new(&format!("{base}/v1"), "af_heart", "kokoro", key)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!format!("{adapter:?}").contains(KEY));
+        let stream = adapter
+            .open("  Hello.  ", Some("previous"))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let audio = collect_audio(stream)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(audio.bytes().as_ref(), b"ID3-audio");
+        let request = request.await.unwrap_or_default();
+        assert!(request.starts_with("POST /v1/audio/speech HTTP/1.1"));
+        assert_eq!(
+            request.to_lowercase().contains("authorization: bearer"),
+            key.is_some()
+        );
+        let body: serde_json::Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or(""))
+                .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            body,
+            serde_json::json!({"model":"kokoro", "voice":"af_heart", "input":"Hello.", "response_format":"mp3", "stream_format":"audio"})
+        );
+    }
+}
+
+#[test]
+fn compatible_speech_refuses_unsafe_destinations_and_header_injection() {
+    for base in [
+        "http://example.com/v1",
+        "http://127.0.0.1.evil.test/v1",
+        "file:///v1",
+        "https://user:secret@example.com/v1",
+        "https://example.com/v1?key=secret",
+        "https://example.com/v1#secret",
+    ] {
+        assert!(
+            OpenAiCompatibleSpeech::new(base, "alloy", "tts-1", Some(KEY)).is_err(),
+            "{base}"
+        );
+        assert!(ElevenLabsSpeech::new(base, DEFAULT_VOICE_ID, DEFAULT_MODEL, KEY).is_err());
+    }
+    for base in [
+        "http://127.0.0.1:8880/v1",
+        "http://[::1]:8880/v1",
+        "http://localhost:8880/v1",
+        "https://api.openai.com/v1",
+    ] {
+        assert!(OpenAiCompatibleSpeech::new(base, "alloy", "tts-1", None).is_ok());
+    }
+    assert!(
+        OpenAiCompatibleSpeech::new(
+            "https://api.openai.com/v1",
+            "alloy",
+            "tts-1",
+            Some("x\r\nsecret: bad")
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn loopback_failures_select_backup_and_keep_provider_bodies_private() {
+    use std::sync::Arc;
+    for status in [401, 402, 429, 500, 503] {
+        let (base, request) = serve_once(
+            status,
+            format!("{KEY} private provider detail").into_bytes(),
+        )
+        .await;
+        let (backup, backup_request) = serve_once(200, b"ID3-backup".to_vec()).await;
+        let chain = FallbackSpeech::new(vec![
+            ("primary".into(), Arc::new(speech(&base))),
+            (
+                "local".into(),
+                Arc::new(
+                    OpenAiCompatibleSpeech::new(
+                        &format!("{backup}/v1"),
+                        "af_heart",
+                        "kokoro",
+                        None,
+                    )
+                    .unwrap_or_else(|e| panic!("{e}")),
+                ),
+            ),
+        ])
+        .unwrap_or_else(|e| panic!("{e}"));
+        let stream = chain
+            .open("hello", None)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(stream.selection(), Some(("local", true)));
+        assert_eq!(
+            collect_audio(stream)
+                .await
+                .unwrap_or_else(|e| panic!("{e}"))
+                .bytes()
+                .as_ref(),
+            b"ID3-backup"
+        );
+        let shown = format!("{:?} {:?}", chain, chain.statuses());
+        assert!(!shown.contains(KEY));
+        assert!(!shown.contains("private provider detail"));
+        assert!(request.await.is_ok());
+        assert!(backup_request.await.is_ok());
+    }
+}
+
+#[tokio::test]
+async fn generic_stream_enforces_cumulative_bounds_and_permanently_ends_after_error() {
+    use bytes::Bytes;
+    let chunks = [
+        Ok(Bytes::new()),
+        Ok(Bytes::from(vec![1; MAX_AUDIO_BYTES])),
+        Ok(Bytes::from_static(b"x")),
+        Ok(Bytes::from_static(b"after")),
+    ];
+    let mut stream = SpeechStream::new(futures_util::stream::iter(chunks), "audio/wav");
+    assert_eq!(stream.content_type(), "audio/wav");
+    assert_eq!(
+        stream.next_chunk().await.ok().flatten().map(|c| c.len()),
+        Some(MAX_AUDIO_BYTES)
+    );
+    assert!(matches!(
+        stream.next_chunk().await,
+        Err(SpeechError::BadAudio)
+    ));
+    assert!(matches!(stream.next_chunk().await, Ok(None)));
+}
+
+/// A real transport response, including truncation and forbidden content types.
+async fn raw_response(head: String, body: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let address = listener.local_addr().unwrap_or_else(|e| panic!("{e}"));
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap_or_else(|e| panic!("{e}"));
+        let mut request = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            let read = stream.read(&mut buffer).await.unwrap_or(0);
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if request.ends_with(b"}") {
+                break;
+            }
+        }
+        let _ = stream.write_all(head.as_bytes()).await;
+        let _ = stream.write_all(&body).await;
+        let _ = stream.shutdown().await;
+    });
+    format!("http://{address}/v1")
+}
+
+#[tokio::test]
+async fn compatible_speech_rejects_non_audio_redirects_empty_and_truncated_responses() {
+    for mime in ["application/json", "text/html", "text/event-stream"] {
+        let base = raw_response(format!("HTTP/1.1 200 OK\r\ncontent-type: {mime}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n"), b"{}".to_vec()).await;
+        let provider = OpenAiCompatibleSpeech::new(&base, "alloy", "tts-1", Some(KEY))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(matches!(
+            provider.open("hello", None).await,
+            Err(SpeechError::BadAudio)
+        ));
+    }
+    let target = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let address = target.local_addr().unwrap_or_else(|e| panic!("{e}"));
+    let base = raw_response(format!("HTTP/1.1 307 Temporary Redirect\r\nlocation: http://{address}/steal\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"), vec![]).await;
+    let provider = OpenAiCompatibleSpeech::new(&base, "alloy", "tts-1", Some(KEY))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(
+        provider.open("hello", None).await,
+        Err(SpeechError::Provider(307))
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), target.accept())
+            .await
+            .is_err()
+    );
+    for (length, body) in [
+        (0, vec![]),
+        (100, b"ID3-partial".to_vec()),
+        (MAX_AUDIO_BYTES + 1, vec![]),
+    ] {
+        let base = raw_response(format!("HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\ncontent-length: {length}\r\nconnection: close\r\n\r\n"), body).await;
+        let provider = OpenAiCompatibleSpeech::new(&base, "alloy", "tts-1", None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let result = async { collect_audio(provider.open("hello", None).await?).await }.await;
+        assert!(result.is_err());
     }
 }

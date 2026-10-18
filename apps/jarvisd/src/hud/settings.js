@@ -49,6 +49,412 @@
   applyAppearance();
 window.JarvisSettings = function (context) {
   var $ = context.$, el = context.el, api = context.api, putJson = context.putJson, explain = context.explain;
+  var voiceUnmount = null, voicesState = { reply: null, draft: null, selected: null, dirty: false, saving: false, repaint: null, notice: "" };
+
+  // Profile drafts survive section changes. Audio and pending previews never do.
+  function voiceLibraryPanel(body) {
+    var host = el("div", "voice-library"), active = true, pending = false;
+    var controller = null, audio = null, sampleAudio = null, audioUrl = null, generation = 0, progressTimer = null;
+    var note = el("p", "help", "Loading your voices…"); note.setAttribute("role", "status");
+    host.id = "voice-library"; body.appendChild(host); host.appendChild(note);
+    function copy(value) { return JSON.parse(JSON.stringify(value)); }
+    function stopPreview() {
+      generation += 1;
+      if (progressTimer) clearTimeout(progressTimer); progressTimer = null;
+      if (controller) controller.abort(); controller = null;
+      if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+      if (sampleAudio) { sampleAudio.pause(); sampleAudio.removeAttribute("src"); sampleAudio.load(); }
+      if (audioUrl) URL.revokeObjectURL(audioUrl); audioUrl = null;
+      var warm = $("voice-library-prepare"); if (warm) warm.disabled = false;
+      var warmStop = $("voice-library-stop-prepare"); if (warmStop) warmStop.hidden = true;
+      var warmBar = $("voice-prepare-progress"); if (warmBar) warmBar.hidden = true;
+      var preview = $("voice-library-preview"); if (preview) preview.disabled = false;
+      var generate = $("voice-library-generate"); if (generate) { generate.disabled = generate.dataset.unavailable === "true"; generate.textContent = generate.dataset.idleLabel || "Generate voice"; }
+      var cancel = $("voice-library-cancel-generation"); if (cancel) cancel.hidden = true;
+      var designPanel = $("voice-design-panel"); if (designPanel) designPanel.setAttribute("aria-busy", "false");
+      var previewStop = $("voice-library-stop"); if (previewStop) previewStop.hidden = true;
+    }
+    voiceUnmount = function () { active = false; voicesState.repaint = null; stopPreview(); };
+    function mark() {
+      var status = $("voice-design-status");
+      if (controller && status && status.className.indexOf("voice-progress") >= 0) { status.className = "help"; status.textContent = "Generation stopped because the settings changed. Generate again when ready."; }
+      stopPreview(); voicesState.dirty = true;
+      voicesState.notice = "";
+      note.className = "help"; note.textContent = "Unsaved changes. Preview uses these edits; Save voices applies them to new speech.";
+      var save = $("voice-library-save"); if (save) save.disabled = pending;
+      var exportRecipe = $("voice-library-export"); if (exportRecipe) { exportRecipe.disabled = true; exportRecipe.title = "Save voices before exporting the recipe."; }
+    }
+    function field(parent, label, id, control) {
+      var wrap = el("div", "voice-field"), name = el("label", "", label);
+      name.setAttribute("for", id); control.id = id; control.dataset.autosave = "voice-draft";
+      wrap.appendChild(name); wrap.appendChild(control); parent.appendChild(wrap); return control;
+    }
+    function select(items, value, change) {
+      var node = el("select"); items.forEach(function (item) { var option = el("option", "", item[1]); option.value = item[0]; node.appendChild(option); });
+      node.value = value || ""; node.addEventListener("change", function () { change(node.value); }); return node;
+    }
+    function used(id) {
+      var draft = voicesState.draft;
+      return draft.default_voice === id || draft.channels.console === id || draft.backups.indexOf(id) >= 0;
+    }
+    function ready(voice) { return !voice.design || !!voice.design.reference_audio; }
+    function uniqueName(base) {
+      var name = base, number = 2;
+      while (voicesState.draft.voices.some(function (v) { return v.name === name; })) name = base + " " + number++;
+      return name;
+    }
+    function disclosure(parent, title) {
+      var details = el("details", "voice-options"); details.appendChild(el("summary", "", title)); if (parent) parent.appendChild(details); return details;
+    }
+    function load() {
+      note.textContent = "Loading your voices…";
+      var form = Array.from(host.children).filter(function (child) { return child.tagName === "FIELDSET"; })[0];
+      if (form) form.disabled = true;
+      api("/settings/voices").then(function (reply) {
+        if (!active) return;
+        if (!reply.library) { note.textContent = "Voice library is unavailable. Update and restart JARVIS to enable it."; return; }
+        voicesState.reply = reply; voicesState.draft = copy(reply.library); voicesState.dirty = false; voicesState.notice = ""; paint();
+      }, function () { if (active) { if (form) form.disabled = false; note.className = "help bad"; note.textContent = "Could not load the voice library. Reopen this section to retry."; } });
+    }
+    function paint() {
+      if (!active) return;
+      stopPreview(); host.replaceChildren();
+      var draft = voicesState.draft, providers = voicesState.reply.providers || [];
+      var voice = draft.voices.filter(function (v) { return v.id === voicesState.selected; })[0] || draft.voices[0];
+      if (voice) voicesState.selected = voice.id;
+      var form = el("fieldset", "voice-form"); form.disabled = pending || voicesState.saving; host.appendChild(form);
+      function validInputs() {
+        var valid = true;
+        walkFields(form, function (input) { if (valid && input.checkValidity && !input.checkValidity()) { input.reportValidity(); valid = false; } });
+        return valid;
+      }
+      var head = el("div", "voice-picker-row"); form.appendChild(head);
+      var savedIds = voicesState.reply.library.voices.map(function (v) { return v.id; });
+      var choices = draft.voices.map(function (v) { return [v.id, v.name + (savedIds.indexOf(v.id) < 0 ? " (draft)" : "")]; });
+      field(head, "Voice library", "voice-library-picker", select(choices, voice && voice.id, function (id) { voicesState.selected = id; paint(); }));
+      var otherWays = disclosure(null, "More ways to add a voice");
+      otherWays.appendChild(el("p", "help", "Copy a voice to change its provider settings, or mix the two Kokoro presets."));
+      var add = el("button", "", "Copy selected voice"); add.type = "button"; add.disabled = !providers.length || draft.voices.length >= 32;
+      add.addEventListener("click", function () {
+        var current = voice || { provider: providers[0].id, model: providers[0].current.model, voice: providers[0].current.voice, settings: {} };
+        var id = "voice-" + Date.now().toString(36); while (draft.voices.some(function (v) { return v.id === id; })) id += "x";
+        var added = { id: id, name: uniqueName((current.name || "Voice") + " copy"), provider: current.provider, model: current.model, voice: current.voice, settings: copy(current.settings) };
+        if (current.blend) added.blend = copy(current.blend);
+        if (current.design) added.design = copy(current.design);
+        else if (providers.some(function (p) { return p.id === current.provider && p.description_design; })) added.design = newDesign();
+        draft.voices.push(added);
+        voicesState.selected = id; if (!draft.default_voice) draft.default_voice = id; mark(); paint(); $("voice-library-name").focus();
+      }); otherWays.appendChild(add);
+      var localDesigner = providers.filter(function (p) { return p.design; }).filter(function (p) { return voice && p.id === voice.provider; })[0] || providers.filter(function (p) { return p.design; })[0];
+      if (localDesigner) {
+        var design = el("button", "", "Mix presets"); design.type = "button"; design.id = "voice-library-design"; design.disabled = draft.voices.length >= 32;
+        design.addEventListener("click", function () {
+          var id = "blend-" + Date.now().toString(36); while (draft.voices.some(function (v) { return v.id === id; })) id += "x";
+          draft.voices.push({ id: id, name: uniqueName("Preset mix"), provider: localDesigner.id, model: localDesigner.current.model, voice: "blend", settings: {}, blend: copy(localDesigner.design.recipe) });
+          voicesState.selected = id; if (!draft.default_voice) draft.default_voice = id; mark(); paint(); $("voice-library-name").focus();
+        }); otherWays.appendChild(design);
+      }
+      var descriptionDesigner = providers.filter(function (p) { return p.description_design; })[0];
+      function newDesign() { return { version: 1, model_revision: "", description: "", sample_text: "Hello. I am ready to help you with whatever comes next.", seed: 0, reference_audio: "" }; }
+      if (descriptionDesigner) {
+        var create = el("button", "primary", "Create a voice"); create.type = "button"; create.id = "voice-library-create"; create.disabled = draft.voices.length >= 32;
+        create.addEventListener("click", function () {
+          var unfinished = draft.voices.filter(function (v) { return v.provider === descriptionDesigner.id && v.design && !ready(v) && savedIds.indexOf(v.id) < 0; })[0];
+          if (unfinished) { voicesState.selected = unfinished.id; paint(); $("voice-design-description").focus(); return; }
+          var id = "design-" + Date.now().toString(36); while (draft.voices.some(function (v) { return v.id === id; })) id += "x";
+          draft.voices.push({ id: id, name: uniqueName("New voice"), provider: descriptionDesigner.id, model: "voxcpm2", voice: "designed", settings: {}, design: newDesign() });
+          voicesState.selected = id; mark(); paint(); $("voice-design-description").focus();
+        }); head.appendChild(create);
+      }
+      if (!voice) form.appendChild(el("p", "help", "No saved voices. Configure a speech provider, then add a voice."));
+      if (voice) {
+        var editor = el("div", "voice-editor-grid"); form.appendChild(editor);
+        var name = el("input"); name.type = "text"; name.maxLength = 80; name.value = voice.name;
+        field(editor, "Name", "voice-library-name", name); name.addEventListener("input", function () {
+          voice.name = name.value; mark();
+          Array.from($("voice-library-picker").children).forEach(function (option) { if (option.value === voice.id) option.textContent = voice.name + (savedIds.indexOf(voice.id) < 0 ? " (draft)" : ""); });
+        });
+        var connection = disclosure(null, "Provider and model settings");
+        var connectionFields = el("div", "voice-editor-grid"); connection.appendChild(connectionFields);
+        field(connectionFields, "Provider", "voice-library-provider", select(providers.map(function (p) { return [p.id, p.description_design ? "Local voice designer" : p.kind === "embedded-kokoro" ? "Kokoro · local" : p.kind === "elevenlabs" ? "ElevenLabs" : p.id]; }), voice.provider, function (id) {
+          var next = providers.filter(function (p) { return p.id === id; })[0];
+          voice.provider = id; voice.voice = next.current.voice; voice.model = next.current.model; voice.settings = {}; delete voice.blend; delete voice.design;
+          if (next.description_design) voice.design = newDesign();
+          mark(); paint();
+          note.textContent = "Provider changed. Voice, model and controls reset to its defaults. Preview before saving.";
+        }));
+        var provider = providers.filter(function (p) { return p.id === voice.provider; })[0];
+        if (!provider) { note.textContent = "This voice's provider is unavailable. Select a configured provider."; host.appendChild(note); return; }
+        if (voice.design && provider.description_design) {
+          editor.appendChild(el("p", "help", ready(voice) ? (voicesState.dirty ? "Your generated voice is ready. Save it to keep it in your library." : "Saved in your library. You can listen or generate a new variation.") : "Create a voice from a description on this computer. Uses a compatible GPU when available, with CPU fallback."));
+        } else if (voice.blend && provider.design) {
+          field(editor, "Pronunciation", "voice-blend-language", select(provider.design.languages.map(function (language) { return [language.id, language.name]; }), voice.blend.language, function (value) { voice.blend.language = value; mark(); }));
+        } else if (provider.presets.length) {
+          field(editor, "Voice", "voice-library-voice", select(provider.presets.map(function (p) { return [p.id, p.name]; }), voice.voice, function (value) { voice.voice = value; mark(); }));
+        } else {
+          var voiceId = el("input"); voiceId.type = "text"; voiceId.maxLength = 128; voiceId.value = voice.voice;
+          field(editor, "Voice ID", "voice-library-voice", voiceId); voiceId.addEventListener("input", function () { voice.voice = voiceId.value; mark(); });
+        }
+        if (!provider.description_design) field(connectionFields, "Model", "voice-library-model", select(provider.models.map(function (m) { return [m.id, m.id]; }), voice.model, function (value) {
+          voice.model = value; voice.settings = {}; mark(); paint(); note.textContent = "Model changed. Controls reset to provider defaults. Preview before saving.";
+        }));
+        var modelInfo = provider.models.filter(function (m) { return m.id === voice.model; })[0];
+        if (voice.design && provider.description_design) {
+          var designPanel = el("div", "voice-description"); designPanel.id = "voice-design-panel"; form.appendChild(designPanel);
+          designPanel.appendChild(el("h4", "", "Describe your voice"));
+          var executionNote = el("p", "help"); executionNote.id = "voice-design-device"; executionNote.setAttribute("role", "status"); designPanel.appendChild(executionNote);
+          var showExecution = function () {
+            var run = provider.execution;
+            if (!run || run.backend === "auto") { executionNote.textContent = "Automatic GPU selection. The device will appear when the model loads."; return; }
+            executionNote.textContent = (run.backend === "cpu" ? "CPU" : "GPU · " + run.device) + (run.allocated_bytes ? " · " + (run.allocated_bytes / 1073741824).toFixed(1) + " GB model allocation" : "") + (run.fallback_reason ? ". " + run.fallback_reason : "");
+          };
+          showExecution();
+          field(designPanel, "Generation quality", "voice-quality", select([["fast", "Fast"], ["balanced", "Balanced"], ["quality", "Quality"]], voice.settings.quality || "quality", function (value) { voice.settings.quality = value; mark(); }));
+          designPanel.appendChild(el("p", "help", "Fast reduces the wait; Quality gives the model more time for detail. Applies to new samples and speech. Your saved voice identity stays the same."));
+          var warmRow = el("div", "voice-actions"), warm = el("button", "", "Prepare voice model"), warmStop = el("button", "", "Stop preparation");
+          warm.type = warmStop.type = "button"; warm.id = "voice-library-prepare"; warmStop.id = "voice-library-stop-prepare"; warmStop.hidden = true;
+          warmRow.appendChild(warm); warmRow.appendChild(warmStop); designPanel.appendChild(warmRow);
+          var warmNote = el("p", "help", "Prepare once to reduce the wait. The model stays in memory until JARVIS stops or generation is cancelled.");
+          warmNote.id = "voice-prepare-status"; warmNote.setAttribute("role", "status"); designPanel.appendChild(warmNote);
+          var warmBar = el("progress", "voice-warm-progress"); warmBar.id = "voice-prepare-progress"; warmBar.hidden = true; warmBar.setAttribute("aria-label", "Voice preparation progress"); designPanel.appendChild(warmBar);
+          var phaseLabels = {cold:"Model is not loaded",checking:"Checking model files",loading:"Loading the model",warming:"Warming up voice generation",encoding:"Preparing the saved voice",generating:"Generating audio",ready:"Model ready"};
+          function pollExecution(epoch, target, verb, began, isPlaying) {
+            if (!active || epoch !== generation) return;
+            api("/settings/voices/runtime").then(function (reply) {
+              if (!active || epoch !== generation) return;
+              var current = (reply.providers || []).filter(function (p) { return p.id === provider.id; })[0];
+              if (current) { provider.execution = current.execution; showExecution(); }
+              var phase = provider.execution && provider.execution.phase;
+              target.textContent = (isPlaying && isPlaying() ? "Playing while audio is generated" : phaseLabels[phase] || verb) + "... " + Math.floor((Date.now() - began) / 1000) + "s elapsed.";
+            }).catch(function () {}).finally(function () { if (active && epoch === generation) progressTimer = setTimeout(function () { pollExecution(epoch, target, verb, began, isPlaying); }, 500); });
+          }
+          warmStop.addEventListener("click", function () { stopPreview(); warmNote.textContent = "Preparation stopped. Prepare again when ready."; });
+          warm.disabled = !!provider.design_unavailable_reason;
+          warm.addEventListener("click", async function () {
+            if (!context.prepareVoice || provider.design_unavailable_reason) return;
+            stopPreview(); var epoch = generation; controller = new AbortController();
+            warm.disabled = true; generate.disabled = true; warmStop.hidden = false; warmBar.hidden = false;
+            warmNote.className = "help voice-progress"; warmNote.textContent = "Starting voice preparation...";
+            pollExecution(epoch, warmNote, "Preparing the voice model", Date.now());
+            try {
+              var prepared = await context.prepareVoice({provider:provider.id}, controller.signal);
+              if (!active || epoch !== generation) return;
+              provider.execution = prepared.execution; showExecution(); warmNote.className = "help"; warmNote.textContent = "Model ready. Voice generation is warmed up on " + ((prepared.execution || {}).device || "this computer") + ".";
+            } catch (error) { if (active && epoch === generation) { warmNote.className = "help bad"; warmNote.textContent = explain(error, "Preparation failed. Check the local runtime and retry."); } }
+            finally { if (active && epoch === generation) stopPreview(); }
+          });
+          designPanel.appendChild(el("p", "help", "Describe the age, accent, tone and speaking style you want. Generate a sample, listen, then save the voice to your library."));
+          var description = el("textarea"); description.rows = 3; description.maxLength = 500; description.required = true;
+          description.placeholder = "A warm, calm adult male voice with a British accent and a clear, friendly delivery."; description.value = voice.design.description;
+          field(designPanel, "Voice description", "voice-design-description", description);
+          function changedDesign() {
+            voice.design.reference_audio = ""; listen.disabled = true; mark();
+            generate.dataset.idleLabel = "Generate voice"; generate.textContent = "Generate voice";
+            sampleAudio.hidden = true; previewPanel.hidden = true;
+            designNote.className = "help"; designNote.textContent = provider.design_unavailable_reason || "Generate a sample to hear this voice.";
+          }
+          description.addEventListener("input", function () { voice.design.description = description.value; changedDesign(); });
+          var designSample = el("textarea"); designSample.rows = 2; designSample.maxLength = 120; designSample.required = true; designSample.value = voice.design.sample_text;
+          field(designPanel, "Words for the sample", "voice-design-sample", designSample);
+          designSample.addEventListener("input", function () { voice.design.sample_text = designSample.value; changedDesign(); });
+          var generateRow = el("div", "voice-actions"), generate = el("button", "primary", voice.design.reference_audio ? "Generate another voice" : "Generate voice");
+          generate.type = "button"; generate.id = "voice-library-generate"; generateRow.appendChild(generate);
+          generate.disabled = !!provider.design_unavailable_reason; generate.dataset.unavailable = String(generate.disabled); generate.dataset.idleLabel = generate.textContent;
+          var cancelGeneration = el("button", "", "Stop generation"); cancelGeneration.type = "button"; cancelGeneration.id = "voice-library-cancel-generation"; cancelGeneration.hidden = true;
+          cancelGeneration.addEventListener("click", function () { stopPreview(); designNote.className = "help"; designNote.textContent = "Generation stopped. You can change the description or try again."; }); generateRow.appendChild(cancelGeneration);
+          var listen = el("button", "", "Listen to sample"); listen.id = "voice-library-listen"; listen.type = "button"; listen.disabled = !voice.design.reference_audio;
+          listen.addEventListener("click", async function () {
+            if (!voice.design.reference_audio || !context.voiceReferenceBlob) return;
+            stopPreview(); if (context.stopSpeech) context.stopSpeech();
+            audioUrl = URL.createObjectURL(context.voiceReferenceBlob(voice.design.reference_audio)); sampleAudio.src = audioUrl; sampleAudio.hidden = false;
+            sampleAudio.scrollIntoView({ block: "nearest" });
+            try { await sampleAudio.play(); } catch (error) { designNote.textContent = "Sample ready. Press Play below to listen."; }
+          }); generateRow.appendChild(listen); designPanel.appendChild(generateRow);
+          var designNote = el("p", "help" + (provider.design_unavailable_reason ? " bad" : ""), provider.design_unavailable_reason || (ready(voice) ? (voicesState.dirty ? "Sample ready. Listen, then Save voices below to keep it." : "Saved sample ready to play. Try different words below to hear more.") : "The first sample loads the local model. Generation speed depends on your hardware. Allow up to 3 minutes."));
+          designNote.id = "voice-design-status"; designNote.setAttribute("role", "status"); designNote.setAttribute("aria-live", "polite"); designPanel.appendChild(designNote);
+          sampleAudio = el("audio", "voice-preview-audio"); sampleAudio.id = "voice-design-audio"; sampleAudio.controls = true; sampleAudio.hidden = true; sampleAudio.setAttribute("aria-label", "Generated voice sample"); designPanel.appendChild(sampleAudio);
+          if (provider.design_unavailable_reason) {
+            var retrySetup = el("button", "", "Check setup again"); retrySetup.type = "button"; designPanel.appendChild(retrySetup);
+            retrySetup.addEventListener("click", async function () {
+              retrySetup.disabled = true;
+              try { var latest = await api("/settings/voices"); if (active) { voicesState.reply.providers = latest.providers; paint(); } }
+              catch (error) { if (active) { designNote.className = "help bad"; designNote.textContent = explain(error, "Could not check setup. Try again."); retrySetup.disabled = false; } }
+            });
+          }
+          generate.addEventListener("click", async function () {
+            if (!voice.design.description.trim() || !voice.design.sample_text.trim()) { designNote.className = "help bad"; designNote.textContent = "Enter a voice description and words for the sample first."; (!voice.design.description.trim() ? description : designSample).focus(); return; }
+            if (provider.design_unavailable_reason) return;
+            stopPreview(); var epoch = generation; if (context.stopSpeech) context.stopSpeech();
+            controller = new AbortController(); generate.disabled = true; generate.textContent = "Generating…"; cancelGeneration.hidden = false; designPanel.setAttribute("aria-busy", "true"); designNote.className = "help voice-progress";
+            var began = Date.now(), streaming = false;
+            designNote.textContent = "Generating your voice locally... 0s elapsed.";
+            pollExecution(epoch, designNote, "Generating your voice locally", began, function () { return streaming; });
+            designNote.scrollIntoView({ block: "nearest" });
+            try {
+              var reply = await context.designVoice({ provider: voice.provider, description: voice.design.description, text: voice.design.sample_text, seed: Math.floor(Math.random() * 4294967296), quality: voice.settings.quality || "quality" }, controller.signal, function () { streaming = true; if (active && epoch === generation) designNote.textContent = "Playing while audio is generated..."; });
+              if (!active || generation !== epoch) return;
+              if (reply.execution) provider.execution = reply.execution;
+              voice.design = copy(reply.design); if (!draft.default_voice) draft.default_voice = voice.id; mark(); voicesState.notice = "Voice generated. Listen to the sample, then Save voices to keep it."; paint();
+              if (!reply.streamed) $("voice-library-listen").click();
+              else { audioUrl = URL.createObjectURL(context.voiceReferenceBlob(voice.design.reference_audio)); sampleAudio.src = audioUrl; sampleAudio.hidden = false; }
+            } catch (error) { if (active && generation === epoch) { designNote.className = "help bad"; designNote.textContent = explain(error, "The voice could not be generated. Check the local designer installation and try again."); designNote.scrollIntoView({ block: "nearest" }); } }
+            finally { if (active && generation === epoch) stopPreview(); }
+          });
+        }
+        if (voice.blend && provider.design) {
+          var blendPanel = el("div", "voice-blend"); form.appendChild(blendPanel);
+          blendPanel.appendChild(el("h4", "", "Blend voices"));
+          var heartSource = voice.blend.sources.filter(function (part) { return part.voice === "af_heart"; })[0];
+          var georgeSource = voice.blend.sources.filter(function (part) { return part.voice === "bm_george"; })[0];
+          var weights = el("div", "voice-editor-grid"); blendPanel.appendChild(weights);
+          var heart = el("input"), george = el("input"), balance = el("input"), readout = el("p", "voice-blend-readout");
+          [heart, george].forEach(function (input) { input.type = "number"; input.min = 0; input.max = 100; input.step = 1; input.required = true; });
+          heart.value = String(heartSource.weight); george.value = String(georgeSource.weight);
+          field(weights, "Heart (%)", "voice-blend-heart", heart); field(weights, "George (%)", "voice-blend-george", george);
+          balance.type = "range"; balance.min = 0; balance.max = 100; balance.step = 1;
+          field(blendPanel, "Blend balance", "voice-blend-balance", balance);
+          function showBalance() {
+            balance.value = String(georgeSource.weight);
+            var text = "Heart " + heartSource.weight + "% · George " + georgeSource.weight + "%";
+            readout.textContent = text; balance.setAttribute("aria-valuetext", text);
+          }
+          function setWeight(input, isHeart) {
+            var amount = Number(input.value); mark();
+            if (input.value === "" || !Number.isInteger(amount) || amount < 0 || amount > 100) return;
+            heartSource.weight = isHeart ? amount : 100 - amount; georgeSource.weight = 100 - heartSource.weight;
+            heart.value = String(heartSource.weight); george.value = String(georgeSource.weight); showBalance();
+          }
+          heart.addEventListener("input", function () { setWeight(heart, true); });
+          george.addEventListener("input", function () { setWeight(george, false); });
+          balance.addEventListener("input", function () { setWeight(balance, false); });
+          showBalance(); blendPanel.appendChild(readout);
+          blendPanel.appendChild(el("p", "help", "Mix the two local presets, then preview the result. Pronunciation stays fixed as you adjust the balance. This engine cannot design a voice from a written description."));
+        }
+        var controls = el("div", "voice-controls"); connection.appendChild(controls);
+        (modelInfo ? modelInfo.controls : []).forEach(function (control) {
+          var input;
+          if (control.kind === "boolean") {
+            input = select([["", "Provider default"], ["true", "On"], ["false", "Off"]], voice.settings[control.key] === undefined ? "" : String(voice.settings[control.key]), function (value) {
+              if (value === "") delete voice.settings[control.key]; else voice.settings[control.key] = value === "true"; mark();
+            });
+          } else {
+            input = el("input"); input.type = "number"; input.min = control.min; input.max = control.max; input.step = control.step;
+            input.placeholder = "Provider default"; input.value = voice.settings[control.key] === undefined ? "" : String(voice.settings[control.key]);
+            input.addEventListener("input", function () { if (input.value === "") delete voice.settings[control.key]; else voice.settings[control.key] = Number(input.value); mark(); });
+          }
+          field(controls, control.label + (control.kind === "number" ? " (" + control.min + "–" + control.max + ")" : ""), "voice-control-" + control.key, input);
+        });
+        if (!provider.description_design) connection.appendChild(el("p", "help", "Leave controls blank to use provider defaults."));
+        var previewPanel = provider.description_design ? disclosure(form, "Try this voice with different words") : el("div");
+        if (!provider.description_design) form.appendChild(previewPanel);
+        previewPanel.hidden = !ready(voice);
+        var sample = el("textarea"); sample.maxLength = 300; sample.rows = 2; sample.value = "Hello. This is how I will sound with these voice settings.";
+        field(previewPanel, "Preview text", "voice-library-sample", sample);
+        var previewRow = el("div", "voice-actions"), preview = el("button", "", "Preview voice"), stop = el("button", "", "Stop preview");
+        preview.type = stop.type = "button"; preview.id = "voice-library-preview"; stop.id = "voice-library-stop"; stop.hidden = true;
+        var previewNote = el("p", "help"); previewNote.setAttribute("role", "status");
+        audio = el("audio", "voice-preview-audio"); audio.controls = true; audio.hidden = true; audio.setAttribute("aria-label", "Voice preview");
+        preview.addEventListener("click", async function () {
+          if (!validInputs()) return;
+          if (voice.design && !voice.design.reference_audio) { previewNote.textContent = "Generate your voice first, then preview it with any text."; return; }
+          stopPreview(); var epoch = generation;
+          if (context.stopSpeech) context.stopSpeech();
+          if (!context.previewVoice) { previewNote.textContent = "Preview is unavailable. Reload the console."; return; }
+          controller = new AbortController(); preview.disabled = true; stop.hidden = false; previewNote.className = "help";
+          previewNote.textContent = "Generating this voice… First local use may need to prepare its model.";
+          try {
+            var blob = await context.previewVoice({ voice: copy(voice), text: sample.value }, controller.signal, function () { if (active && epoch === generation) previewNote.textContent = "Playing while audio is generated..."; });
+            if (!active || epoch !== generation) return;
+            audioUrl = URL.createObjectURL(blob); audio.src = audioUrl; audio.hidden = false;
+            previewNote.textContent = "Preview ready. Save voices to apply any edits.";
+            if (!blob.streamed) await audio.play();
+          } catch (error) {
+            if (active && epoch === generation) { previewNote.className = "help bad"; previewNote.textContent = explain(error, "Preview did not play. If audio is ready, press Play; otherwise retry. No backup voice was used."); }
+          } finally {
+            if (active && epoch === generation) {
+              preview.disabled = false;
+              if (provider.description_design && voice.design) api("/settings/voices/runtime").then(function (reply) {
+                if (!active || epoch !== generation) return;
+                var current = (reply.providers || []).filter(function (p) { return p.id === provider.id; })[0];
+                if (current) { provider.execution = current.execution; showExecution(); }
+              }).catch(function () {});
+            }
+          }
+        });
+        stop.addEventListener("click", function () { stopPreview(); audio.hidden = true; previewNote.textContent = "Preview stopped."; });
+        sample.addEventListener("input", stopPreview);
+        previewRow.appendChild(preview); previewRow.appendChild(stop); previewPanel.appendChild(previewRow); previewPanel.appendChild(audio); previewPanel.appendChild(previewNote);
+        previewPanel.appendChild(el("p", "help", provider.kind === "local-voxcpm2" ? "Uses your generated sample to keep the same voice. Runs locally." : provider.kind === "embedded-kokoro" ? "Runs locally with Kokoro." : "Sends preview text to this provider and may use paid credits."));
+        var management = disclosure(null, "Manage this voice");
+        var remove = el("button", "danger", savedIds.indexOf(voice.id) < 0 ? "Discard draft" : "Delete voice"); remove.type = "button"; remove.disabled = used(voice.id);
+        remove.title = remove.disabled ? "Choose another default/channel/backup voice before deleting this one." : "Remove this voice when you save.";
+        remove.addEventListener("click", function () { draft.voices = draft.voices.filter(function (v) { return v.id !== voice.id; }); mark(); paint(); }); management.appendChild(remove);
+        if (voice.blend || voice.design) {
+          var exportRecipe = el("button", "", "Export recipe"); exportRecipe.type = "button"; exportRecipe.id = "voice-library-export";
+          exportRecipe.disabled = voicesState.dirty; exportRecipe.title = voicesState.dirty ? "Save voices before exporting the recipe." : "Download the saved design as JSON.";
+          exportRecipe.addEventListener("click", function () {
+            exportRecipe.disabled = true;
+            api("/settings/voices/" + encodeURIComponent(voice.id) + "/export").then(function (recipe) {
+              if (!active) return;
+              if (!context.downloadVoiceRecipe) throw new Error("Recipe downloads are unavailable. Reload the console.");
+              context.downloadVoiceRecipe(voice.id + ".voice.json", recipe);
+              note.textContent = "Saved recipe exported. It contains the voice design and settings, with no credentials.";
+            }).catch(function (error) { if (active) { note.className = "help bad"; note.textContent = explain(error, "Could not export this saved recipe."); } }).finally(function () { if (active) exportRecipe.disabled = voicesState.dirty; });
+          }); management.appendChild(exportRecipe);
+        }
+      }
+      choices = draft.voices.filter(ready).map(function (v) { return [v.id, v.name]; });
+      if (choices.length) {
+        var routes = disclosure(null, "Default voice and backups"); routes.className += " voice-routes"; routes.id = "voice-library-routes";
+        routes.appendChild(el("p", "help", "Choose where to use your saved voices. Changes apply when you save."));
+        field(routes, "Default voice", "voice-library-default", select(choices, draft.default_voice, function (id) { draft.default_voice = id; draft.backups = draft.backups.filter(function (v) { return v !== id; }); mark(); paint(); }));
+        field(routes, "Console", "voice-library-console", select([["", "Use default voice"]].concat(choices), draft.channels.console, function (id) { draft.channels.console = id || null; mark(); }));
+        routes.appendChild(el("p", "help", "Telegram sends text only. Phone calls use the voice on your ElevenLabs agent; these choices do not change it."));
+        routes.appendChild(el("h4", "", "Backup voices"));
+        routes.appendChild(el("p", "help", "Tried in this order if the selected provider fails. Each provider is tried once."));
+        draft.backups.forEach(function (id, index) {
+          var row = el("div", "voice-backup-row"); routes.appendChild(row);
+          field(row, "Backup " + (index + 1), "voice-backup-" + index, select(choices.filter(function (c) { return c[0] !== draft.default_voice; }), id, function (value) { draft.backups[index] = value; mark(); }));
+          var up = el("button", "", "Move up"), remove = el("button", "", "Remove backup"); up.type = remove.type = "button"; up.disabled = index === 0;
+          up.addEventListener("click", function () { var previous = draft.backups[index - 1]; draft.backups[index - 1] = id; draft.backups[index] = previous; mark(); paint(); });
+          remove.addEventListener("click", function () { draft.backups.splice(index, 1); mark(); paint(); }); row.appendChild(up); row.appendChild(remove);
+        });
+        var nextBackup = draft.voices.filter(function (v) { return ready(v) && v.id !== draft.default_voice && draft.backups.indexOf(v.id) < 0; })[0];
+        var addBackup = el("button", "", "Add backup"); addBackup.type = "button"; addBackup.disabled = !nextBackup || draft.backups.length >= 7;
+        addBackup.addEventListener("click", function () { draft.backups.push(nextBackup.id); mark(); paint(); }); routes.appendChild(addBackup);
+      }
+      var actions = el("div", "voice-actions"), save = el("button", "primary", pending ? "Saving…" : "Save voices"), reload = el("button", "", "Discard changes and reload");
+      save.id = "voice-library-save"; save.type = reload.type = "button"; save.disabled = pending || !voicesState.dirty;
+      save.addEventListener("click", function () {
+        if (!validInputs()) return;
+        if (draft.voices.some(function (v) { return !ready(v); })) { note.className = "help bad"; note.textContent = "Generate a sample for each new voice before saving, or discard the unfinished draft under Manage this voice."; return; }
+        stopPreview(); pending = true; voicesState.saving = true; form.disabled = true; save.disabled = true; note.textContent = "Saving voices…";
+        putJson("/settings/voices", "PUT", copy(voicesState.draft)).then(function (reply) {
+          pending = false; voicesState.saving = false; voicesState.reply = reply; voicesState.draft = copy(reply.library); voicesState.dirty = false;
+          voicesState.notice = "Voices saved. New speech uses these settings immediately; they survive restart.";
+          if (voicesState.repaint) voicesState.repaint();
+        }, function (error) {
+          pending = false; voicesState.saving = false;
+          voicesState.notice = explain(error, "Voices were not saved. Your edits are still here.");
+          if (voicesState.repaint) voicesState.repaint();
+        });
+      });
+      reload.addEventListener("click", function () { stopPreview(); load(); }); actions.appendChild(save); actions.appendChild(reload);
+      if (voice && ready(voice)) {
+        var useVoice = el("button", "", "Save and use in console"); useVoice.type = "button";
+        useVoice.addEventListener("click", function () { draft.channels.console = voice.id; mark(); save.click(); }); actions.appendChild(useVoice);
+      }
+      form.appendChild(actions);
+      note.className = "help"; note.textContent = voicesState.notice || (voicesState.dirty ? "Unsaved changes. Preview uses these edits; Save voices applies them to new speech." : "Saved voices apply to new speech. Changes stay in this page until you save.");
+      form.appendChild(note);
+      if (routes) form.appendChild(routes);
+      if (connection) form.appendChild(connection);
+      if (management) form.appendChild(management);
+      form.appendChild(otherWays);
+    }
+    voicesState.repaint = paint;
+    if ((voicesState.dirty || voicesState.saving) && voicesState.reply) paint(); else load();
+  }
   // Called when needed, not captured now: the tools list helpers are declared in hud.js after the point this is created.
   function families(tools) { return context.families(tools); }
   function familyLabel(group) { return context.familyLabel(group); }
@@ -2636,6 +3042,7 @@ window.JarvisSettings = function (context) {
 
     function renderSettings() {
       var body = $("settings-body");
+      if (voiceUnmount) { voiceUnmount(); voiceUnmount = null; }
       if (openPicker) openPicker.close();
       // A switch or a save redraws the tab; stay where the person was scrolling instead of jumping to the top.
       var scrolled = lastTab === sview.tab ? body.scrollTop : 0;
@@ -2694,19 +3101,18 @@ window.JarvisSettings = function (context) {
           body.appendChild(more);
         }
       } else if (sview.tab === "voice") {
-        var voiceOn = keyIsSet("voice");
-        body.appendChild(section("Voice", voiceOn ? "Using the ElevenLabs voice below (after a restart). The same key lets the Phone tab place calls."
-          : "Using your browser's own voice. Add an ElevenLabs key for a natural one; it is also what the Phone tab needs."));
+        body.appendChild(section("Voice", "Choose a voice from your library, or create one by describing how it should sound."));
+        var providerStatus = el("details", "voice-options"); providerStatus.appendChild(el("summary", "", "Provider status"));
+        var speechStatus = el("p", "secthint", "Checking configured speech providers…"); providerStatus.appendChild(speechStatus);
+        api("/speech").then(function (status) {
+          speechStatus.textContent = status.enabled ? (status.providers || []).map(function (provider) {
+            return provider.id + ": " + (provider.health === "unknown" ? "not used yet" : provider.health.replace(/_/g, " "));
+          }).join(" · ") : "Using the browser voice. Configure a cloud or local speech provider to use a natural voice.";
+        }, function () { speechStatus.textContent = "Speech provider status is unavailable."; });
+        voiceLibraryPanel(body);
+        body.appendChild(providerStatus);
         body.appendChild(keyRow("voice", "ElevenLabs key"));
-        var voiceSettings = inGroup("voice");
-        if (voiceSettings.length) {
-          var voiceMore = el("details");
-          voiceMore.open = voiceSettings.some(isSetting);
-          voiceMore.appendChild(el("summary", "", "Choose another voice or model (optional)"));
-          voiceMore.appendChild(el("p", "secthint", "The defaults are right unless you want a different voice. Copy a voice id from the voice library in your ElevenLabs account. They only apply once a key is set."));
-          voiceSettings.forEach(function (s) { voiceMore.appendChild(settingRow(s)); });
-          body.appendChild(voiceMore);
-        }
+        body.appendChild(el("p", "help", "Provider connections and key changes require a restart. Saved voice changes apply immediately."));
         body.appendChild(section("Web search", keyIsSet("search") ? "JARVIS can search the web." : "Off. Lets JARVIS search the web when you ask a question it cannot answer from memory. Uses an Ollama key: a free account at ollama.com makes one."));
         body.appendChild(keyRow("search", "Search key"));
       } else if (sview.tab === "files") {
@@ -2795,7 +3201,7 @@ window.JarvisSettings = function (context) {
       focusSettingsTab();
       loadSettings();
     }
-    function closeSettings() { if (openPicker) openPicker.close(); clearSecrets(); $("settings").hidden = true; if (typeof checkAttention === "function") checkAttention(); }
+    function closeSettings() { if (voiceUnmount) { voiceUnmount(); voiceUnmount = null; } if (openPicker) openPicker.close(); clearSecrets(); $("settings").hidden = true; if (typeof checkAttention === "function") checkAttention(); }
     // Things that have stopped working while nobody is looking at Settings: the internet address, the phone door, Telegram. Each is
     // asked from the daemon's own status routes (no provider is called). Only a real breakage is raised, and quietly: a pill in the
     // header ("1 issue") that opens a small panel with Check again, the tab that fixes it, and Hide. A step that is simply not set up

@@ -6,6 +6,10 @@ Every external integration requires a dated record based on current official sou
 
 | Integration | Official AI/docs index | Record | Status |
 | --- | --- | --- | --- |
+| Speech fallback | ElevenLabs/OpenAI indexes and Kokoro v0.2.4 source | [speech-fallback.md](speech-fallback.md) | Provider interface, fallback and local-server adapter; live OpenAI and local acceptance recorded |
+| Embedded speech | Official ONNX Runtime releases, Kokoro model card and pinned crate source | [embedded-speech.md](embedded-speech.md) | P8-022 in-process synthesis; native acceptance tracked in record |
+| Voice settings | Current ElevenLabs model controls, OpenAI v1 and pinned Kokoro graph | [voice-settings.md](voice-settings.md) | P8-023 voice library, supported controls and exact draft preview |
+| Voice design | Official Kokoro pipeline and pinned ONNX style tensor contract | [voice-design.md](voice-design.md) | P8-024 local weighted presets and portable recipes |
 | Website signed installation | GitHub/Sigstore/curl/Microsoft official docs | [website-signed-install.md](website-signed-install.md) | Pinned signed default deployed; seven native website jobs and hosted byte/header verification pass |
 | Clean-machine lifecycle | Official Windows/Rust/systemd/Apple/GitHub contracts | [clean-machine-lifecycle.md](clean-machine-lifecycle.md) | Guarded repair/removal and toolchain-free drivers; clean-host/provider access pending |
 | Signed binary updates | Official Sigstore/Rust/library contracts | [binary-update.md](binary-update.md) | Exact-history signed activation/rollback, recovery and hosted native service gates pass; clean-machine lifecycle remains separate |
@@ -85,6 +89,11 @@ Create and verify these immediately before their TODO task:
 The voice path has more than one named provider, and each requires its own dated record before its adapter is written. The records for Twilio, Deepgram (Flux), Google Gemini Live, and LiveKit already exist; see the table above. Turn-detection policy across all of them is recorded in [ADR-0010](../../adr/0010-model-based-turn-detection.md), and the architecture contract is in [voice and telephony](../../architecture/voice-and-telephony.md).
 
 Use [_template.md](_template.md). Never infer current API behavior from the filename or this index.
+
+- [Local preset voice design](voice-design.md): pinned Kokoro mixing and real Windows verification.
+- [Description-based voice design](voice-description-design.md): pinned VoxCPM2, owned local worker and saved synthetic references.
+- [Local voice GPU execution](voice-gpu.md): pinned AMD/NVIDIA runtimes, actual device metadata and CPU fallback.
+- [Voice GPU latency review](voice-gpu-performance.md): RX 9070 XT cold/warm measurements, diffusion-step and streaming comparisons, and implementation priorities.
 
 ## Status Vocabulary
 

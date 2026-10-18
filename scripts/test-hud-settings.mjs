@@ -63,6 +63,9 @@ class Element {
   click() { if (!this.disabled) this.dispatch("click"); }
   dispatchEvent(event) { return this.dispatch(event.type); }
   scrollIntoView() {}
+  pause() { this.paused = true; }
+  load() {}
+  play() { this.paused = false; this.played = true; return Promise.resolve(); }
   dispatch(type, values = {}) {
     const event = {
       type, target: this, defaultPrevented: false,
@@ -84,7 +87,7 @@ function deferred() {
 }
 async function flush() { await Promise.resolve(); await Promise.resolve(); }
 
-function harness({ stored = null, readThrows = false, writeThrows = false, storageThrows = false, storageEntries = {}, putHandler = null, apiResponses = {}, popup = null, pageLocation = { protocol: "https:", hostname: "hud.example.test" } } = {}) {
+function harness({ stored = null, readThrows = false, writeThrows = false, storageThrows = false, storageEntries = {}, putHandler = null, previewHandler = null, designHandler = null, prepareHandler = null, apiResponses = {}, popup = null, pageLocation = { protocol: "https:", hostname: "hud.example.test" } } = {}) {
   const document = {
     createElement(tag) { return new Element(tag, this); },
     createElementNS(namespace, tag) { const node = this.createElement(tag); node.namespaceURI = namespace; return node; },
@@ -137,9 +140,14 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
     return storage;
   } });
   const timers = new Map();
+  const preparations = [], designs = [], previews = [], blobs = [], revoked = [], voiceDownloads = [];
+  class BrowserURL extends URL {
+    static createObjectURL(blob) { blobs.push(blob); return "blob:voice-" + blobs.length; }
+    static revokeObjectURL(url) { revoked.push(url); }
+  }
   let timerId = 0;
   runInNewContext(source, {
-    window, document, Event, URL,
+    window, document, Event, URL: BrowserURL, AbortController,
     setTimeout(callback, delay) { timers.set(++timerId, { callback, delay }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     setInterval() {}
@@ -161,6 +169,11 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
         putCalls.push([path, method, payload && JSON.parse(JSON.stringify(payload))]);
         return putHandler ? putHandler(path, method, payload) : Promise.resolve({ applied: true });
       },
+      previewVoice(body, signal) { previews.push({ body: JSON.parse(JSON.stringify(body)), signal }); return previewHandler ? previewHandler(body, signal) : Promise.resolve({ type: "audio/wav" }); },
+      prepareVoice(body, signal) { preparations.push({body, signal}); return prepareHandler(body, signal); },
+      designVoice(body, signal) { designs.push({ body: JSON.parse(JSON.stringify(body)), signal }); return designHandler(body, signal); },
+      voiceReferenceBlob(encoded) { return { type: "audio/wav", encoded }; },
+      downloadVoiceRecipe(filename, recipe) { voiceDownloads.push({ filename, recipe: JSON.parse(JSON.stringify(recipe)) }); },
       explain(error, fallback) { return fallback; },
       families(items) { return [{ tools: items }]; },
       familyLabel() { return el("span", "", "Tools"); }
@@ -176,7 +189,7 @@ function harness({ stored = null, readThrows = false, writeThrows = false, stora
     timers.delete(id);
     timer.callback();
   }
-  return { document, $, initialize, mountTasks, writes, entries, apiCalls, putCalls, settings, tools, confirmations, openedWindows, search, tab, open, select, timers, runTimer };
+  return { document, $, initialize, mountTasks, writes, entries, apiCalls, putCalls, preparations, designs, previews, blobs, revoked, voiceDownloads, settings, tools, confirmations, openedWindows, search, tab, open, select, timers, runTimer };
 }
 
 const defaultAppearance = { density: "comfortable", motion: "system", accent: "mint", atmosphere: "cinematic" };
@@ -191,6 +204,124 @@ const classNodes = (h, name) => descendants(h.$("settings-body")).filter(node =>
 const fieldLabel = (h, field) => descendants(h.$("settings-body")).find(node => node.tagName === "LABEL" && node.getAttribute("for") === field.id);
 const buttonNamed = (h, text) => descendants(h.$("settings-body")).find(node => node.tagName === "BUTTON" && node.textContent === text);
 const savedSetting = (key, value, kind = "text") => ({ key, value, kind, default: "", help: "A saved configuration choice.", unset_means: "Use the default choice.", group: "advanced" });
+const voiceFixture = {
+  library: { schema_version: 1, revision: 2, voices: [
+    { id: "cloud", name: "Cloud", provider: "cloud", model: "eleven_v4_turbo", voice: "example", settings: {} },
+    { id: "local", name: "Local", provider: "local", model: "kokoro-v1.0", voice: "af_heart", settings: {} }
+  ], default_voice: "cloud", backups: ["local"], channels: { console: null } },
+  providers: [
+    { id: "cloud", kind: "elevenlabs", current: { model: "eleven_v4_turbo", voice: "example" }, presets: [], models: [
+      { id: "eleven_v4_turbo", controls: [{ key: "stability", label: "Stability", kind: "number", min: 0, max: 1, step: 0.05 }] }
+    ] },
+    { id: "local", kind: "embedded-kokoro", current: { model: "kokoro-v1.0", voice: "af_heart" },
+      presets: [{ id: "af_heart", name: "Heart" }, { id: "bm_george", name: "George" }],
+      models: [{ id: "kokoro-v1.0", controls: [{ key: "speed", label: "Speed", kind: "number", min: 0.5, max: 2, step: 0.05 }] }] }
+  ]
+};
+voiceFixture.providers[1].design = {
+  recipe: { version: 1, model_revision: "1939ad2a8e416c0acfeecc08a694d14ef25f2231", language: "en-us", sources: [{ voice: "af_heart", weight: 50 }, { voice: "bm_george", weight: 50 }] },
+  languages: [{ id: "en-us", name: "American English" }, { id: "en-gb", name: "British English" }]
+};
+
+async function voiceHarness(options = {}) {
+  const h = harness({ apiResponses: { "/settings/voices": structuredClone(voiceFixture) }, ...options });
+  h.initialize(); h.open(); await loadFixture(h, fixture); h.select("voice"); await flush(); return h;
+}
+
+test("local design keeps complementary weights and pronunciation in the exact unsaved preview", async () => {
+  const waiting = deferred(); const h = await voiceHarness({ previewHandler: () => waiting.promise });
+  h.$("voice-library-design").click();
+  assert.equal(h.$("voice-library-provider").value, "local");
+  h.$("voice-blend-heart").value = "35"; h.$("voice-blend-heart").dispatch("input");
+  assert.equal(h.$("voice-blend-george").value, "65"); assert.equal(h.$("voice-blend-balance").value, "65");
+  assert.match(h.$("voice-blend-balance").getAttribute("aria-valuetext"), /Heart 35%/);
+  h.$("voice-blend-language").value = "en-gb"; h.$("voice-blend-language").dispatch("change");
+  h.$("voice-library-preview").click();
+  assert.deepEqual(h.previews[0].body.voice.blend, { ...voiceFixture.providers[1].design.recipe, language: "en-gb", sources: [{ voice: "af_heart", weight: 35 }, { voice: "bm_george", weight: 65 }] });
+  h.$("voice-blend-balance").value = "20"; h.$("voice-blend-balance").dispatch("input");
+  assert(h.previews[0].signal.aborted); waiting.resolve({ type: "audio/wav" }); await flush(); assert.equal(h.blobs.length, 0);
+  h.select("console"); h.select("voice"); await flush();
+  assert.equal(h.$("voice-blend-heart").value, "80"); assert.equal(h.$("voice-blend-language").value, "en-gb");
+  buttonNamed(h, "Copy selected voice").click(); assert.equal(h.$("voice-blend-heart").value, "80", "duplicating a design retains its recipe");
+  h.$("voice-library-provider").value = "cloud"; h.$("voice-library-provider").dispatch("change");
+  assert.equal(h.$("voice-blend-heart"), null);
+  assert.equal(h.putCalls.length, 0);
+});
+
+test("a design must be saved before export and deletion removes its persisted recipe", async () => {
+  const responses = { "/settings/voices": structuredClone(voiceFixture) };
+  const h = await voiceHarness({ apiResponses: responses, putHandler(path, method, payload) {
+    assert.equal(path, "/settings/voices"); assert.equal(method, "PUT");
+    const reply = structuredClone(voiceFixture); reply.library = structuredClone(payload); reply.library.revision++;
+    responses[path] = reply; return Promise.resolve(reply);
+  } });
+  h.$("voice-library-design").click(); const id = h.$("voice-library-picker").value;
+  assert(h.$("voice-library-export").disabled); h.$("voice-library-export").click(); assert.equal(h.voiceDownloads.length, 0);
+  h.$("voice-library-name").value = "Evening blend"; h.$("voice-library-name").dispatch("input");
+  h.$("voice-library-save").click(); await flush();
+  assert.equal(h.$("voice-library-export").disabled, false);
+  const saved = responses["/settings/voices"].library.voices.find(v => v.id === id);
+  assert(saved.blend); assert.equal(saved.name, "Evening blend");
+  const recipe = { format: "jarvis-voice-design", version: 1, name: saved.name, model: saved.model, voice: saved.voice, settings: saved.settings, blend: saved.blend };
+  responses["/settings/voices/" + id + "/export"] = recipe;
+  h.$("voice-library-export").click(); await flush();
+  assert.deepEqual(h.voiceDownloads, [{ filename: id + ".voice.json", recipe }]);
+  h.$("voice-blend-heart").value = "70"; h.$("voice-blend-heart").dispatch("input"); assert(h.$("voice-library-export").disabled);
+  buttonNamed(h, "Delete voice").click(); h.$("voice-library-save").click(); await flush();
+  assert(!responses["/settings/voices"].library.voices.some(v => v.id === id));
+});
+
+test("voice editor exposes supported controls and previews unsaved exact settings without saving", async () => {
+  const h = await voiceHarness();
+  assert(h.$("voice-control-stability")); assert.equal(h.$("voice-control-speed"), null);
+  h.$("voice-library-picker").value = "local"; h.$("voice-library-picker").dispatch("change");
+  assert(h.$("voice-control-speed")); assert.equal(h.$("voice-control-stability"), null);
+  h.$("voice-library-voice").value = "bm_george"; h.$("voice-library-voice").dispatch("change");
+  h.$("voice-control-speed").value = "0.8"; h.$("voice-control-speed").dispatch("input");
+  h.$("voice-library-preview").click(); await flush();
+  assert.equal(h.previews[0].body.voice.voice, "bm_george");
+  assert.equal(h.previews[0].body.voice.settings.speed, 0.8);
+  assert.equal(h.putCalls.length, 0);
+  const audio = descendants(h.$("settings-body")).find(n => n.tagName === "AUDIO");
+  assert(audio.played); assert.equal(h.blobs.length, 1);
+  h.select("console"); assert(audio.paused); assert.deepEqual(h.revoked, ["blob:voice-1"]);
+  h.select("voice"); await flush();
+  assert.equal(h.$("voice-control-speed").value, "0.8", "draft survives navigation");
+  assert(h.$("settings-body").textContent.includes("Telegram sends text only"));
+});
+
+test("closing voice settings cancels a pending preview and prevents late audio playback", async () => {
+  const waiting = deferred(); const h = await voiceHarness({ previewHandler: () => waiting.promise });
+  h.$("voice-library-preview").click(); assert.equal(h.previews.length, 1);
+  h.$("settings-close").click(); assert(h.previews[0].signal.aborted);
+  waiting.resolve({ type: "audio/wav" }); await flush(); assert.equal(h.blobs.length, 0);
+});
+
+test("voice saves preserve revision and failed saves keep the draft", async () => {
+  const h = await voiceHarness({ putHandler: () => Promise.reject(new Error("conflict")) });
+  h.$("voice-library-name").value = "Reading"; h.$("voice-library-name").dispatch("input");
+  h.$("voice-library-save").click(); await flush();
+  assert.equal(h.putCalls[0][0], "/settings/voices"); assert.equal(h.putCalls[0][2].revision, 2);
+  assert.equal(h.$("voice-library-name").value, "Reading"); assert.equal(h.$("voice-library-save").disabled, false);
+  assert(h.$("settings-body").textContent.includes("not saved"));
+  buttonNamed(h, "Discard changes and reload").click();
+  assert(descendants(h.$("settings-body")).find(n => n.tagName === "FIELDSET").disabled, "reload disables actions as well as fields");
+  await flush();
+  assert.equal(h.$("voice-library-name").value, "Cloud");
+  assert.equal(descendants(h.$("settings-body")).find(n => n.tagName === "FIELDSET").disabled, false);
+  assert(!h.$("settings-body").textContent.includes("not saved"));
+});
+
+test("saving while navigating does not lose the active editor or allow competing edits", async () => {
+  const waiting = deferred(); const h = await voiceHarness({ putHandler: () => waiting.promise });
+  h.$("voice-library-name").value = "Reading"; h.$("voice-library-name").dispatch("input"); h.$("voice-library-save").click();
+  h.select("console"); h.select("voice"); await flush();
+  assert(descendants(h.$("settings-body")).find(n => n.tagName === "FIELDSET").disabled);
+  const reply = structuredClone(voiceFixture); reply.library = h.putCalls[0][2]; reply.library.revision++;
+  waiting.resolve(reply); await flush();
+  assert.equal(h.$("voice-library-name").value, "Reading"); assert.equal(h.$("voice-library-save").disabled, true);
+  assert.equal(descendants(h.$("settings-body")).find(n => n.tagName === "FIELDSET").disabled, false);
+});
 const configuredFixture = {
   settings: [
     ...fixture.settings,
@@ -1738,4 +1869,137 @@ test("immediate appearance preferences do not become unsaved settings drafts", a
   assert.equal(h.document.documentElement.dataset.density, "compact");
   assert.equal(h.$("settings-discard").disabled, true);
   assert.equal(h.putCalls.length, 0);
+});
+
+
+test("description design generates, previews and saves the generated reference for Console", async () => {
+  const response = structuredClone(voiceFixture);
+  response.providers.push({ id:"designer", kind:"local-voxcpm2", description_design:true, current:{model:"voxcpm2",voice:"designed"}, presets:[], models:[{id:"voxcpm2",controls:[]}] });
+  const generated = { version:1, model_revision:"a".repeat(40), description:"Warm narrator", sample_text:"Hello", seed:42, reference_audio:"UklGRg==" };
+  const waiting = deferred();
+  const responses = { "/settings/voices":response };
+  const h = await voiceHarness({apiResponses:responses,designHandler:() => waiting.promise,putHandler(path,method,body) {
+    const reply = structuredClone(response); reply.library=structuredClone(body); reply.library.revision++; responses[path]=reply; return Promise.resolve(reply);
+  }});
+  h.$("voice-library-create").click(); const id=h.$("voice-library-picker").value;
+  h.$("voice-library-save").click(); assert.equal(h.putCalls.length,0);
+  h.$("voice-design-description").value="Warm narrator"; h.$("voice-design-description").dispatch("input");
+  h.$("voice-design-sample").value="Hello"; h.$("voice-design-sample").dispatch("input");
+  h.$("voice-library-generate").click(); assert.equal(h.designs[0].body.description,"Warm narrator");
+  waiting.resolve({design:generated}); await flush(); assert.equal(h.blobs.length,1);
+  h.$("voice-library-console").value=id; h.$("voice-library-console").dispatch("change");
+  h.$("voice-library-save").click(); await flush();
+  assert.deepEqual(h.putCalls[0][2].voices.find(v=>v.id===id).design,generated);
+  assert.equal(h.putCalls[0][2].channels.console,id);
+  h.$("voice-design-description").value="Different"; h.$("voice-design-description").dispatch("input");
+  assert(h.$("voice-library-listen").disabled); h.$("voice-library-save").click(); assert.equal(h.putCalls.length,1);
+});
+
+test("voice designer displays observed AMD, NVIDIA and CPU fallback without claiming pending GPU use", async () => {
+  for (const execution of [
+    {backend:"auto",device:"GPU detection pending",allocated_bytes:0},
+    {backend:"amd",device:"AMD Radeon RX 9070 XT",allocated_bytes:5 * 1073741824},
+    {backend:"nvidia",device:"NVIDIA GeForce RTX",allocated_bytes:5 * 1073741824},
+    {backend:"cpu",device:"CPU",allocated_bytes:0,fallback_reason:"GPU unavailable. Using CPU."}
+  ]) {
+    const response=designerFixture(); response.providers.find(p=>p.description_design).execution=execution;
+    const h=await voiceHarness({apiResponses:{"/settings/voices":response}});
+    h.$("voice-library-create").click();
+    const text=h.$("voice-design-device").textContent;
+    if(execution.backend==="auto") assert.match(text,/will appear when the model loads/);
+    else if(execution.backend==="cpu") assert.match(text,/GPU unavailable. Using CPU/);
+    else { assert(text.includes(execution.device)); assert.match(text,/5.0 GB model allocation/); }
+  }
+});
+
+test("editing the name stops generation and removes the stale generating message", async () => {
+  const waiting=deferred(); const h=await voiceHarness({apiResponses:{"/settings/voices":designerFixture()},designHandler:()=>waiting.promise});
+  h.$("voice-library-create").click(); h.$("voice-design-description").value="Warm narrator"; h.$("voice-design-description").dispatch("input");
+  h.$("voice-library-generate").click();
+  h.$("voice-library-name").value="Evening narrator"; h.$("voice-library-name").dispatch("input");
+  assert(h.designs[0].signal.aborted);
+  assert.match(h.$("voice-design-status").textContent,/Generation stopped because/);
+  assert.equal(h.$("voice-design-panel").getAttribute("aria-busy"),"false");
+  assert(h.$("voice-library-picker").children.some(c=>c.textContent==="Evening narrator (draft)"));
+});
+
+test("leaving Settings cancels generation and refuses a late generated sample", async () => {
+  const response=structuredClone(voiceFixture); response.providers.push({id:"designer",kind:"local-voxcpm2",description_design:true,current:{model:"voxcpm2",voice:"designed"},presets:[],models:[{id:"voxcpm2",controls:[]}]});
+  const waiting=deferred(); const h=await voiceHarness({apiResponses:{"/settings/voices":response},designHandler:()=>waiting.promise});
+  h.$("voice-library-create").click(); h.$("voice-design-description").value="Warm narrator"; h.$("voice-design-description").dispatch("input");
+  h.$("voice-library-generate").click(); h.$("settings-close").click(); assert(h.designs[0].signal.aborted);
+  waiting.resolve({design:{reference_audio:"UklGRg=="}}); await flush(); assert.equal(h.blobs.length,0); assert.equal(h.putCalls.length,0);
+});
+
+function designerFixture(reason = null) {
+  const response = structuredClone(voiceFixture);
+  response.providers.push({id:"designer",kind:"local-voxcpm2",description_design:true,design_unavailable_reason:reason,current:{model:"voxcpm2",voice:"designed"},presets:[],models:[{id:"voxcpm2",controls:[]}]});
+  return response;
+}
+
+test("voice creation reuses the unfinished draft and excludes it from routing", async () => {
+  const h = await voiceHarness({apiResponses:{"/settings/voices":designerFixture()}});
+  h.$("voice-library-create").click(); const id = h.$("voice-library-picker").value;
+  h.$("voice-library-create").click();
+  assert.equal(h.$("voice-library-picker").value,id);
+  assert.equal(h.$("voice-library-picker").children.length,3);
+  assert.match(h.$("voice-library-picker").children.at(-1).textContent,/draft/);
+  assert(!h.$("voice-library-default").children.some(c=>c.value===id));
+  assert(!h.$("voice-library-console").children.some(c=>c.value===id));
+  assert(!buttonNamed(h,"Discard draft").disabled);
+  h.$("voice-library-generate").click();
+  assert.equal(h.designs.length,0);
+  assert.match(h.$("voice-design-status").textContent,/Enter a voice description/);
+});
+
+test("generation shows progress and failure beside Generate and returns to a retryable state", async () => {
+  const waiting = deferred(); const h=await voiceHarness({apiResponses:{"/settings/voices":designerFixture()},designHandler:()=>waiting.promise});
+  h.$("voice-library-create").click(); h.$("voice-design-description").value="Warm narrator"; h.$("voice-design-description").dispatch("input");
+  h.$("voice-library-generate").click();
+  assert.match(h.$("voice-design-status").textContent,/Generating.*elapsed/);
+  assert.equal(h.$("voice-design-status").parent,h.$("voice-design-panel"));
+  assert.equal(h.$("voice-design-panel").getAttribute("aria-busy"),"true");
+  assert(h.$("voice-library-generate").disabled); assert(!h.$("voice-library-cancel-generation").hidden);
+  waiting.reject(new Error("runtime unavailable")); await flush();
+  assert.match(h.$("voice-design-status").className,/bad/);
+  assert.match(h.$("voice-design-status").textContent,/could not be generated/);
+  assert(!h.$("voice-library-generate").disabled); assert(h.$("voice-library-cancel-generation").hidden);
+  assert.equal(h.$("voice-design-panel").getAttribute("aria-busy"),"false");
+});
+
+test("missing setup disables generation and rechecking preserves the description draft", async () => {
+  const response=designerFixture("Install the local runtime, then check setup again.");
+  const h=await voiceHarness({apiResponses:{"/settings/voices":response}});
+  h.$("voice-library-create").click(); h.$("voice-design-description").value="Warm narrator"; h.$("voice-design-description").dispatch("input");
+  assert(h.$("voice-library-generate").disabled);
+  assert.match(h.$("voice-design-status").textContent,/Install the local runtime/);
+  h.$("voice-library-generate").click(); assert.equal(h.designs.length,0);
+  response.providers.at(-1).design_unavailable_reason=null;
+  buttonNamed(h,"Check setup again").click(); await flush();
+  assert.equal(h.$("voice-design-description").value,"Warm narrator");
+  assert(!h.$("voice-library-generate").disabled);
+});
+
+test("Stop generation cancels the request without accepting its late sample", async () => {
+  const waiting=deferred(); const h=await voiceHarness({apiResponses:{"/settings/voices":designerFixture()},designHandler:()=>waiting.promise});
+  h.$("voice-library-create").click(); h.$("voice-design-description").value="Warm narrator"; h.$("voice-design-description").dispatch("input");
+  h.$("voice-library-generate").click(); h.$("voice-library-cancel-generation").click();
+  assert(h.designs[0].signal.aborted); assert.match(h.$("voice-design-status").textContent,/Generation stopped/);
+  waiting.resolve({design:{reference_audio:"UklGRg=="}}); await flush();
+  assert.equal(h.blobs.length,0); assert(h.$("voice-library-listen").disabled);
+});
+
+
+test("preparation reports completion, stops on navigation, and quality travels with generation", async () => {
+  const wait=deferred();const h=await voiceHarness({apiResponses:{"/settings/voices":designerFixture()},prepareHandler:()=>wait.promise});
+  h.$("voice-library-create").click();assert.equal(h.$("voice-quality").value,"quality");
+  h.$("voice-library-prepare").click();assert.equal(h.preparations.length,1);assert(h.$("voice-library-generate").disabled);
+  assert(!h.$("voice-prepare-progress").hidden);
+  wait.resolve({execution:{phase:"ready",backend:"amd",device:"AMD Radeon RX 9070 XT",allocated_bytes:1}});await flush();
+  assert.match(h.$("voice-prepare-status").textContent,/Model ready/);assert(h.$("voice-prepare-progress").hidden);
+  const generation=deferred();const second=await voiceHarness({apiResponses:{"/settings/voices":designerFixture()},designHandler:()=>generation.promise,prepareHandler:()=>new Promise(()=>{})});
+  second.$("voice-library-create").click();second.$("voice-quality").value="fast";second.$("voice-quality").dispatch("change");
+  second.$("voice-design-description").value="Warm narrator";second.$("voice-design-description").dispatch("input");
+  second.$("voice-library-generate").click();assert.equal(second.designs[0].body.quality,"fast");
+  second.$("voice-library-cancel-generation").click();second.$("voice-library-prepare").click();second.$("settings-close").click();assert(second.preparations[0].signal.aborted);
 });

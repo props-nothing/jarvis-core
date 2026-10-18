@@ -66,8 +66,8 @@ jobs:
           node --test scripts/test-docs.mjs
           node --test scripts/test-clean-lifecycle.mjs
           node scripts/check-docs.mjs
-      - name: Check live coding gate opt-in guards
-        run: node --test scripts/test-coding-website-gate.mjs
+      - name: Check live acceptance opt-in guards
+        run: node --test scripts/test-coding-website-gate.mjs scripts/test-local-speech-gate.mjs scripts/test-embedded-speech-gate.mjs scripts/test-voice-settings-gate.mjs
       - name: Check the console scripts parse
         # The console is plain JavaScript embedded in the daemon, so a syntax slip would otherwise show only as a blank page.
         shell: bash
@@ -75,7 +75,9 @@ jobs:
           set -e
           for script in hud mission head settings; do node --check "apps/jarvisd/src/hud/$script.js"; done
       - name: Test console behavior
-        run: node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs scripts/test-hud-memory.mjs scripts/test-hud-polling.mjs scripts/test-hud-history.mjs
+        run: node --test scripts/test-hud-console.mjs scripts/test-hud-settings.mjs scripts/test-hud-memory.mjs scripts/test-hud-polling.mjs scripts/test-hud-history.mjs scripts/test-voice-streaming.mjs scripts/test-voice-queue.mjs
+      - name: Test local voice device selection without GPU dependencies
+        run: python3 scripts/test-voice-device.py
       - name: Build typed HUD controls and check embedded output
         working-directory: apps/jarvisd/ui
         run: |

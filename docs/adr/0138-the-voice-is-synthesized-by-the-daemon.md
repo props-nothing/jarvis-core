@@ -1,5 +1,8 @@
 # ADR-0138: The voice is synthesized by the daemon
 
+Amended by [ADR-0246](0246-embedded-speech-loads-only-pinned-local-assets.md), which
+adds optional in-process Kokoro synthesis with pinned assets and WAV output.
+
 Status: Accepted
 Date: 2026-10-06
 
@@ -53,3 +56,8 @@ API key, and the provider says plainly that such a key must not be in client-sid
   input-streaming endpoint (one voice context for a whole answer), regional endpoints.
 - Speech to text is still the browser's recognizer (`P8-010`); a provider-backed recognizer and the Custom LLM voice path
   (`P8-003`) are separate slices.
+## Amendment (2026-10-18)
+
+[ADR-0245](0245-speech-fallback-selects-a-provider-before-audio-starts.md) adds an explicit
+provider chain and local HTTP speech adapters. Selection occurs before audio begins,
+with provider health, recovery probes and per-answer voice continuity.
