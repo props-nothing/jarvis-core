@@ -472,7 +472,7 @@ async fn linked_installation_and_candidate_are_refused() {
     assert!(directory(&link).is_err());
     let candidate = f.stage().join(program_name());
     must(fs::remove_file(&candidate));
-    must(std::os::unix::fs::symlink(&f.target(), &candidate));
+    must(std::os::unix::fs::symlink(f.target(), &candidate));
     assert!(image(&candidate).await.is_err());
 }
 
