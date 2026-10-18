@@ -260,6 +260,7 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 
 | [0240](0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md) | Release manifests bind artifacts to the publishing workflow | Accepted |
 | [0241](0241-database-restores-require-offline-ownership-and-a-recovery-journal.md) | Database restores require offline ownership and a recovery journal | Accepted |
+| [0242](0242-binary-activation-retains-evidence-and-requires-offline-ownership.md) | Binary activation retains evidence and requires offline ownership | Accepted |
 
 ## Historical identifier aliases
 

@@ -18,6 +18,23 @@ and offline database recovery foundations below.
 Native certificate signing still needs owner-provided credentials. Database
 snapshots alone do not complete binary rollback or whole-profile recovery.
 
+Initial offline implementation: [ADR-0242](docs/adr/0242-binary-activation-retains-evidence-and-requires-offline-ownership.md)
+and [runbook](docs/operations/binary-update.md). `update stage|activate|status|rollback|recover`
+now has signed staging/reverification, installation/profile exclusion, retained
+previous binaries and database snapshots, same-schema activation, recovery journals
+and startup/doctor refusal. Rollback preserves current database content. Ordinary
+install refuses to overwrite retained update evidence. The helper avoids Windows
+self-replacement; the installed service path is preserved and uncertain ownership
+is refused.
+
+This is the first offline portion, not completion of the acceptance boxes above.
+Executable/version/protocol and offline database checks are implemented; real
+daemon readiness, service-manager reconciliation, schema-changing updates,
+new-release signed activation and clean-machine lifecycle remain open. Native CI
+now includes the new tests and public signed-staging/startup-refusal gate; hosted
+results for this revision are still required. Local evidence is recorded in
+[binary-update research](docs/research/integrations/binary-update.md).
+
 ## Completed acceptance slice: offline database recovery (2026-10-18)
 
 Owner-selected `P12-001` / `P9-006` continuation: establish a verified database
@@ -493,7 +510,7 @@ Order: `P8-018`–`P8-020` first (backup voice with no new account); `P8-022` ne
 - [~] `P9-003` User service install/uninstall exists. Resolve documented service/manual-daemon ownership cases and verify native lifecycle; system-wide modes remain optional.
 - [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Signed manifests and hosted publisher/public-install acceptance pass in the opt-in path (ADR-0240); default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
 - [ ] `P9-005` Signed native artifacts, complete dependency notices/SBOM, provenance, checksums and release notes.
-- [~] `P9-006` Offline database snapshots, guarded same-schema restore/undo and interrupted-restore reconciliation are implemented (ADR-0241; acceptance above). Atomic binary updates, schema-change rollback, health checks, channels and version/split-brain diagnosis remain.
+- [~] `P9-006` Offline database snapshots, guarded same-schema restore/undo and interrupted-restore reconciliation are implemented (ADR-0241; acceptance above). The initial same-schema binary staging/activation/rollback and recovery guards are implemented under ADR-0242; published/native acceptance, schema-change rollback, daemon readiness, channels and broader version/split-brain diagnosis remain.
 - [ ] `P9-007` Clean native install/update/rollback/repair/uninstall without a development toolchain.
 - [ ] `P9-008` Legacy data importer only if the owner has a named surviving source and requests migration; dry-run, excluded keys/certificates, provenance, backup, rollback and explicit finalization. Removed prototype source is not a live data location.
 - [~] `P9-009` Prototype removal is already complete (2026-10-13). Preserve historical license/provenance; resolve any requested legacy-data migration under `P9-008` rather than deleting the prototype again.

@@ -17,7 +17,11 @@ mod testkit;
 mod timestamp;
 #[cfg(any(unix, windows))]
 mod transport;
+mod update;
 mod work_admission;
+
+pub use id::UpdateId;
+pub use update::{BinaryImage, BinaryUpdate, BinaryUpdateState, UpdateCompatibility};
 
 mod approval;
 mod approval_policy;

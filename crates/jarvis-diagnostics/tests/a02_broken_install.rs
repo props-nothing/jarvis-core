@@ -443,6 +443,7 @@ fn every_finding_code_has_a_distinct_id_and_an_actionable_remediation() {
         FindingCode::DatabaseMigrationPending,
         FindingCode::DatabaseSchemaInconsistent,
         FindingCode::DatabaseIntegrityFailed,
+        FindingCode::BinaryUpdateUnsettled,
         FindingCode::CredentialMissing,
         FindingCode::CredentialPresent,
         FindingCode::CredentialInvalid,

@@ -15,7 +15,7 @@
 | Database recovery | `jarvis backup create`, `verify ID`, `restore ID` and `recover`; stopped-profile, same-schema snapshots and undo. See the [runbook](database-recovery.md). |
 | Pinned prebuilt first install | Opt-in scripts below verify a signed manifest for an exact release/version before downloading the selected archive. Explicit SHA-256 mode supports historical unsigned releases. No development toolchain; curl 8.4+ required. |
 | CI archives | Platform workflow artifacts and automatically published prereleases with a Sigstore-signed manifest after all five packages pass; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
-| Native OS signing and updates | Authenticode/notarization credentials are not configured. Clean-machine evidence and update/rollback remain open. |
+| Native OS signing and updates | Authenticode/notarization credentials are not configured. Initial same-schema offline binary maintenance exists; clean-machine evidence, published update acceptance and native service/readiness remain open. |
 
 The separate product website serves working source-building scripts at `https://www.jarvisd.dev/install.sh` and `https://www.jarvisd.dev/install.ps1`, from `frontend/public/`. These clone/update a protected source checkout, build with the committed lockfile, then delegate per-user installation to `jarvis install`. They are not signed-binary downloaders. Source builds require Git, Rust via rustup and [native build tools](../development/getting-started.md#build-from-source); the installed executable needs no Rust. Build/install failure exits nonzero, without setup or a success claim. A successful installer prints interactive and noninteractive setup commands; it does not collect keys or run onboarding through piped stdin. New setup requires an ElevenLabs key and explicit folder grants before starting the assistant. Do not infer signed distribution or clean-machine readiness from this source path.
 
@@ -271,6 +271,15 @@ Checks include:
 Checks emit stable IDs, severity, facts, remediation, whether repair is safe, and post-repair verification. `--json` is suitable for support automation.
 
 ## Update
+
+The first offline binary maintenance implementation is documented in the
+[binary update runbook](binary-update.md) and [ADR-0242](../adr/0242-binary-activation-retains-evidence-and-requires-offline-ownership.md).
+It stages exact signed releases, retains the previous executable and a database
+snapshot, and activates/rolls back only between binaries with identical schema
+and protocol contracts. It requires a stopped profile and installation ownership.
+Its version/protocol/offline database checks do not establish daemon readiness.
+Service-manager reconciliation, schema-changing updates and clean-machine
+acceptance remain open. The sequence below describes the broader target:
 
 1. Acquire an update/maintenance lock and record a durable update run.
 2. Fetch and verify a signed release manifest/artifact.

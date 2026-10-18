@@ -69,6 +69,8 @@ pub enum FindingCode {
     DatabaseRestorePending,
     /// Restore evidence is malformed or unavailable and must be preserved.
     DatabaseRestoreInvalid,
+    /// Binary activation evidence is pending, malformed or inconsistent.
+    BinaryUpdateUnsettled,
     /// No local client credential exists for this profile.
     CredentialMissing,
     /// The profile credential exists and is well formed.
@@ -144,6 +146,7 @@ impl FindingCode {
             Self::DatabaseIntegrityFailed => "database.integrity_failed",
             Self::DatabaseRestorePending => "database.restore_pending",
             Self::DatabaseRestoreInvalid => "database.restore_invalid",
+            Self::BinaryUpdateUnsettled => "installation.update_unsettled",
             Self::CredentialMissing => "credential.missing",
             Self::CredentialPresent => "credential.present",
             Self::CredentialInvalid => "credential.invalid",
@@ -204,6 +207,7 @@ impl FindingCode {
             | Self::DatabaseIntegrityFailed
             | Self::DatabaseRestorePending
             | Self::DatabaseRestoreInvalid
+            | Self::BinaryUpdateUnsettled
             | Self::CredentialInvalid
             | Self::ProtocolMismatch
             | Self::ProtocolUnreachable
@@ -222,6 +226,9 @@ impl FindingCode {
     #[must_use]
     pub const fn remediation(self) -> &'static str {
         match self {
+            Self::BinaryUpdateUnsettled => {
+                "Preserve .jarvis-update and run the retained updater's `update status` and `update recover --dir INSTALL_DIR` for the affected profile before starting JARVIS."
+            }
             Self::AllChecksPassed
             | Self::ConfigValid
             | Self::PathsPrivate
@@ -406,6 +413,7 @@ mod tests {
         FindingCode::DatabaseIntegrityFailed,
         FindingCode::DatabaseRestorePending,
         FindingCode::DatabaseRestoreInvalid,
+        FindingCode::BinaryUpdateUnsettled,
         FindingCode::CredentialMissing,
         FindingCode::CredentialPresent,
         FindingCode::CredentialInvalid,

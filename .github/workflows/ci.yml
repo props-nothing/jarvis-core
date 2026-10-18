@@ -238,6 +238,10 @@ jobs:
       - name: Build coding lifecycle agent fixture
         if: matrix.suite == 'all' || matrix.suite == 'remaining'
         run: cargo build -p jarvis-runtimes --example fake_acp_agent --locked
+      - name: Signed binary staging and startup refusal
+        if: matrix.suite == 'all' || matrix.suite == 'remaining'
+        shell: bash
+        run: node scripts/test-binary-update.mjs 2>&1 | tee gate-binary-update.txt
       - name: Phase 1 acceptance gate
         if: matrix.suite == 'all' || matrix.suite == 'remaining'
         env:

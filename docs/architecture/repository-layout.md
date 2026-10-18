@@ -31,6 +31,7 @@ jarvis-core/
 |   |-- jarvis-core/             domain types, state machines, policy, ports
 |   |-- jarvis-application/      commands, queries, transactions, orchestration
 |   |-- jarvis-protocol/         versioned API/runtime/event DTOs and codecs
+|   |-- jarvis-update/           signed release verification and offline binary activation
 |   |-- jarvis-storage/          SQLite/Postgres repositories and migrations
 |   |-- jarvis-models/           model gateway and provider adapters
 |   |-- jarvis-mcp/              MCP identity, canonical tool naming, schema conformance

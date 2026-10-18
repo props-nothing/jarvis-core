@@ -151,6 +151,45 @@ impl Drop for MaintenanceGuard {
     }
 }
 
+/// Exclusive offline profile ownership for coordinated binary maintenance.
+pub struct OfflineProfile {
+    paths: AppPaths,
+    _guard: MaintenanceGuard,
+}
+
+impl OfflineProfile {
+    /// Owns a stopped profile and rejects unresolved database restores.
+    ///
+    /// # Errors
+    /// Refuses lock contention, unsafe paths and pending restore evidence.
+    pub fn acquire(paths: &AppPaths) -> Result<Self, BackupError> {
+        let guard = MaintenanceGuard::acquire(paths)?;
+        require_settled_database_restore(paths)?;
+        Ok(Self {
+            paths: paths.clone(),
+            _guard: guard,
+        })
+    }
+
+    /// Checks current-schema integrity and returns the standalone database identity.
+    ///
+    /// # Errors
+    /// Missing, unhealthy, incompatible or sidecar-bearing databases fail closed.
+    pub async fn check(&self) -> Result<(u64, String), BackupError> {
+        let path = database_path(&self.paths);
+        healthy(&path).await?;
+        fingerprint(&path)
+    }
+
+    /// Retains a verified snapshot without releasing the ownership lock.
+    ///
+    /// # Errors
+    /// Refuses invalid databases, sidecars or failed storage writes.
+    pub async fn snapshot(&self) -> Result<DatabaseBackup, BackupError> {
+        snapshot_locked(&self.paths).await
+    }
+}
+
 fn database_path(paths: &AppPaths) -> PathBuf {
     paths.data().join(DEFAULT_DATABASE_FILENAME)
 }
@@ -163,7 +202,7 @@ fn backup_directory(paths: &AppPaths, id: BackupId) -> Result<PathBuf, BackupErr
     Ok(directory)
 }
 
-fn regular_directory(path: &Path) -> Result<(), BackupError> {
+pub(crate) fn regular_directory(path: &Path) -> Result<(), BackupError> {
     let metadata = fs::symlink_metadata(path)?;
     if !path.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(BackupError::InvalidPath);
@@ -171,7 +210,7 @@ fn regular_directory(path: &Path) -> Result<(), BackupError> {
     Ok(())
 }
 
-fn regular_file(path: &Path) -> Result<(), BackupError> {
+pub(crate) fn regular_file(path: &Path) -> Result<(), BackupError> {
     let metadata = fs::symlink_metadata(path)?;
     if !path.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(BackupError::InvalidPath);
@@ -206,7 +245,7 @@ async fn healthy(path: &Path) -> Result<(), BackupError> {
     Ok(())
 }
 
-fn fingerprint(path: &Path) -> Result<(u64, String), BackupError> {
+pub(crate) fn fingerprint(path: &Path) -> Result<(u64, String), BackupError> {
     regular_file(path)?;
     fingerprint_reader(&mut File::open(path)?)
 }
@@ -226,14 +265,14 @@ fn fingerprint_reader(input: &mut impl Read) -> Result<(u64, String), BackupErro
     Ok((bytes, format!("{:x}", digest.finalize())))
 }
 
-fn valid_digest(value: &str) -> bool {
+pub(crate) fn valid_digest(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn read_record<T: DeserializeOwned>(path: &Path) -> Result<T, BackupError> {
+pub(crate) fn read_record<T: DeserializeOwned>(path: &Path) -> Result<T, BackupError> {
     regular_file(path)?;
     let mut bytes = Vec::new();
     File::open(path)?
@@ -257,7 +296,7 @@ fn atomic_file(path: &Path) -> Result<AtomicWriteFile, BackupError> {
     Ok(options.open(path)?)
 }
 
-fn write_record(path: &Path, record: &impl Serialize) -> Result<(), BackupError> {
+pub(crate) fn write_record(path: &Path, record: &impl Serialize) -> Result<(), BackupError> {
     let bytes = serde_json::to_vec(record).map_err(|_| BackupError::InvalidRecord)?;
     if bytes.len() as u64 > MAX_RECORD_BYTES {
         return Err(BackupError::InvalidRecord);

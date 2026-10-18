@@ -1,6 +1,10 @@
 //! Storage adapters and migration infrastructure for JARVIS.
 
 mod backup;
+mod installation;
+pub use installation::{
+    InstallationGuard, UPDATE_DIRECTORY, binary_update_status, require_settled_binary_update,
+};
 mod config;
 mod credential;
 mod database;
@@ -37,9 +41,9 @@ mod workspace_repository;
 mod test_support;
 
 pub use backup::{
-    BackupError, DatabaseBackup, DatabaseRestore, RestoreState, create_database_backup,
-    database_restore_status, recover_database_restore, require_settled_database_restore,
-    restore_database_backup, verify_database_backup,
+    BackupError, DatabaseBackup, DatabaseRestore, OfflineProfile, RestoreState,
+    create_database_backup, database_restore_status, recover_database_restore,
+    require_settled_database_restore, restore_database_backup, verify_database_backup,
 };
 
 pub use approval_repository::{

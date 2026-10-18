@@ -23,6 +23,7 @@ jarvis-observability.workspace = true
 jarvis-protocol.workspace = true
 jarvis-web.workspace = true
 jarvis-storage.workspace = true
+jarvis-update.workspace = true
 # The daemon's run API is HTTP (ADR-0011). `reqwest` is already resolved in this
 # workspace through the model adapter, so this adds no new version. Its defaults are
 # overridden in `api_client.rs`: proxies and redirects off, verification on.

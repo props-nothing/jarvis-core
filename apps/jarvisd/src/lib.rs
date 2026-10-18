@@ -517,6 +517,7 @@ struct Services {
 
 /// Everything the daemon must hold for its lifetime, constructed in startup order.
 struct Running {
+    installation: jarvis_storage::InstallationGuard,
     shutdown_grace: std::time::Duration,
     health: Arc<HealthState>,
     settings_context: settings_service::SettingsContext,
@@ -695,9 +696,19 @@ fn acquire_ready_profile(
     Ok(singleton)
 }
 
+fn acquire_installation() -> Result<jarvis_storage::InstallationGuard, DaemonError> {
+    let executable = std::env::current_exe().map_err(jarvis_storage::BackupError::from)?;
+    Ok(jarvis_storage::InstallationGuard::acquire(
+        executable
+            .parent()
+            .ok_or(jarvis_storage::BackupError::InvalidPath)?,
+        false,
+    )?)
+}
+
 async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonError> {
+    let (installation, paths) = (acquire_installation()?, resolve_paths(root)?);
     let health = Arc::new(HealthState::new());
-    let paths = resolve_paths(root)?;
     paths.prepare()?;
 
     let loaded_config = load_config_migrating(&paths)?;
@@ -806,6 +817,7 @@ async fn start(build: BuildInfo, root: Option<&Path>) -> Result<Running, DaemonE
     .await?;
 
     Ok(Running {
+        installation,
         shutdown_grace: shutdown_grace(daemon),
         health,
         settings_context,
@@ -2143,6 +2155,7 @@ where
     F: Future<Output = io::Result<()>>,
 {
     let Running {
+        installation: _installation,
         shutdown_grace,
         health,
         settings_context,

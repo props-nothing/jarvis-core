@@ -185,6 +185,10 @@ typed_id!(
     BackupId
 );
 typed_id!(
+    /// Identifies one retained signed binary update stage.
+    UpdateId
+);
+typed_id!(
     /// Identifies one conversation session.
     ///
     /// Distinct from [`DaemonRunId`]: a session is a conversation, while a daemon run is one

@@ -55,6 +55,14 @@ pub const fn program_name() -> &'static str {
 pub fn copy_into(source: &Path, dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir)
         .map_err(|error| format!("{} could not be created: {error}", dir.display()))?;
+    let _ownership = jarvis_storage::InstallationGuard::acquire(dir, true)
+        .map_err(|error| format!("installation is busy or unsafe: {error}"))?;
+    if jarvis_storage::binary_update_status(dir)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err("this installation has update recovery evidence; use signed `jarvis update` instead of overwriting it".to_owned());
+    }
     let target = dir.join(program_name());
     let staging = dir.join(format!("{}.new", program_name()));
     std::fs::copy(source, &staging)
@@ -238,7 +246,13 @@ mod tests {
             .filter_map(Result::ok)
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(leftovers, [program_name()], "no .new file is left behind");
+        assert_eq!(
+            leftovers.len(),
+            2,
+            "only the executable and installation lock directory remain"
+        );
+        assert!(leftovers.contains(&program_name().to_owned()));
+        assert!(leftovers.contains(&jarvis_storage::UPDATE_DIRECTORY.to_owned()));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -229,3 +229,15 @@ drain budget bounds waiting; unreadable state, cleanup failure or unfinished wor
 at the deadline produces an unsuccessful shutdown with conservative restart
 recovery. Existing effects are not rolled back. See [ADR-0236](../adr/0236-shutdown-reserves-work-admission-before-checking-idleness.md)
 and [ADR-0238](../adr/0238-shutdown-drains-owned-work-before-closing-dependencies.md).
+
+## Binary maintenance
+
+The offline update adapter owns signed release transport and binary activation.
+Storage coordinates an installation-wide shared/exclusive lock, profile ownership
+and durable recovery records. Daemons retain shared installation ownership and
+refuse pending/malformed or mismatched binary evidence before SQLite access. The
+first updater permits identical schema/protocol contracts only, retains the prior
+executable and database snapshot, and never automatically restores user data.
+See [ADR-0242](../adr/0242-binary-activation-retains-evidence-and-requires-offline-ownership.md)
+and the [runbook](../operations/binary-update.md). Service readiness and broader
+lifecycle acceptance remain separate.

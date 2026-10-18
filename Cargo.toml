@@ -16,6 +16,7 @@ members = [
     "crates/jarvis-sandbox",
     "crates/jarvis-storage",
     "crates/jarvis-tools",
+    "crates/jarvis-update",
     "crates/jarvis-voice",
     "crates/jarvis-web",
     "tests/e2e",
@@ -38,6 +39,9 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+tar = { version = "=0.4.46", default-features = false }
+jarvis-update = { path = "crates/jarvis-update", version = "0.1.0" }
 serde_yaml_ng = "=0.10.0"
 atomic-write-file = "0.3.1"
 async-trait = "0.1.92"

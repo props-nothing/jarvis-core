@@ -420,6 +420,21 @@ fn world_accessible(_path: &Path) -> Option<String> {
 
 async fn check_database(paths: &AppPaths) -> CheckResult {
     const NAME: &str = "database";
+    let installation = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    if installation
+        .as_ref()
+        .is_none_or(|directory| jarvis_storage::require_settled_binary_update(directory).is_err())
+    {
+        return CheckResult::from_findings(
+            NAME,
+            vec![Finding::new(
+                FindingCode::BinaryUpdateUnsettled,
+                safe("binary activation evidence requires recovery before database inspection"),
+            )],
+        );
+    }
     // Ordinary read-only SQLite may create WAL/SHM files. Report unresolved
     // recovery without opening it. This observation does not grant maintenance
     // ownership; the owner must close other database inspectors for maintenance.
