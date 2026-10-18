@@ -7,12 +7,38 @@ selected_sdk: "Rust 1.98.1; Cosign 3.1.3; reqwest 0.13.5; atomic-write-file 0.3.
 
 # Signed staging and offline binary activation
 
+## Accepted release (2026-10-18)
+
+Exact source `b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0` passed all 14 native quality
+jobs in [CI 39122471338](https://github.com/props-nothing/jarvis-core/actions/runs/39122471338).
+[Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427)
+completed successfully: five packages, repository-workflow signing, twelve public
+assets, four signed-install checks and three native update/service gates.
+The immutable [public candidate](https://github.com/props-nothing/jarvis-core/releases/tag/ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0)
+advertises maintenance protocol 2 and journal format 2.
+
+| Native gate | Result | Ready daemon lifecycles |
+| --- | --- | --- |
+| Windows x86_64 persisted login command | Passed | 5 |
+| macOS ARM64 launchd agent | Passed | 7 |
+| Linux x86_64 systemd user service | Passed | 7 |
+
+Every gate verifies distinct executable replacement through production signed
+staging, active-owner refusal, authenticated status/health, retained snapshot,
+rollback preserving post-update writes, pending-startup refusal, recovery,
+unchanged service definition and service removal with data retained. These are
+source-built previous executables and signed candidates at the same package
+version 0.1.0. They do not establish schema-changing updates, two signed package
+versions, clean-machine onboarding, reboot/logon, full binary repair/uninstall,
+Linux ARM64 updates, Intel macOS runtime or native certificate signing.
+
 ## Native acceptance follow-up (2026-10-18)
 
 The first compatible published candidate (`0042b09`) exposed a stricter database
 requirement in the local Windows lifecycle: schema 31 matched, but the candidate
-could not start because this source checkout embeds CRLF migration checksums and
-the release embeds LF checksums. SQLx 0.9.0's official
+could not start with this source checkout's mixed LF/CRLF migration checksums.
+The committed sources use LF; checkout conversion can change embedded checksums.
+SQLx 0.9.0's official
 [migrator](https://raw.githubusercontent.com/launchbadge/sqlx/v0.9.0/sqlx-core/src/migrate/migrator.rs)
 and [migration source](https://raw.githubusercontent.com/launchbadge/sqlx/v0.9.0/sqlx-core/src/migrate/migration.rs)
 were checked live on 2026-10-18: startup compares every recorded version/checksum
@@ -31,6 +57,26 @@ all-target/all-feature workspace Clippy pass for this tightened contract. The
 earlier protocol-1 native lifecycle passed all three runners in
 [39121921082](https://github.com/props-nothing/jarvis-core/actions/runs/39121921082),
 but does not substitute for publication and acceptance of protocol 2.
+
+Protocol-2 local validation at `b9d8773`: all 3,262 Windows workspace tests passed
+with freshly rebuilt acceptance binaries (six existing opt-in ignores), plus 72
+release/documentation tests, formatting and strict workspace Clippy. Independently
+hashing the 31 working-tree migration files reproduces the executable's advertised
+fingerprint; hashing the committed LF blobs produces a different fingerprint.
+This confirms that the new contract detects the observed source-build difference.
+All 14 native quality jobs passed for the same revision in
+[CI 39122471338](https://github.com/props-nothing/jarvis-core/actions/runs/39122471338),
+including native tests, strict lint, rebuilt process gates and dependency policy.
+
+The real signed `b9d8773` Windows archive also passed the mismatch refusal check
+against the local source build: both advertise schema 31 and protocol 2, but their
+migration fingerprints differ. Activation left the executable and database bytes
+unchanged, wrote no journal, and the previous daemon restarted ready. Independently
+hashing CRLF versions of all 31 committed migrations reproduces the published
+Windows fingerprint; this checkout's mixed line endings reproduce the local one.
+The refusal therefore covers the actual failure found during acceptance, not just
+a fabricated version mismatch. Isolated-profile evidence is retained under
+`artifacts/p12-001/binary-update/`; no owner profile/service was changed.
 
 Live authority rechecked before implementing the native acceptance harness:
 
@@ -193,8 +239,8 @@ failure from maintenance-protocol failure in diagnostics. The gate now asserts
 the specific legacy-protocol refusal, so a verification outage cannot substitute
 for that evidence. All 18 updater tests and strict workspace Clippy passed again.
 
-Open acceptance: publish a compatible signed build and verify full real-release
-activation/rollback; verify native service reconciliation and daemon readiness;
-prove clean-machine installation/repair/uninstall; design schema-changing updates
-before allowing downgrade. Native Authenticode/notarization remain credential
-blocked. The initial offline slice deliberately leaves those backlog boxes open.
+The initial offline slice above left publication and native readiness open. The
+accepted protocol-2 release at the top of this record closes that bounded
+update/rollback slice. Clean-machine onboarding/installation/repair/uninstall,
+schema-changing updates, release channels and the other listed platform/version
+limits remain open. Native Authenticode/notarization still needs owner credentials.

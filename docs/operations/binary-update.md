@@ -14,7 +14,7 @@ Use an absolute existing installation directory containing `jarvis` (`jarvis.exe
 on Windows):
 
 ```text
-jarvis update stage ci-<40-character-commit> 0.1.0 --dir ABSOLUTE_INSTALL_DIR
+jarvis update stage ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0 0.1.0 --dir ABSOLUTE_INSTALL_DIR
 ```
 
 The JSON reply contains a stage ID and an absolute `updater` path. Keep that path:
@@ -22,11 +22,13 @@ it is a retained copy of the invoking updater, so Windows can replace the instal
 executable after the original command exits. Staging preserves the installation.
 It may run alongside a daemon that holds a shared installation lock.
 
-The existing historical signed release can be staged, but cannot be activated:
-both the installed and candidate binaries must advertise maintenance protocol 2,
-which includes the installation lock, startup recovery guard and exact migration
-history fingerprint. Protocol-1 prereleases are also refused. A signed release
-containing this updater must be published before production activation acceptance.
+The published [protocol-2 release](https://github.com/props-nothing/jarvis-core/releases/tag/ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0)
+contains this updater. Both installed and candidate binaries must advertise
+maintenance protocol 2, including the installation lock, startup recovery guard
+and identical `database_migrations_sha256` fingerprints. Historical releases
+without this contract, including the protocol-1 trial `0042b09`, can be staged
+but are refused during activation. Do not rewrite migration records to bypass a
+refusal. Retain an older installation's original helper for its existing journal.
 
 ## Activate
 
@@ -133,10 +135,20 @@ node scripts/test-update-lifecycle.mjs ABSOLUTE_TEST_BINARY ci-COMMIT VERSION
 
 ## Evidence limits
 
-Windows local tests and real signed staging evidence are in the
-[research record](../research/integrations/binary-update.md). Native CI includes
-the same lifecycle tests and production staging/startup gate on Windows, macOS
-and Linux; adding a gate does not mean it has passed on hosted runners.
-Full signed new-release activation, native service reconciliation/readiness,
-schema-changing upgrade/downgrade, clean-machine lifecycle and native certificate
-signing are not established by this initial offline slice.
+The protocol-2 `b9d8773` release passed all native quality checks in
+[CI 39122471338](https://github.com/props-nothing/jarvis-core/actions/runs/39122471338)
+and all publication, installation and native update gates in
+[Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427).
+Windows x86_64, macOS ARM64 and Linux x86_64 verified actual service startup,
+authenticated readiness, signed activation, rollback retaining newer database
+writes, pending-journal refusal, recovery and service removal. A real Windows
+signed candidate with mismatched migration history was refused without mutation,
+and the previous daemon remained ready. [Research](../research/integrations/binary-update.md)
+retains the failures, fixes and local falsification evidence.
+
+The previous executable is a distinct source build; both package versions are
+0.1.0. Hosted runners contain development tools, and Windows executes the persisted
+login command without a reboot/logon. This is not acceptance of schema-changing
+updates, two different signed package versions, clean-machine onboarding,
+complete binary repair/uninstall, Linux ARM64 updates, Intel macOS runtime or
+native Authenticode/notarization. Startup remains explicit after offline settlement.

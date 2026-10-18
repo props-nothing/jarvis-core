@@ -1,6 +1,6 @@
 # Installation And Releases
 
-**A native program with signed release verification. Native OS signing and lifecycle acceptance remain open.**
+**A native program with signed release verification and accepted compatible updates. Native OS signing and clean-machine lifecycle remain open.**
 
 [Documentation](../README.md) / [Quick start](../user/quick-start.md) / [Platform evidence](../user/platforms.md) / [Roadmap](../../ROADMAP.md)
 
@@ -15,11 +15,21 @@
 | Database recovery | `jarvis backup create`, `verify ID`, `restore ID` and `recover`; stopped-profile, same-schema snapshots and undo. See the [runbook](database-recovery.md). |
 | Pinned prebuilt first install | Opt-in scripts below verify a signed manifest for an exact release/version before downloading the selected archive. Explicit SHA-256 mode supports historical unsigned releases. No development toolchain; curl 8.4+ required. |
 | CI archives | Platform workflow artifacts and automatically published prereleases with a Sigstore-signed manifest after all five packages pass; inspect the [release workflow](https://github.com/props-nothing/jarvis-core/actions/workflows/release.yml) for the revision's result. |
-| Native OS signing and updates | Authenticode/notarization credentials are not configured. Initial same-schema offline binary maintenance exists; clean-machine evidence, published update acceptance and native service/readiness remain open. |
+| Signed binary update and rollback | Explicit staging, compatible offline activation, retained-binary rollback and recovery; native service/readiness gates pass on Windows x86_64, macOS ARM64 and Linux x86_64. See the [runbook](binary-update.md). |
+| Native OS signing and clean-machine lifecycle | Authenticode/notarization credentials are not configured. Clean-machine onboarding and complete repair/uninstall remain open. |
 
 The separate product website serves working source-building scripts at `https://www.jarvisd.dev/install.sh` and `https://www.jarvisd.dev/install.ps1`, from `frontend/public/`. These clone/update a protected source checkout, build with the committed lockfile, then delegate per-user installation to `jarvis install`. They are not signed-binary downloaders. Source builds require Git, Rust via rustup and [native build tools](../development/getting-started.md#build-from-source); the installed executable needs no Rust. Build/install failure exits nonzero, without setup or a success claim. A successful installer prints interactive and noninteractive setup commands; it does not collect keys or run onboarding through piped stdin. New setup requires an ElevenLabs key and explicit folder grants before starting the assistant. Do not infer signed distribution or clean-machine readiness from this source path.
 
 ## Current CI Archive Flow
+
+Current accepted signed release (2026-10-18):
+[`b9d8773`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0)
+passes all 14 native quality jobs, five packages, twelve-asset publication, four
+public signed-install checks and Windows/macOS/Linux service/update/rollback
+acceptance in [Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427).
+Maintenance protocol 2 requires exact migration history; the real signed mismatch
+refusal also preserves the executable/database and leaves the old daemon ready.
+See the [update runbook](binary-update.md) for compatibility and platform limits.
 
 The [CI workflow](../../.github/workflows/ci.yml) runs native quality checks on Windows, macOS and Linux plus dependency policy. After a successful **push** run on this repository's `main`, the [release workflow](../../.github/workflows/release.yml) packages that run's exact commit, not whichever commit happens to be newest when packaging starts. Failed/cancelled CI, pull requests and foreign repositories cannot trigger packaging. Documentation-only main pushes also follow this flow.
 
@@ -41,7 +51,9 @@ After all five packages succeed, every eligible run signs a manifest binding the
 
 Published packages are visible on the repository's [Releases page](https://github.com/props-nothing/jarvis-core/releases). Notes identify the source commit, Actions run, manifest signing, absence of native Authenticode/notarization and the Intel macOS runtime-smoke limitation. Prereleases are not marked as the latest stable release. Automatic builds refuse an existing tag before publication, and no tag is moved. Existing published releases are never overwritten. A retry can replace assets only in a draft still targeting the tested SHA; a failed upload or metadata check leaves publication blocked. If publication fails ambiguously, inspect the release before retrying. The workflow verifies published metadata and the resulting tag's commit. Four subsequent native jobs install the signed public assets with a fresh home and restricted PATH, run versions/first-run diagnosis and verify existing-install preservation. These jobs are release acceptance, not a clean-VM or live-provider onboarding claim; inspect their result before relying on that release.
 
-Release assets persist beyond the 14-day Actions retention. A permission failure against an older source commit stays a failure; the workflow never substitutes the newer main tip. Automatic prereleases are owner-authorized; native signing/notarization, complete dependency notices/SBOM, updates and clean-machine acceptance remain unfinished stable-distribution requirements.
+After publication, three more native jobs verify the exact signed candidate through service startup, authenticated readiness, offline activation, rollback preserving newer data, recovery and service removal. They build a distinct previous executable from the tested source and retain a bounded summary. The [accepted release evidence](../research/integrations/binary-update.md) distinguishes these hosted checks from clean-machine or two-version signed-upgrade acceptance.
+
+Release assets persist beyond the 14-day Actions retention. A permission failure against an older source commit stays a failure; the workflow never substitutes the newer main tip. Automatic prereleases are owner-authorized; native signing/notarization, complete dependency notices/SBOM, schema-changing updates and clean-machine acceptance remain unfinished stable-distribution requirements.
 
 Local regression checks: `node --test scripts/test-release-flow.mjs scripts/test-release-manifest.mjs` and `bash scripts/test-package-release.sh`. The release tests execute the CI lint/test pipelines under Bash `-eo pipefail`, proving both live diagnostic output and nonzero Cargo exits survive `tee`. CI streams workspace output as well as retaining annotation files, so a runner timeout no longer hides which tests were still running. Do not bypass quality or merely extend a timeout without that evidence.
 

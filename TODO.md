@@ -6,34 +6,41 @@
 
 Work from the first unchecked acceptance slice unless the owner selects another. A checked box requires its stated test and documentation evidence. Built, fixture-tested, live-verified and accepted are different states; do not turn an old partial implementation into a completion claim by moving its notes.
 
-## Current acceptance slice: signed binary update and rollback (2026-10-18)
+## Current acceptance slice: clean-machine distribution lifecycle (2026-10-18)
 
-Continue owner-selected `P12-001` / `P9-006` from the accepted signed first-install
-and offline database recovery foundations below.
+- [ ] Complete clean-machine onboarding/install/update/rollback/repair/uninstall on Windows, macOS and Linux without a development toolchain (`P9-007`, `P9-022`). This retains the clean-machine portion of the original combined acceptance item; hosted service/update checks below do not close it.
 
-- [ ] Define and implement verified binary staging/activation, retained previous-version recovery and health checks, with an ADR for durable update state and service ownership.
-- [ ] Prove failed/interrupted activation preserves a recoverable installation and database; define schema compatibility before supporting a downgrade.
-- [ ] Verify service reconciliation and update/rollback on Windows, macOS and Linux, then complete clean-machine onboarding/install/repair/uninstall acceptance (`P9-007`, `P9-022`).
+Native certificate signing still needs owner-provided credentials. Schema-changing
+updates, release channels and whole-profile recovery remain separate work.
 
-Native certificate signing still needs owner-provided credentials. Database
-snapshots alone do not complete binary rollback or whole-profile recovery.
+## Completed acceptance slice: signed binary update and rollback (2026-10-18)
 
-Initial offline implementation: [ADR-0242](docs/adr/0242-binary-activation-retains-evidence-and-requires-offline-ownership.md)
-and [runbook](docs/operations/binary-update.md). `update stage|activate|status|rollback|recover`
-now has signed staging/reverification, installation/profile exclusion, retained
-previous binaries and database snapshots, same-schema activation, recovery journals
-and startup/doctor refusal. Rollback preserves current database content. Ordinary
-install refuses to overwrite retained update evidence. The helper avoids Windows
-self-replacement; the installed service path is preserved and uncertain ownership
-is refused.
+Owner-selected `P12-001` / `P9-006` continuation from signed first installation and
+offline database recovery. [ADR-0242](docs/adr/0242-binary-activation-retains-evidence-and-requires-offline-ownership.md)
+and the [runbook](docs/operations/binary-update.md) define explicit offline maintenance
+followed by explicit daemon startup and authenticated readiness checks.
 
-This is the first offline portion, not completion of the acceptance boxes above.
-Executable/version/protocol and offline database checks are implemented; real
-daemon readiness, service-manager reconciliation, schema-changing updates,
-new-release signed activation and clean-machine lifecycle remain open. Native CI
-now includes the new tests and public signed-staging/startup-refusal gate; hosted
-results for this revision are still required. Local evidence is recorded in
-[binary-update research](docs/research/integrations/binary-update.md).
+- [x] Implement signed staging/reverification, installation/profile exclusion, retained previous binaries and database snapshots, guarded activation/rollback/recovery, and startup/doctor refusal for unsettled evidence.
+- [x] Prove failed/interrupted transitions remain recoverable and rollback preserves newer database content. Maintenance protocol 2 requires identical schemas and exact migration history; changed/missing/unsuccessful migrations fail before replacement. Guard falsification fails as expected, and the restored guard passes.
+- [x] Publish the compatible signed `b9d8773` release and pass native Windows x86_64, macOS ARM64 and Linux x86_64 service installation/reconciliation, actual manager process identity, authenticated readiness, activation, current-data rollback, recovery and service removal.
+- [x] Pass 3,262 local Windows workspace tests (six existing opt-in ignores), 19 updater tests, 72 release/documentation tests, formatting and strict Clippy. All 14 native quality jobs pass in [CI 39122471338](https://github.com/props-nothing/jarvis-core/actions/runs/39122471338).
+
+[Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427)
+passed all five packages, publication of twelve signed-release assets, four public
+installation checks and all three native update/service gates for exact commit
+`b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0`.
+The [public release](https://github.com/props-nothing/jarvis-core/releases/tag/ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0)
+also passes the real Windows migration-mismatch refusal check: no executable/database
+change, no journal, and the old daemon remains ready. The earlier protocol-1 trial
+exposed the line-ending checksum gap and is not an accepted update candidate.
+
+These gates use distinct source-built previous and signed candidate executables
+at package version 0.1.0, with a provider-free profile on hosted native runners.
+They do not establish two different signed package versions, schema migration,
+clean-machine onboarding, reboot/logon, native certificates, Linux ARM64 update
+or Intel macOS runtime acceptance. Service removal preserves data; complete binary
+repair/uninstall remains in the open lifecycle item. [Research and failure evidence](docs/research/integrations/binary-update.md)
+retain the Windows path, macOS restart and migration-history findings.
 
 ## Completed acceptance slice: offline database recovery (2026-10-18)
 
@@ -510,7 +517,7 @@ Order: `P8-018`–`P8-020` first (backup voice with no new account); `P8-022` ne
 - [~] `P9-003` User service install/uninstall exists. Resolve documented service/manual-daemon ownership cases and verify native lifecycle; system-wide modes remain optional.
 - [~] `P9-004` Opt-in prebuilt first install has native OS/architecture detection, explicit release/SHA-256, bounded extraction and existing PATH/setup/doctor handoff (ADR-0239). Signed manifests and hosted publisher/public-install acceptance pass in the opt-in path (ADR-0240); default distribution and clean-machine evidence remain. Website source bootstrap still requires a toolchain.
 - [ ] `P9-005` Signed native artifacts, complete dependency notices/SBOM, provenance, checksums and release notes.
-- [~] `P9-006` Offline database snapshots, guarded same-schema restore/undo and interrupted-restore reconciliation are implemented (ADR-0241; acceptance above). The initial same-schema binary staging/activation/rollback and recovery guards are implemented under ADR-0242; published/native acceptance, schema-change rollback, daemon readiness, channels and broader version/split-brain diagnosis remain.
+- [~] `P9-006` Offline database recovery (ADR-0241) and signed binary staging/activation/rollback/recovery (ADR-0242) have native acceptance above, including explicit daemon readiness and migration-history refusal. Schema-changing updates/rollback, release channels and broader version/split-brain diagnosis remain.
 - [ ] `P9-007` Clean native install/update/rollback/repair/uninstall without a development toolchain.
 - [ ] `P9-008` Legacy data importer only if the owner has a named surviving source and requests migration; dry-run, excluded keys/certificates, provenance, backup, rollback and explicit finalization. Removed prototype source is not a live data location.
 - [~] `P9-009` Prototype removal is already complete (2026-10-13). Preserve historical license/provenance; resolve any requested legacy-data migration under `P9-008` rather than deleting the prototype again.
@@ -518,7 +525,7 @@ Order: `P8-018`–`P8-020` first (backup voice with no new account); `P8-022` ne
 - [~] `P9-013` Guided terminal setup, hidden key entry, provider/model tests and owner-required ElevenLabs test are built under ADR-0214. Native-terminal and owner-account onboarding evidence remains with `P11-007`.
 - [~] `P9-021` Model/fallback and phone/voice testing paths exist. Verify each current key-test surface and add any missing search-key check without duplicating existing tests.
 - [ ] `P9-017b` Public distribution: Apache-2.0 is selected; complete dependency notices, signing/notarization, publish all intended packages and verify clean-machine installation before advertising signed downloads.
-- [ ] `P9-022` Clean Linux/macOS/ARM installation and lifecycle acceptance. Ubuntu 24.04 x86_64 has an earlier end-to-end record, with unresolved service ownership cases; AlmaLinux, ARM and macOS are unverified. Preserve the [exact observations and suggested fixes](docs/history/todo-p9-p11-evidence-through-2026-10-16.md#p9-022).
+- [ ] `P9-022` Clean Linux/macOS/ARM installation and lifecycle acceptance. Hosted Linux x86_64/macOS ARM64 native service/update/rollback gates pass above; restricted-PATH signed installation also passes on Linux ARM64. These do not close clean-machine onboarding, reboot/logon, all service ownership cases or AlmaLinux acceptance. Preserve the [earlier observations and suggested fixes](docs/history/todo-p9-p11-evidence-through-2026-10-16.md#p9-022).
 - [ ] `P9-069` Residual product polish only: second search provider, broader browser CI, remaining HUD decomposition where useful, replay UI and ntfy authentication. Browser tools, routing and spend guards are delivered; semantic retrieval and distribution have their own IDs.
 - [~] `P9-024` Built-in capability expansion is delivered; further capability now follows P11. The old 37-tool snapshot is historical, not a current registry count.
 
@@ -551,7 +558,7 @@ The completed installation/UI evidence is in [P9–P11 history](docs/history/tod
 
 Owner-requested on 2026-10-17 after the [competitive gap review](docs/research/competitive-gap-2026-10-17.md) against Hermes Agent and OpenClaw. This is the owner's named requirement for the demand-gated items it references; it orders existing IDs rather than duplicating them. Every item keeps the authority boundary: no new path lets a model, page, skill or channel grant itself permission. External APIs/providers still need an official-source research record first.
 
-- [~] `P12-001` **Install without a toolchain.** Opt-in prebuilt installation (ADR-0239) now verifies signed release manifests (ADR-0240); native signing credentials are not configured. Still deliver the rest of `P9-004`–`P9-007`: signed packages, default install, onboarding acceptance, update and rollback. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
+- [~] `P12-001` **Install without a toolchain.** Signed prebuilt installation and compatible binary update/rollback have hosted native acceptance (ADRs 0239–0242). Native signing credentials, default binary installation, complete notices/SBOM and clean-machine onboarding/repair/uninstall remain. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
 - [ ] `P12-002` **Owner decision: voice at first run.** ADR-0214 records the owner's choice to require ElevenLabs for guided setup; both rivals start without a voice key. Ask the owner whether to keep it. If changed, amend ADR-0214 and prove setup completes with voice skipped and voice can be added later from Settings. ADR-0214 says to revisit once a verified local voice adapter exists; `P8-018`–`P8-022` deliver that, so setup can then offer ElevenLabs, a local voice or skip.
 - [ ] `P12-003` **Skills chosen by meaning.** Replace or complement the 75% word-overlap match with retrieval that finds an approved skill phrased differently from the request. Acceptance: a measured owner question set where paraphrased requests select the right skill without raising false selections; skills still never grant authority (ADR-0117).
 - [ ] `P12-004` **Skills that improve after use.** After a run that used an approved skill and needed corrections, JARVIS proposes a revised version (a diff the owner approves or dismisses). Acceptance: revision is proposal-only, history is kept, and a dismissed revision never applies.

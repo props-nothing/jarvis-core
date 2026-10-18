@@ -19,14 +19,17 @@ on a server with no screen, and what is still missing. It is deliberately specif
 | Private key and credential files | owner-only ACL | mode `0600` | mode `0600` |
 | Run at login / as a service | registry Run entry (`jarvis service install`) | systemd user unit (`jarvis service install`) | launchd agent (`jarvis service install`) |
 | Code sandbox (optional) | Docker Desktop | Docker | Docker Desktop |
-| Public unsigned prerelease archives | x86_64 archive and checksum verified | x86_64 and aarch64 archives/checksums verified | Apple silicon and Intel archives/checksums verified; Intel runtime smoke skipped |
-| Signed installers | not yet | not yet | not yet (downloaded unsigned binaries remain subject to Gatekeeper, `P9-005`) |
+| Publisher-verified prerelease archives | Signed-manifest x86_64 install verified | Signed-manifest x86_64 and aarch64 install verified | Signed-manifest Apple silicon install verified; Intel archive cross-built, runtime smoke skipped |
+| Compatible signed update/rollback and service readiness | x86_64 hosted gate passed | x86_64 hosted gate passed; aarch64 update unverified | Apple silicon hosted gate passed; Intel update unverified |
+| Native OS-signed installers | not yet | packaging remains open | not yet (native signing/notarization and Gatekeeper acceptance remain `P9-005`) |
 
 Ubuntu 24.04 x86_64 has a recorded source install, local-model run, SSH-console access and service setup (2026-10-11, `P9-022`).
 The same run found a service-ownership handoff issue: stop a manually started daemon before installing its service. This is not proof
 of a reboot/update cycle, every Linux distribution or aarch64. macOS still needs an end-to-end owner run; CI alone is not that evidence.
 
-Current release evidence (2026-10-17): [`dd65479`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-dd65479d988ebf7caa9bddfb803c13cae1b0ddbf) includes the coding lifecycle repairs and passed all ten native CI jobs, including the three scripted lifecycle gates. All five packages, automatic publication, the exact tag target and ten anonymous asset downloads/checksums are verified. Four native archive smokes passed; Intel macOS remains cross-built without runtime smoke. Real-agent cancellation evidence remains Windows Codex only.
+Current release evidence (2026-10-18): [`b9d8773`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-b9d8773cb26a3ae7be722a89fc7b3acbd31a05a0) passed all 14 native quality jobs, five packages, signed twelve-asset publication, four public-install checks and three native service/update/rollback gates in [Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427). The update gates inspect the actual manager process and authenticated readiness, preserve newer data through rollback, recover pending state and remove the service without deleting data. Windows executes the persisted Run command without a reboot/logon. Hosted provider-free profiles and source-built previous executables do not establish clean-machine onboarding or two different signed package versions. [Details and remaining limits](../operations/binary-update.md#evidence-limits).
+
+Earlier release evidence (2026-10-17): [`dd65479`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-dd65479d988ebf7caa9bddfb803c13cae1b0ddbf) includes the coding lifecycle repairs and passed all ten native CI jobs, including the three scripted lifecycle gates. All five packages, automatic publication, the exact tag target and ten anonymous asset downloads/checksums are verified. Four native archive smokes passed; Intel macOS remains cross-built without runtime smoke. Real-agent cancellation evidence remains Windows Codex only.
 
 Earlier release evidence (2026-10-16): [`c48da888`](https://github.com/props-nothing/jarvis-core/releases/tag/ci-c48da8880e20304da4b13e4016d896ad22fc2e04) passed all ten native CI jobs, all five packages and automatic public publication. Ten anonymous asset downloads match the checked Actions artifacts, and the tag resolves to that exact commit. Four native archive smoke tests passed; Intel macOS remains cross-built without runtime smoke. [The active ledger](../../TODO.md#current-acceptance-slice-release-verification-and-coding-lifecycle-2026-10-16) retains exact runs and later lifecycle results.
 
@@ -104,8 +107,8 @@ uninstall` removes it. `jarvis start` launches the daemon so that scripts which 
 
 ## Known gaps
 
-- CI automatically publishes complete, verified **unsigned prereleases** after successful native quality and five-platform package gates. Original JARVIS
-  code is now [Apache-2.0](../../LICENSE), but a generated dependency-license inventory, signing/notarization and clean-machine
+- CI automatically publishes prereleases with **Sigstore-signed manifests** after successful native quality and five-platform package gates. Original JARVIS
+  code is [Apache-2.0](../../LICENSE), but a generated dependency-license inventory, native signing/notarization and clean-machine
   verification remain release gates (`P9-004` to `P9-007`, `P9-017b`). Website bootstrap installers build from source, not signed downloads.
   Each archive includes the single `jarvis` program, `LICENSE`, `NOTICE`, provenance and a SHA-256 file. Consult the latest workflow result
   for the revision you intend to use; license selection alone is not release or platform-verification evidence.

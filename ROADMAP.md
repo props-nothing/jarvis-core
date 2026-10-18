@@ -17,22 +17,30 @@ Reviewed 2026-10-18. The [active backlog](TODO.md) controls current acceptance o
 | MCP accounts | Named stdio/HTTP secrets, persistent GitHub OAuth and generic pre-registered OAuth | Real provider/browser acceptance, durable direct-call history, automatic client registration, per-client credentials and hot registration |
 | Coding | Settings-first in-place queued jobs, opt-in worktrees, full skill bundles, independent checks, managed previews, Windows Codex cancellation and a verified disposable website with explicit continuation | Fresh sign-in and other-provider/platform acceptance, scoped integration bridge and optional enforceable sandbox |
 | Voice | Browser voice/optional runtime synthesis; owner-reported working outbound calls | New setup requires ElevenLabs per owner choice; browser-independent local speech and broader telephony remain |
-| Distribution | Apache-2.0, user installation/services, signed release manifests, hosted prebuilt-install acceptance, native-tested offline database snapshots/restore, initial offline binary staging/activation/rollback and source-building website scripts | Native signing credentials, complete notices/SBOM, published/native binary update acceptance and clean-machine verification |
+| Distribution | Apache-2.0, user installation/services, signed release manifests, hosted prebuilt-install acceptance, native-tested database recovery and compatible signed update/rollback with service readiness, source-building website scripts | Native signing credentials, complete notices/SBOM, schema-changing updates and clean-machine onboarding/repair/uninstall |
 | Scale | Local SQLite profile | Server, PostgreSQL parity, multiple devices and roles only for a named requirement |
 
 <a id="current-acceptance-slice"></a>
 
 ## Latest acceptance and next work
 
-The initial offline binary updater is implemented under
-[ADR-0242](docs/adr/0242-binary-activation-retains-evidence-and-requires-offline-ownership.md):
-signed staging/reverification, same-schema activation, retained previous binaries,
-database-preserving rollback and interrupted-transition recovery. It checks
-executable/protocol and offline database health. Native service reconciliation,
-live readiness, signed activation of a newly published compatible release and
-clean-machine lifecycle still require acceptance; see [the runbook](docs/operations/binary-update.md).
+The signed binary update/rollback slice is accepted under
+[ADR-0242](docs/adr/0242-binary-activation-retains-evidence-and-requires-offline-ownership.md).
+Release `b9d8773` passes signed activation, explicit native service readiness,
+rollback preserving newer data, and recovery on Windows x86_64, macOS ARM64 and
+Linux x86_64. Protocol 2 checks exact migration history as well as numeric schemas;
+a real incompatible signed build is refused without replacing bytes. All 14 jobs in
+[CI 39122471338](https://github.com/props-nothing/jarvis-core/actions/runs/39122471338)
+and the five packages, four public-install checks and three update gates in
+[Release 39123649427](https://github.com/props-nothing/jarvis-core/actions/runs/39123649427)
+passed. See the [runbook](docs/operations/binary-update.md) and [bounded evidence](docs/research/integrations/binary-update.md).
 
-`P12-001` now has accepted signed first-install and offline database recovery foundations. Repository OIDC publication produced the public `70cfc6e` release; the `40fc573` bootstrap/harness installed it on four native targets with development tools hidden from PATH. All 14 jobs in [CI 39076425958](https://github.com/props-nothing/jarvis-core/actions/runs/39076425958) passed, including Windows/macOS/Linux recovery tests and rebuilt process gates. [ADR-0241](docs/adr/0241-database-restores-require-offline-ownership-and-a-recovery-journal.md) defines database snapshots, guarded restore/undo and interruption recovery. Remaining acceptance is newly published signed binary activation, native daemon health rollback and service reconciliation; clean-machine onboarding and native certificate signing retain separate gates.
+`P12-001` still needs clean-machine onboarding/install/repair/uninstall, native
+certificate signing and complete notices/SBOM. Hosted runners with provider-free
+profiles do not close those gates. Schema-changing updates and release channels
+also remain separate. [ADR-0241](docs/adr/0241-database-restores-require-offline-ownership-and-a-recovery-journal.md)
+continues to govern separately invoked database restore; binary rollback never
+rewinds newer canonical data.
 
 The owner-selected [release verification and coding lifecycle](TODO.md#current-acceptance-slice-release-verification-and-coding-lifecycle-2026-10-16) is implemented and verified. Both `c48da888` and the lifecycle revision `dd65479` passed native CI, five-platform packaging, public publication and ten matching asset downloads. [ADR-0233](docs/adr/0233-coding-cancellation-is-final-and-process-ownership-outlives-the-root.md) preserves cancellation across agent errors/sign-in and retains descendant ownership after root exit, with cleanup failures reported explicitly. Both final local workspace configurations passed 3,170 tests each; all ten native jobs and the Windows/macOS/Linux lifecycle gates passed. Real Windows Codex cancellation is separately recorded. Original failures, falsification controls and archive hashes remain in TODO's evidence.
 

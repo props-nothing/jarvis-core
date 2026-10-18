@@ -56,9 +56,10 @@ stays blocked for diagnosis with its original helper.
 Services retain the stable installed path. Only an absent definition or an exact
 JARVIS-owned definition for that path is admissible. Foreign, unreadable or drifted
 definitions are refused, including portable use of a service-owned installation.
-Activation does not rewrite, start or stop service-manager definitions. Native
-service reconciliation/readiness and clean-machine lifecycle remain acceptance
-gates; version/protocol and offline checks are not live daemon readiness.
+Activation does not rewrite, start or stop service-manager definitions. Each
+release requires native service reconciliation/readiness acceptance; version/protocol
+and offline checks are not live daemon readiness. Clean-machine lifecycle is a
+separate gate from the hosted native update checks.
 
 Live readiness follows settlement through an explicit startup action. This avoids
 letting a trial daemon resume canonical work while an update is still pending.
