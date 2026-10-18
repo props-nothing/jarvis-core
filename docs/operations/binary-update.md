@@ -90,8 +90,38 @@ image still match. Rollback/recovery are repeatable. A failed staging attempt or
 pre-journal interruption may leave an incomplete retained stage; stage again to
 get a new identity. No automatic cleanup removes archives, verifier/trust material,
 previous binaries or snapshots. `install` refuses to overwrite an installation
-with update evidence. Uninstall/repair of this retained layout remains an explicit
-acceptance gate.
+with update evidence. Retained-image repair and guarded removal are defined by
+[ADR-0243](../adr/0243-repair-and-removal-preserve-installation-evidence.md).
+
+## Repair and removal
+
+Use a separate executable containing ADR-0243's maintenance commands, normally the
+retained updater printed by staging. Stop JARVIS first. A helper copied from an older
+release may predate `repair`; after verified activation, retain a separate copy of the
+new executable if necessary. On Windows this avoids replacing a running executable.
+
+```text
+UPDATER update repair --dir INSTALL_DIR
+UPDATER uninstall --dir INSTALL_DIR
+```
+
+Append `--root PROFILE_ROOT` for a portable profile; that path does not change native
+services or PATH. Native uninstall verifies service cleanup, removes only this
+installation's PATH entry/links, and removes the installed executable. It refuses an
+active owner or failed cleanup. Running uninstall from the installed executable fails
+before cleanup and points to retained helper evidence when available.
+
+Repair requires a settled update journal and restores its selected executable,
+including a missing target. It rechecks signed evidence for an applied candidate and
+the retained digest for a rolled-back previous image, preserves damaged bytes, and
+does not change the current database. Pending journals need `recover`; an installation
+without retained update evidence has no automatic binary-repair source. Repeating
+repair/removal is supported. Uninstall leaves settings, keys, memory, history and
+update evidence (including helper copies) in place and never recursively deletes an
+installation or profile. A missing executable after uninstall can be restored through
+explicit repair while its evidence remains intact.
+
+[Clean-machine self-test](clean-machine-lifecycle.md) remains an independent gate.
 
 ## Native readiness after an offline transition
 

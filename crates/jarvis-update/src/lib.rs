@@ -203,9 +203,18 @@ fn service_plan_preflight(plan: &jarvis_diagnostics::ServicePlan, mode: PathMode
 }
 
 fn independent_updater(target: &Path) -> Result<()> {
-    if fs::canonicalize(std::env::current_exe()?)? == fs::canonicalize(target)? {
+    let current = fs::canonicalize(std::env::current_exe()?)?;
+    let target = match fs::symlink_metadata(target) {
+        Ok(_) => {
+            files::regular(target, false)?;
+            fs::canonicalize(target)?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => target.to_path_buf(),
+        Err(error) => return Err(error.into()),
+    };
+    if current == target {
         return Err(Error::Refused(
-            "run activation/rollback/recovery with the retained updater path printed by update stage; the installed executable cannot replace itself on Windows",
+            "run maintenance with a separate verified executable or the retained updater path printed by update stage; the installed executable cannot replace/remove itself on Windows",
         ));
     }
     Ok(())
@@ -366,6 +375,158 @@ pub async fn rollback(install: &Path, paths: &AppPaths) -> Result<BinaryUpdate> 
 /// Unknown executable or database state remains blocked without deleting evidence.
 pub async fn recover(install: &Path, paths: &AppPaths) -> Result<BinaryUpdate> {
     settle(install, paths, false).await
+}
+
+fn selected_image(record: &BinaryUpdate) -> Result<&BinaryImage> {
+    match record.state {
+        BinaryUpdateState::Applied => Ok(&record.candidate),
+        BinaryUpdateState::RolledBack => Ok(&record.previous),
+        _ => Err(Error::Refused(
+            "pending update requires recovery before repair/removal",
+        )),
+    }
+}
+
+/// Restores the settled image after accidental executable loss/corruption.
+///
+/// # Errors
+/// Refuses missing/pending evidence, altered retained bytes, active owners,
+/// incompatible profiles and failed signed candidate verification.
+pub async fn repair(install: &Path, paths: &AppPaths) -> Result<BinaryUpdate> {
+    let install = directory(install)?;
+    independent_updater(&install.join(program_name()))?;
+    let _guard = InstallationGuard::acquire(&install, true)?;
+    service_preflight(&install, paths)?;
+    let offline = OfflineProfile::acquire(paths)?;
+    let record = jarvis_storage::binary_update_status(&install)?
+        .ok_or(Error::Refused("repair requires retained update evidence"))?;
+    let expected = selected_image(&record)?;
+    if record.profile_data != fs::canonicalize(paths.data())?
+        || !probe().compatibility.permits(&expected.compatibility)
+    {
+        return Err(Error::Refused("repair profile or schema mismatch"));
+    }
+    let source = if record.state == BinaryUpdateState::Applied {
+        if verified_candidate(&install, record.id).await? != *expected {
+            return Err(Error::Refused("signed repair image differs from journal"));
+        }
+        stage_dir(&install, record.id)?.join(program_name())
+    } else {
+        stage_dir(&install, record.id)?.join("previous")
+    };
+    repair_image(&install, &source, expected, &offline).await?;
+    Ok(record)
+}
+
+async fn repair_image(
+    install: &Path,
+    source: &Path,
+    expected: &BinaryImage,
+    offline: &OfflineProfile,
+) -> Result<()> {
+    let database = offline.check().await?;
+    // Verify before running any retained bytes. Never execute the damaged target.
+    if files::fingerprint(source)? != identity(expected) || image(source).await? != *expected {
+        return Err(Error::Refused(
+            "retained repair executable is altered or incompatible",
+        ));
+    }
+    let target = install.join(program_name());
+    match fs::symlink_metadata(&target) {
+        Ok(_) => {
+            if files::fingerprint(&target)? != identity(expected) {
+                files::copy_new(
+                    &target,
+                    &install
+                        .join(UPDATE_DIRECTORY)
+                        .join(format!("damaged-{}", jarvis_core::scratch_tag())),
+                )?;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    apply_image(source, &target, expected, offline).await?;
+    if offline.check().await? != database {
+        return Err(Error::Refused(
+            "database changed during repair; preserve all evidence",
+        ));
+    }
+    Ok(())
+}
+
+/// Exclusive ownership retained across service/PATH cleanup and binary removal.
+/// Profile and update evidence are deliberately retained (ADR-0243).
+pub struct RemovalGuard {
+    target: PathBuf,
+    expected: Option<(u64, String)>,
+    _installation: InstallationGuard,
+    _profile: OfflineProfile,
+}
+
+impl RemovalGuard {
+    /// Admits removal of a stopped, settled installation by a separate executable.
+    ///
+    /// # Errors
+    /// Refuses active owners, self-removal, pending/malformed evidence, wrong
+    /// profiles and unknown target bytes. Service cleanup is the caller's job.
+    pub fn acquire(install: &Path, paths: &AppPaths) -> Result<Self> {
+        let install = directory(install)?;
+        let target = install.join(program_name());
+        independent_updater(&target)?;
+        let installation = InstallationGuard::acquire(&install, true)?;
+        service_preflight(&install, paths)?;
+        let profile = OfflineProfile::acquire(paths)?;
+        let recorded = jarvis_storage::binary_update_status(&install)?;
+        let expected = if let Some(record) = &recorded {
+            if record.profile_data != fs::canonicalize(paths.data())? {
+                return Err(Error::Refused("removal profile differs from update record"));
+            }
+            identity(selected_image(record)?)
+        } else {
+            // First installation has no update journal. A separate copy of the
+            // same executable is sufficient; do not execute an unknown target.
+            files::fingerprint(&std::env::current_exe()?)?
+        };
+        let expected = match fs::symlink_metadata(&target) {
+            Ok(_) => {
+                if files::fingerprint(&target)? != expected {
+                    return Err(Error::Refused(
+                        "unrecognized installed bytes; repair before removal",
+                    ));
+                }
+                Some(expected)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Self {
+            target,
+            expected,
+            _installation: installation,
+            _profile: profile,
+        })
+    }
+
+    /// Removes only the exact admitted executable, after successful cleanup.
+    ///
+    /// # Errors
+    /// Changed bytes, a new target, or any filesystem failure refuse success.
+    pub fn remove(self) -> Result<()> {
+        if let Some(expected) = &self.expected {
+            if files::fingerprint(&self.target)? != *expected {
+                return Err(Error::Refused(
+                    "installed executable changed during removal",
+                ));
+            }
+            fs::remove_file(&self.target)?;
+        }
+        match fs::symlink_metadata(&self.target) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+            Ok(_) => Err(Error::Refused("executable still exists after removal")),
+        }
+    }
 }
 
 async fn settle(install: &Path, paths: &AppPaths, rollback: bool) -> Result<BinaryUpdate> {

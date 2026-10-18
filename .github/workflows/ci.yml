@@ -64,6 +64,7 @@ jobs:
       - name: Check documentation links and ADR identifiers
         run: |
           node --test scripts/test-docs.mjs
+          node --test scripts/test-clean-lifecycle.mjs
           node scripts/check-docs.mjs
       - name: Check live coding gate opt-in guards
         run: node --test scripts/test-coding-website-gate.mjs

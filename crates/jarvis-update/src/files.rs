@@ -92,7 +92,13 @@ pub(crate) fn replace(source: &Path, target: &Path, expected: &(u64, String)) ->
     if fingerprint(source)? != *expected {
         return Err(Error::Refused("retained executable digest mismatch"));
     }
-    regular(target, false)?;
+    // Repair may recreate a missing executable. Existing links/reparse points
+    // remain forbidden, including dangling links (try_exists would miss those).
+    match fs::symlink_metadata(target) {
+        Ok(_) => regular(target, false)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     let mut options = atomic_write_file::AtomicWriteFile::options();
     options.read(true);
     #[cfg(unix)]

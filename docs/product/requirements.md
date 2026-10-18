@@ -12,7 +12,7 @@ Reconciled 2026-10-16; these limitations keep the target requirements below from
 
 | Target | Current behavior and disposition |
 | --- | --- |
-| Install without a toolchain or cloud account | Public setup builds from source. New CLI onboarding requires a working ElevenLabs TTS key by owner choice (ADR-0214); existing profiles can still run without cloud speech. Signed binaries and browser-independent local voice remain open. |
+| Install without a toolchain or cloud account | Signed prebuilt first installation and compatible update/rollback have hosted native acceptance; the website scripts still build from source. New CLI onboarding requires a working ElevenLabs TTS key by owner choice (ADR-0214); existing profiles can run without cloud speech. Clean-machine lifecycle and browser-independent local voice remain open. |
 | OS-backed local secret storage | Current model/MCP keys and OAuth grants use private profile files. Keychain migration is P11-015. |
 | Runtime interchangeability and isolation | Native runs and ACP v1 coding are implemented. Coding defaults to in-place host execution, with optional worktrees; native agent tools are not all mediated by JARVIS. A scoped tool bridge and enforceable sandbox remain separate work. No private JARVIS runtime protocol is required (ADR-0167/0222). |
 | Durable multi-step workflows | Ordinary runs, approvals, schedules and triggers exist. Workflow dependencies, compensation and long multi-step waits remain parked until a named requirement needs them. |

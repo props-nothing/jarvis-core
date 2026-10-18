@@ -6,6 +6,7 @@ Every external integration requires a dated record based on current official sou
 
 | Integration | Official AI/docs index | Record | Status |
 | --- | --- | --- | --- |
+| Clean-machine lifecycle | Official Windows/Rust/systemd/Apple/GitHub contracts | [clean-machine-lifecycle.md](clean-machine-lifecycle.md) | Guarded repair/removal and toolchain-free drivers; clean-host/provider access pending |
 | Signed binary updates | Official Sigstore/Rust/library contracts | [binary-update.md](binary-update.md) | Signed staging, same-schema offline activation/rollback and interrupted-transition recovery; native/live activation gates remain |
 | Offline database recovery | Rust/SQLite indexes inaccessible; official docs and tagged SQLx source | [offline-database-recovery.md](offline-database-recovery.md) | Verified offline snapshots, guarded same-schema restore and interrupted-restore reconciliation; binary updates remain open |
 | Release signatures | Sigstore/GitHub indexes inaccessible; pinned official source | [release-signing.md](release-signing.md) | Keyless manifest signing and pinned verification; native certificates and hosted acceptance tracked separately |

@@ -10,6 +10,17 @@ Work from the first unchecked acceptance slice unless the owner selects another.
 
 - [ ] Complete clean-machine onboarding/install/update/rollback/repair/uninstall on Windows, macOS and Linux without a development toolchain (`P9-007`, `P9-022`). This retains the clean-machine portion of the original combined acceptance item; hosted service/update checks below do not close it.
 
+Continuation: [ADR-0243](docs/adr/0243-repair-and-removal-preserve-installation-evidence.md)
+adds retained-image repair and guarded, repeatable removal with failure propagation.
+The native update harness now exercises signed-candidate repair, missing/damaged
+previous-image repair and executable removal. Bash/Windows PowerShell
+[clean-host drivers and runbook](docs/operations/clean-machine-lifecycle.md) require
+real onboarding credentials and refuse developer tools before installation.
+Host image/inventory, actual live onboarding, logon and end-to-end clean-machine
+evidence remain pending; repository discovery found no configured self-hosted
+runners or test secrets. The owner chose to run the clean-machine tests personally
+and enter keys in hidden prompts; those reports will close the gate.
+
 Native certificate signing still needs owner-provided credentials. Schema-changing
 updates, release channels and whole-profile recovery remain separate work.
 

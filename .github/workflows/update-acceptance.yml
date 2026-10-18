@@ -58,6 +58,8 @@ jobs:
           node-version: '24.19.0'
       - name: Install the pinned compiler
         run: rustup toolchain install
+      - name: Prove clean-host drivers reject this developer image
+        run: node --test scripts/test-clean-lifecycle.mjs
       - name: Cache native build dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:

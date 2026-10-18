@@ -166,31 +166,59 @@ pub fn uninstall(arguments: &[String]) -> ExitStatus {
             return ExitStatus::Usage;
         }
     };
-    let installed = dir.join(program_name());
-    if !installed.is_file() {
-        eprintln!("jarvis: nothing is installed in {}", dir.display());
+    let paths = match crate::resolve_paths(arguments) {
+        Ok(paths) => paths,
+        Err(status) => return status,
+    };
+    let dir = match std::fs::canonicalize(&dir) {
+        Ok(dir) => dir,
+        Err(error) => {
+            eprintln!("jarvis: cannot resolve installation: {error}");
+            return ExitStatus::Unavailable;
+        }
+    };
+    let guard = match jarvis_update::RemovalGuard::acquire(&dir, &paths) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("jarvis: {error}; stop JARVIS explicitly before uninstalling");
+            if let Ok(Some(record)) = jarvis_storage::binary_update_status(&dir) {
+                eprintln!(
+                    "retained helper: {}",
+                    jarvis_update::helper_path(&dir, record.id).display()
+                );
+            }
+            return ExitStatus::Rejected;
+        }
+    };
+    if paths.mode() == jarvis_storage::PathMode::Native {
+        let plan = match jarvis_diagnostics::ServicePlan::build(
+            jarvis_diagnostics::ServiceKind::native(),
+            &dir.join(program_name()),
+            None,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                eprintln!("jarvis: {error}");
+                return ExitStatus::Rejected;
+            }
+        };
+        let result = crate::service_install::uninstall(&plan);
+        if result != ExitStatus::Ok {
+            return result;
+        }
+        let result = crate::shell_path::remove_installation(&dir);
+        if result != ExitStatus::Ok {
+            return result;
+        }
+    }
+    if let Err(error) = guard.remove() {
+        eprintln!("jarvis: {error}");
         return ExitStatus::Unavailable;
     }
-    let _ = run_installed(&installed, &["stop"]);
-    let _ = run_installed(&installed, &["service", "uninstall"]);
-    let _ = run_installed(&installed, &["path", "uninstall"]);
-    let running_here = std::env::current_exe().is_ok_and(|exe| exe == installed);
-    if running_here {
-        println!(
-            "the path entry and the login service are removed; delete {} yourself (a program cannot delete itself while it runs)",
-            installed.display()
-        );
-    } else if let Err(error) = std::fs::remove_file(&installed) {
-        eprintln!(
-            "jarvis: {} could not be removed: {error}",
-            installed.display()
-        );
-        return ExitStatus::Unavailable;
-    } else {
-        let _ = std::fs::remove_dir(&dir);
-        println!("removed {}", installed.display());
-    }
-    println!("your settings, keys, memory and history were left in place");
+    println!("removed {}", dir.join(program_name()).display());
+    println!(
+        "your settings, keys, memory, history and retained update evidence were left in place"
+    );
     ExitStatus::Ok
 }
 

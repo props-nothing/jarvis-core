@@ -163,6 +163,7 @@ try {
   fs.writeFileSync(path.join(configDir, 'config.toml'), `schema_version = 1\n[profile]\nname = "update-gate"\n[logging]\nlevel = "info"\n[daemon]\nhttp_enabled = true\nhttp_port = ${port}\nshutdown_timeout_seconds = 15\n`);
   configured = true;
   if (native) {
+    ok(target, ['path', 'install']);
     // Prove refusal before allowing the production installer to create anything.
     fs.mkdirSync(path.dirname(service.definition), { recursive: true });
     fs.writeFileSync(service.definition, 'externally managed acceptance fixture\n');
@@ -187,12 +188,18 @@ try {
   await start();
   const busy = run(updater, activate);
   assert.notEqual(busy.status, 0, 'running installation must refuse activation');
+  assert.notEqual(run(updater, ['uninstall', '--dir', install, ...scoped]).status, 0, 'running installation must refuse uninstall');
   assert.equal(hash(target), before); await stop();
   const activated = JSON.parse(ok(updater, activate, 180000)).update;
   assert.equal(activated.state, 'applied'); assert.equal(hash(target), stage.sha256);
   assertSentinel('before-update');
   cli(['backup', 'verify', activated.backup]);
   if (native) assert.deepEqual(fs.readFileSync(service.definition), definition);
+  await start(); await stop();
+  // Candidate repair must reverify the actual signed archive, not trust the journal alone.
+  fs.unlinkSync(target);
+  ok(updater, ['update', 'repair', '--dir', install, ...scoped], 180000);
+  assert.equal(hash(target), stage.sha256);
   await start(); await stop();
   // Data written after activation must survive binary rollback.
   writeSentinel('after-update');
@@ -213,21 +220,46 @@ try {
   await start(); await stop();
   if (native) {
     assert.deepEqual(fs.readFileSync(service.definition), definition);
-    ok(target, ['service', 'uninstall']); serviceOwned = false;
+  }
+  const repairDatabase = hash(database);
+  fs.unlinkSync(target);
+  ok(updater, ['update', 'repair', '--dir', install, ...scoped], 180000);
+  assert.equal(hash(target), before); assert.equal(hash(database), repairDatabase);
+  fs.writeFileSync(target, 'damaged executable; never execute');
+  ok(updater, ['update', 'repair', '--dir', install, ...scoped], 180000);
+  assert.equal(hash(target), before); assert.equal(hash(database), repairDatabase);
+  await start(); await stop();
+  // Self-removal and incomplete cleanup cannot claim successful uninstall.
+  assert.notEqual(run(target, ['uninstall', '--dir', install, ...scoped]).status, 0);
+  assert.equal(fs.existsSync(target), true);
+  const uninstallDatabase = hash(database);
+  ok(updater, ['uninstall', '--dir', install, ...scoped]); serviceOwned = false;
+  ok(updater, ['uninstall', '--dir', install, ...scoped]);
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(hash(database), uninstallDatabase); assertSentinel('after-update');
+  assert.equal(fs.existsSync(updater), true, 'recovery evidence remains available');
+  if (native) {
     assert.equal(fs.existsSync(service.definition), false);
     if (windows) assert.notEqual(run('reg', ['query', registry, '/v', 'JARVIS']).status, 0);
+    else assert.equal(fs.existsSync(path.join(home, '.local', 'bin', 'jarvis')), false);
+    if (windows) {
+      const entries = JSON.parse(ps("ConvertTo-Json -Compress -InputObject @([Environment]::GetEnvironmentVariable('Path','User') -split ';')"));
+      assert.equal(entries.some(entry => entry && fs.existsSync(entry) && samePath(entry, install)), false);
+    }
     assertSentinel('after-update');
   }
   console.log(JSON.stringify({ platform: process.platform, arch: process.arch, tag, nativeService: native,
     distinctSignedActivation: true, activeOwnerRefused: true, authenticatedReadiness: true,
     snapshotVerified: true, rollbackPreservesNewData: true, pendingStartupRefused: true,
-    recoveryReady: true, lifecycleCount: lifecycleIds.size, servicePreserved: native, serviceUninstalled: native }));
+    recoveryReady: true, signedCandidateRepair: true, missingAndDamagedRepair: true,
+    binaryUninstalled: true, repeatUninstall: true, lifecycleCount: lifecycleIds.size,
+    servicePreserved: native, serviceUninstalled: native }));
 } catch (error) {
   const log = path.join(root, 'daemon.txt');
   if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-6000));
   throw error;
 } finally {
-  try { await stop(); } catch (error) { console.error(`cleanup stop: ${error.message}`); }
+  if (fs.existsSync(target)) try { await stop(); } catch (error) { console.error(`cleanup stop: ${error.message}`); }
   if (child && child.exitCode === null) { child.kill(); await delay(500); }
   if (serviceOwned) run(target, ['service', 'uninstall']);
   assert.equal(path.dirname(path.resolve(root)), temp);

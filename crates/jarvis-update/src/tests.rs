@@ -133,6 +133,102 @@ fn manifest_text() -> String {
     lines.join("\n") + "\n"
 }
 
+#[tokio::test]
+async fn repair_recreates_missing_or_damaged_binary_and_preserves_database() {
+    let f = Fixture::new().await;
+    f.programs();
+    must(f.activate().await);
+    let record = must(f.settle(true).await);
+    let database = f
+        .paths
+        .data()
+        .join(jarvis_storage::DEFAULT_DATABASE_FILENAME);
+    let before = must(files::fingerprint(&database));
+    must(fs::remove_file(f.target()));
+    must(repair(&f.install, &f.paths).await);
+    assert_eq!(must(image(&f.target()).await), record.previous);
+    must(fs::write(f.target(), b"damaged; must never be executed"));
+    assert!(jarvis_storage::require_settled_binary_update(&f.install).is_err());
+    must(repair(&f.install, &f.paths).await);
+    must(repair(&f.install, &f.paths).await);
+    assert_eq!(must(image(&f.target()).await), record.previous);
+    assert_eq!(must(files::fingerprint(&database)), before);
+    assert!(
+        must(fs::read_dir(f.install.join(UPDATE_DIRECTORY)))
+            .filter_map(std::result::Result::ok)
+            .any(
+                |entry| entry.file_name().to_string_lossy().starts_with("damaged-")
+                    && fs::read(entry.path()).unwrap_or_default()
+                        == b"damaged; must never be executed"
+            )
+    );
+}
+
+#[tokio::test]
+async fn repair_refuses_altered_source_pending_records_and_active_owners() {
+    let f = Fixture::new().await;
+    f.programs();
+    must(f.activate().await);
+    let mut record = must(f.settle(true).await);
+    let before = must(files::fingerprint(&f.target()));
+    let owner = must(InstallationGuard::acquire(&f.install, false));
+    assert!(repair(&f.install, &f.paths).await.is_err());
+    drop(owner);
+    let owner = must(OfflineProfile::acquire(&f.paths));
+    assert!(repair(&f.install, &f.paths).await.is_err());
+    drop(owner);
+    must(fs::write(f.stage().join("previous"), b"altered source"));
+    assert!(repair(&f.install, &f.paths).await.is_err());
+    assert_eq!(must(files::fingerprint(&f.target())), before);
+    record.state = BinaryUpdateState::RollingBack;
+    must(InstallationGuard::acquire(&f.install, true))
+        .write_update(&record)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(repair(&f.install, &f.paths).await.is_err());
+    assert!(RemovalGuard::acquire(&f.install, &f.paths).is_err());
+}
+
+#[tokio::test]
+async fn removal_holds_ownership_preserves_data_and_is_repeatable() {
+    let f = Fixture::new().await;
+    f.programs();
+    must(f.activate().await);
+    let database = f
+        .paths
+        .data()
+        .join(jarvis_storage::DEFAULT_DATABASE_FILENAME);
+    let before = must(files::fingerprint(&database));
+    let guard = must(RemovalGuard::acquire(&f.install, &f.paths));
+    assert!(InstallationGuard::acquire(&f.install, true).is_err());
+    assert!(OfflineProfile::acquire(&f.paths).is_err());
+    must(guard.remove());
+    must(must(RemovalGuard::acquire(&f.install, &f.paths)).remove());
+    assert!(!f.target().exists());
+    assert_eq!(must(files::fingerprint(&database)), before);
+    assert!(must(jarvis_storage::binary_update_status(&f.install)).is_some());
+    assert!(f.stage().join("previous").is_file());
+}
+
+#[tokio::test]
+async fn removal_refuses_unknown_bytes_wrong_profile_and_active_owners() {
+    let f = Fixture::new().await;
+    f.programs();
+    must(f.activate().await);
+    let owner = must(InstallationGuard::acquire(&f.install, false));
+    assert!(RemovalGuard::acquire(&f.install, &f.paths).is_err());
+    drop(owner);
+    let owner = must(OfflineProfile::acquire(&f.paths));
+    assert!(RemovalGuard::acquire(&f.install, &f.paths).is_err());
+    drop(owner);
+    let wrong = must(AppPaths::from_root(&f.root.join("wrong-profile")));
+    assert!(RemovalGuard::acquire(&f.install, &wrong).is_err());
+    let guard = must(RemovalGuard::acquire(&f.install, &f.paths));
+    must(fs::write(f.target(), b"replaced after preflight"));
+    assert!(guard.remove().is_err());
+    assert!(RemovalGuard::acquire(&f.install, &f.paths).is_err());
+    assert_eq!(must(fs::read(f.target())), b"replaced after preflight");
+}
+
 #[test]
 fn manifest_binds_every_platform_release_commit_and_version() {
     let text = manifest_text();

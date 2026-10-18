@@ -66,6 +66,9 @@ pub fn unix_links(program_dir: &Path, bin_dir: &Path) -> Vec<(PathBuf, PathBuf)>
 fn program_dir() -> Result<PathBuf, String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("this program's location is unknown: {error}"))?;
+    // Match service/update ownership spelling, including Windows 8.3 expansion.
+    let exe = std::fs::canonicalize(exe)
+        .map_err(|error| format!("this program's location cannot be resolved: {error}"))?;
     let dir = exe
         .parent()
         .ok_or_else(|| "this program has no folder".to_owned())?
@@ -79,6 +82,15 @@ fn program_dir() -> Result<PathBuf, String> {
 
 fn on_path_now(dir: &Path) -> bool {
     std::env::var_os("PATH").is_some_and(|value| path_contains(&value, dir))
+}
+
+/// Removes only this installation's PATH entry/links, including from a helper.
+pub(crate) fn remove_installation(dir: &Path) -> ExitStatus {
+    let text = dir.to_string_lossy();
+    let dir = text
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| dir.to_path_buf(), PathBuf::from);
+    uninstall(&dir)
 }
 
 /// A one-line tip for the end of `jarvis start` when `jarvis` would not be found from another terminal.

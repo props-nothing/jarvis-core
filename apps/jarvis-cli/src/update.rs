@@ -3,7 +3,7 @@
 use crate::output::ExitStatus;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: jarvis update stage TAG VERSION --dir ABSOLUTE_DIR\n       jarvis update activate ID --dir ABSOLUTE_DIR [--root PROFILE_ROOT]\n       jarvis update rollback|recover|status --dir ABSOLUTE_DIR [--root PROFILE_ROOT]\n       jarvis update probe\nStop JARVIS before activation/rollback/recovery and use the retained updater path printed by stage.";
+const USAGE: &str = "usage: jarvis update stage TAG VERSION --dir ABSOLUTE_DIR\n       jarvis update activate ID --dir ABSOLUTE_DIR [--root PROFILE_ROOT]\n       jarvis update rollback|recover|repair|status --dir ABSOLUTE_DIR [--root PROFILE_ROOT]\n       jarvis update probe\nStop JARVIS before maintenance and use the retained updater path printed by stage.";
 
 #[derive(Debug, PartialEq)]
 enum Operation {
@@ -11,6 +11,7 @@ enum Operation {
     Activate(jarvis_core::UpdateId),
     Rollback,
     Recover,
+    Repair,
     Status,
     Probe,
 }
@@ -28,6 +29,7 @@ fn parse(args: &[String]) -> Option<(Operation, Option<PathBuf>, Option<PathBuf>
         }
         "rollback" => Operation::Rollback,
         "recover" => Operation::Recover,
+        "repair" => Operation::Repair,
         "status" => Operation::Status,
         "probe" if args.len() == 2 => return Some((Operation::Probe, None, None)),
         _ => return None,
@@ -96,6 +98,7 @@ async fn execute(
         Operation::Activate(id) => jarvis_update::activate(&dir, &paths, id).await?,
         Operation::Rollback => jarvis_update::rollback(&dir, &paths).await?,
         Operation::Recover => jarvis_update::recover(&dir, &paths).await?,
+        Operation::Repair => jarvis_update::repair(&dir, &paths).await?,
         _ => return Err("invalid operation".into()),
     };
     Ok(
