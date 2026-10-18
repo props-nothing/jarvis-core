@@ -40,6 +40,33 @@ in the guide. They share package version 0.1.0; a two-version upgrade is not cla
 Native certificate signing still needs owner-provided credentials. Schema-changing
 updates, release channels and whole-profile recovery remain separate work.
 
+## Completed owner-selected continuation: signed website default (2026-10-18)
+
+The owner selected the website's default installer under `P12-001`. The independent
+frontend repository now contains standalone signed-only Bash/PowerShell installers,
+pinned to public release `a176e79843a22eae2802d97aafba74a0bf6e282f` and version 0.1.0.
+The explicit From source tab remains. [ADR-0244](docs/adr/0244-website-installation-pins-a-signed-prebuilt-release.md)
+and the [research record](docs/research/integrations/website-signed-install.md) cover
+the bootstrap trust root, failure behavior and separate acceptance gates.
+
+Local evidence: 19 frontend tests, both shell parsers, production build, workflow
+lint and documentation links pass. Real Windows public signed installation passes
+with no Git/Rust/Node/Python/GitHub CLI visible, including CLI/daemon version checks,
+fresh-profile diagnosis and unchanged existing-install refusal. Removing each
+shell's signature-verification call from a disposable copy makes its fixture suite
+fail; the production scripts are unchanged by falsification. Workspace formatting,
+strict all-target/all-feature Clippy and all 3267 workspace tests pass (6 existing
+opt-in tests ignored). No Rust implementation changed in this slice.
+
+- [x] Pass the new website revision's native public-install CI and deploy it. All seven
+  jobs in [website CI 39131200970](https://github.com/props-nothing/jarvis-frontend/actions/runs/39131200970)
+  passed for `66915f1` before the hold-only deployment commit `11d7a1f`. Production
+  scripts match committed checkout bytes and both serve as plain text with nosniff;
+  built JavaScript/CSS match exactly and the apex redirects to www. See the
+  [website deployment record](https://github.com/props-nothing/jarvis-frontend/blob/main/docs/DEPLOY.md#signed-default-revision-2026-10-18).
+  Clean-machine onboarding/logon, native certificates and complete notices/SBOM
+  remain separate; this continuation does not close the lifecycle item above.
+
 ## Completed acceptance slice: signed binary update and rollback (2026-10-18)
 
 Owner-selected `P12-001` / `P9-006` continuation from signed first installation and
@@ -585,7 +612,7 @@ The completed installation/UI evidence is in [P9–P11 history](docs/history/tod
 
 Owner-requested on 2026-10-17 after the [competitive gap review](docs/research/competitive-gap-2026-10-17.md) against Hermes Agent and OpenClaw. This is the owner's named requirement for the demand-gated items it references; it orders existing IDs rather than duplicating them. Every item keeps the authority boundary: no new path lets a model, page, skill or channel grant itself permission. External APIs/providers still need an official-source research record first.
 
-- [~] `P12-001` **Install without a toolchain.** Signed prebuilt installation and compatible binary update/rollback have hosted native acceptance (ADRs 0239–0242). Native signing credentials, default binary installation, complete notices/SBOM and clean-machine onboarding/repair/uninstall remain. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
+- [~] `P12-001` **Install without a toolchain.** Signed prebuilt installation and compatible binary update/rollback have hosted native acceptance (ADRs 0239–0242); the signed website default is deployed after all seven native website jobs passed (ADR-0244). Native signing credentials, complete notices/SBOM and clean-machine onboarding/repair/uninstall remain. Acceptance: a non-developer installs, configures, updates and uninstalls on a clean Windows, macOS and Linux machine with no Rust, Node or Python (`P9-007`, `P9-022`).
 - [ ] `P12-002` **Owner decision: voice at first run.** ADR-0214 records the owner's choice to require ElevenLabs for guided setup; both rivals start without a voice key. Ask the owner whether to keep it. If changed, amend ADR-0214 and prove setup completes with voice skipped and voice can be added later from Settings. ADR-0214 says to revisit once a verified local voice adapter exists; `P8-018`–`P8-022` deliver that, so setup can then offer ElevenLabs, a local voice or skip.
 - [ ] `P12-003` **Skills chosen by meaning.** Replace or complement the 75% word-overlap match with retrieval that finds an approved skill phrased differently from the request. Acceptance: a measured owner question set where paraphrased requests select the right skill without raising false selections; skills still never grant authority (ADR-0117).
 - [ ] `P12-004` **Skills that improve after use.** After a run that used an approved skill and needed corrections, JARVIS proposes a revised version (a diff the owner approves or dismisses). Acceptance: revision is proposal-only, history is kept, and a dismissed revision never applies.

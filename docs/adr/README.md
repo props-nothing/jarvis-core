@@ -254,13 +254,13 @@ Each ADR includes status/date, context, decision, consequences, alternatives, an
 | [0235](0235-delegation-declares-work-and-its-execution-authority.md) | Delegation declares work and its execution authority | Accepted |
 | [0236](0236-shutdown-reserves-work-admission-before-checking-idleness.md) | Shutdown reserves work admission before checking idleness | Accepted |
 | [0237](0237-delegation-dispatch-and-family-stop-are-durable.md) | Delegation dispatch and family Stop are durable | Accepted |
-
 | [0238](0238-shutdown-drains-owned-work-before-closing-dependencies.md) | Shutdown drains owned work before closing dependencies | Accepted |
 | [0239](0239-prebuilt-installation-pins-the-release-and-digest.md) | Prebuilt installation pins the release and digest | Accepted |
-
 | [0240](0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md) | Release manifests bind artifacts to the publishing workflow | Accepted |
 | [0241](0241-database-restores-require-offline-ownership-and-a-recovery-journal.md) | Database restores require offline ownership and a recovery journal | Accepted |
 | [0242](0242-binary-activation-retains-evidence-and-requires-offline-ownership.md) | Binary activation retains evidence and requires offline ownership | Accepted |
+| [0243](0243-repair-and-removal-preserve-installation-evidence.md) | Repair and removal preserve installation evidence | Accepted |
+| [0244](0244-website-installation-pins-a-signed-prebuilt-release.md) | Website installation pins a signed prebuilt release (amends ADR-0239) | Accepted |
 
 ## Historical identifier aliases
 

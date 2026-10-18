@@ -32,6 +32,10 @@ automatic latest selection, arbitrary mirror or checksum bypass is provided.
 
 ## Consequences and acceptance
 
+Amended on 2026-10-18 by [ADR-0244](0244-website-installation-pins-a-signed-prebuilt-release.md):
+the owner selected the signed prebuilt website default. The checksum-only interface
+below remains an explicit historical core-script mode, never the website default.
+
 Modern OS tools suffice; Git, Rust, Node and Python are not installer dependencies.
 curl >=8.4.0 is required to enforce size bounds even without Content-Length.
 The [research record](../research/integrations/prebuilt-install.md) defines the

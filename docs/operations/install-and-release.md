@@ -19,7 +19,7 @@
 | Repair and removal | `update repair` restores the selected retained image; a separate helper's `uninstall` checks stopped ownership and cleanup before removal. Both preserve profile/update evidence. [Runbook](binary-update.md#repair-and-removal). |
 | Native OS signing and clean-machine lifecycle | Authenticode/notarization credentials are not configured. Hosted repair/removal passes; [owner-run clean-machine tests](clean-machine-lifecycle.md) with interactive keys remain open. |
 
-The separate product website serves working source-building scripts at `https://www.jarvisd.dev/install.sh` and `https://www.jarvisd.dev/install.ps1`, from `frontend/public/`. These clone/update a protected source checkout, build with the committed lockfile, then delegate per-user installation to `jarvis install`. They are not signed-binary downloaders. Source builds require Git, Rust via rustup and [native build tools](../development/getting-started.md#build-from-source); the installed executable needs no Rust. Build/install failure exits nonzero, without setup or a success claim. A successful installer prints interactive and noninteractive setup commands; it does not collect keys or run onboarding through piped stdin. New setup requires an ElevenLabs key and explicit folder grants before starting the assistant. Do not infer signed distribution or clean-machine readiness from this source path.
+The [production website](https://www.jarvisd.dev/) serves signed-only default installers maintained in `frontend/public/`, pinned to release `a176e79843a22eae2802d97aafba74a0bf6e282f` (0.1.0). They reuse the verified prebuilt flow, without an unsigned override. Local Windows public installation, Bash/PowerShell fixtures and all seven native website CI jobs pass; hosted installer bytes and headers are verified in the [deployment record](https://github.com/props-nothing/jarvis-frontend/blob/main/docs/DEPLOY.md#signed-default-revision-2026-10-18). The explicit From source tab still requires a toolchain. [ADR-0244](../adr/0244-website-installation-pins-a-signed-prebuilt-release.md) records this owner-selected default.
 
 ## Current CI Archive Flow
 
@@ -96,19 +96,21 @@ Artifacts include version, target triple, archive/package type, checksum, signat
 
 ## Installation Modes
 
-### Source bootstrap (available today)
+<a id="source-bootstrap-available-today"></a>
+
+### Website signed bootstrap
 
 ```bash
-# macOS / Ubuntu, after installing the source-build prerequisites
+# macOS / Linux, curl 8.4+ and native archive/hash utilities
 curl -fsSL https://www.jarvisd.dev/install.sh | bash
 ```
 
 ```powershell
-# Windows PowerShell 5.1+, after installing the source-build prerequisites
+# Windows x86_64, PowerShell 5.1+ and curl.exe 8.4+
 irm https://www.jarvisd.dev/install.ps1 | iex
 ```
 
-Inspect the same-host scripts before running them. They build source, preserve checkout origin/local-change protections and leave service startup off by default. Missing prerequisites give platform-native instructions; no system packages are installed automatically. Bash retains an explicit `JARVIS_INSTALL_RUST=1` opt-in for per-user rustup. See the [prerequisite evidence and limits](../research/integrations/source-install-prerequisites.md).
+Inspect the same-host scripts before running them. They verify a fixed signed release before extraction/execution, refuse existing installations and leave setup/services untouched. They require no Git, Rust, Node or Python. Legacy `JARVIS_REPO`, `JARVIS_REF`, `JARVIS_SRC`, `JARVIS_SERVICE` and `JARVIS_INSTALL_RUST` values are rejected; unset them or use the explicit From source tab. Downloaded scripts accept `--dir ABSOLUTE_DIR --no-path` or PowerShell `-Dir ... -NoPath` for isolated installation.
 
 Open a new terminal and run `jarvis` for setup. Without a terminal, follow the printed `jarvis init` command with private absolute key-file paths; run `jarvis start` and `jarvis doctor --live` only if setup succeeds. An installer success is not a completed profile or provider test.
 
@@ -161,7 +163,8 @@ Setup and service startup stay separate. Follow the printed executable path for
 guided setup, requiring a model key, tested ElevenLabs key and explicit folder
 grants; after successful setup run `jarvis start` and `jarvis doctor --live`.
 Installer success alone does not prove provider configuration or clean-machine
-readiness. The website's default source scripts remain unchanged.
+readiness. The website defaults reuse the signed path with a fixed reviewed release,
+under ADR-0244; deployment/native website acceptance is recorded separately.
 [ADR-0239](../adr/0239-prebuilt-installation-pins-the-release-and-digest.md),
 [ADR-0240](../adr/0240-release-manifests-bind-artifacts-to-the-publishing-workflow.md)
 and the [signature evidence record](../research/integrations/release-signing.md)

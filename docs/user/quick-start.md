@@ -14,10 +14,10 @@ The target experience, and what is still missing from it, is in [product/onboard
 - An **ElevenLabs API key for new setup**, supplied privately; it is not the voice ID. The default voice ID is `liN4AsrhF3CylqMDWK6p`. Existing profiles keep working without repeating setup; this requirement does not change headless runtime behavior.
 - Optionally Docker, if you want the assistant to run code in a throwaway container.
 - One program, `jarvis` (the assistant it runs in the background is the same file, started as `jarvis daemon`). Either unpack an archive from a successful [prerelease](https://github.com/props-nothing/jarvis-core/releases)
-  or CI workflow artifact (these builds are unsigned; Intel macOS is cross-built without runtime smoke testing), or build it with a Rust toolchain:
+  or CI workflow artifact (published releases have signed manifests; CI archives alone do not, and Intel macOS is cross-built without runtime smoke testing), or build it with a Rust toolchain:
   `cargo build --release -p jarvis-cli --locked`, then take it from `target/release/`.
 
-Only source builds need Git, Rust via rustup and native build tools: Visual Studio C++ Build Tools + a Windows SDK, Xcode command-line tools on macOS, or `build-essential` on Ubuntu. Follow the [platform-specific prerequisite steps](../development/getting-started.md#build-from-source). An installed executable needs no Rust. The website's [source install commands](../operations/install-and-release.md#source-bootstrap-available-today) build and install the program; they are not signed binary downloads and do not run setup through piped input.
+Only source builds need Git, Rust via rustup and native build tools: Visual Studio C++ Build Tools + a Windows SDK, Xcode command-line tools on macOS, or `build-essential` on Ubuntu. Follow the [platform-specific prerequisite steps](../development/getting-started.md#build-from-source). An installed executable needs no Rust. The website's [signed default](../operations/install-and-release.md#website-signed-bootstrap) is deployed after native website CI passed, with hosted bytes and headers verified. It verifies a pinned prebuilt release and does not run setup through piped input. The From source tab remains available.
 
 Start the built program directly before it is on your PATH:
 
