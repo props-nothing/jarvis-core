@@ -284,12 +284,22 @@ impl ServicePlan {
                     "keep it running after you log out (needed on a server)",
                 ),
             ],
-            ServiceKind::LaunchdAgent => vec![ServiceCommand::new(
-                "launchctl",
-                &["load", "-w", &self.definition_path.display().to_string()],
-                false,
-                "load the agent and start it at login",
-            )],
+            ServiceKind::LaunchdAgent => vec![
+                ServiceCommand::new(
+                    "launchctl",
+                    &["load", "-w", &self.definition_path.display().to_string()],
+                    false,
+                    "load the agent and start it at login",
+                ),
+                // load may succeed without starting an already-loaded job that
+                // exited cleanly. Reconciliation must explicitly start that job.
+                ServiceCommand::new(
+                    "launchctl",
+                    &["start", "dev.jarvis.jarvisd"],
+                    false,
+                    "start the loaded agent",
+                ),
+            ],
             ServiceKind::WindowsUserLauncher => {
                 let launcher = format!(
                     "powershell.exe -NoProfile -WindowStyle Hidden -Command \"Start-Process -FilePath '{}' -ArgumentList '{DAEMON_ARGUMENT}' -WindowStyle Hidden\"",
@@ -846,6 +856,7 @@ mod tests {
         let mac = plan_with(ServiceKind::LaunchdAgent, "/usr/local/bin/jarvisd");
         assert_eq!(mac.install_steps()[0].program, "launchctl");
         assert_eq!(mac.install_steps()[0].args[..2], ["load", "-w"]);
+        assert_eq!(mac.install_steps()[1].args, ["start", "dev.jarvis.jarvisd"]);
         assert_eq!(mac.uninstall_steps()[0].args[0], "unload");
 
         let windows = plan_with(

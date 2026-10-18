@@ -50,6 +50,14 @@ paths consistently and removes only the drive-path verbatim prefix for launcher
 rendering. UNC paths retain their canonical prefix. The test checks both the
 definition and registration commands; it failed before the fix and passes after.
 
+The first native macOS run found that `launchctl load -w` returned success for an
+already-loaded agent after a clean stop, but did not restart it. The authenticated
+readiness deadline failed on the second `service install`. The installer now
+explicitly starts the loaded agent after loading; native verification must repeat
+both installation calls. Linux systemd passed these initial readiness/reconcile
+checks before the not-yet-published candidate correctly returned HTTP 404. Those
+partial probes are not full signed-update acceptance.
+
 ## Question and authority
 
 Verify an exact public release, stage one executable, and replace it while keeping
