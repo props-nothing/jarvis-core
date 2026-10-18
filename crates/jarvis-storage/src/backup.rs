@@ -178,6 +178,10 @@ impl OfflineProfile {
     pub async fn check(&self) -> Result<(u64, String), BackupError> {
         let path = database_path(&self.paths);
         healthy(&path).await?;
+        if !crate::database::migration_history_matches(&path).await? {
+            return Err(BackupError::Incompatible);
+        }
+        no_sidecars(&path)?;
         fingerprint(&path)
     }
 
@@ -186,6 +190,7 @@ impl OfflineProfile {
     /// # Errors
     /// Refuses invalid databases, sidecars or failed storage writes.
     pub async fn snapshot(&self) -> Result<DatabaseBackup, BackupError> {
+        self.check().await?;
         snapshot_locked(&self.paths).await
     }
 }

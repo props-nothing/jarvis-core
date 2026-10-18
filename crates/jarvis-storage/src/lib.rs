@@ -67,7 +67,7 @@ pub use contact_repository::{
 pub use credential::{CREDENTIAL_FILE_NAME, CredentialStore, CredentialStoreError};
 pub use database::{
     CURRENT_SCHEMA_VERSION, DEFAULT_DATABASE_FILENAME, DaemonInstanceStart, DaemonStopReason,
-    DatabaseError, SqliteDatabase,
+    DatabaseError, SqliteDatabase, migration_fingerprint,
 };
 pub use delegated_task_repository::{
     DelegatedTaskFinish, MAX_TASK_ACTIVITY_CHARS, MAX_TASK_ACTIVITY_RETAINED,

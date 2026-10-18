@@ -23,8 +23,9 @@ executable after the original command exits. Staging preserves the installation.
 It may run alongside a daemon that holds a shared installation lock.
 
 The existing historical signed release can be staged, but cannot be activated:
-both the installed and candidate binaries must advertise maintenance protocol 1,
-which includes the installation lock and startup recovery guard. A signed release
+both the installed and candidate binaries must advertise maintenance protocol 2,
+which includes the installation lock, startup recovery guard and exact migration
+history fingerprint. Protocol-1 prereleases are also refused. A signed release
 containing this updater must be published before production activation acceptance.
 
 ## Activate
@@ -44,7 +45,11 @@ using a portable profile. No OS sandbox is implied by these cooperating locks.
 
 Activation checks the installed binary, candidate, service ownership and current
 healthy database. Database/configuration/local-protocol versions must match
-exactly. It retains `previous` and a verified database snapshot, journals intent,
+exactly, including the embedded SQLx migration checksum history. The current
+database's successful migration records must match that history. Builds from
+checkouts with different migration line endings may be incompatible despite an
+equal schema number; refusal never rewrites checksums or existing data.
+It retains `previous` and a verified database snapshot, journals intent,
 then atomically replaces the installed executable at the same path. It checks
 the executable version/maintenance protocol and offline database again. A failed
 check restores the previous executable only when the recorded images and unchanged

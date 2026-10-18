@@ -30,6 +30,69 @@ const MAX_CONNECTIONS: u32 = 4;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations/sqlite");
 
+/// Exact migration history embedded in this build, including source line endings.
+#[must_use]
+pub fn migration_fingerprint() -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"JARVIS-MIGRATIONS-1\0");
+    for migration in MIGRATOR
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration())
+    {
+        digest.update(migration.version.to_be_bytes());
+        digest.update((migration.checksum.len() as u64).to_be_bytes());
+        digest.update(&migration.checksum);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+pub(crate) async fn migration_history_matches(path: &Path) -> Result<bool, DatabaseError> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .read_only(true)
+        .immutable(true)
+        .disable_statement_logging();
+    let mut connection = options
+        .connect()
+        .await
+        .map_err(|source| DatabaseError::Sqlite {
+            operation: "open offline migration history",
+            source,
+        })?;
+    let rows = sqlx::query_as::<_, (i64, Vec<u8>, bool)>(
+        "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version LIMIT ?",
+    )
+    .bind(CURRENT_SCHEMA_VERSION + 1)
+    .fetch_all(&mut connection)
+    .await;
+    connection
+        .close()
+        .await
+        .map_err(|source| DatabaseError::Sqlite {
+            operation: "close offline migration history",
+            source,
+        })?;
+    let rows = rows.map_err(|source| DatabaseError::Sqlite {
+        operation: "read offline migration history",
+        source,
+    })?;
+    let expected: Vec<_> = MIGRATOR
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration())
+        .collect();
+    Ok(rows.len() == expected.len()
+        && rows
+            .iter()
+            .zip(expected)
+            .all(|((version, checksum, success), migration)| {
+                *success
+                    && *version == migration.version
+                    && checksum.as_slice() == migration.checksum.as_ref()
+            }))
+}
+
 /// Immutable metadata written when one daemon lifecycle begins.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DaemonInstanceStart {

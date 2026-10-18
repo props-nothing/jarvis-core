@@ -9,6 +9,29 @@ selected_sdk: "Rust 1.98.1; Cosign 3.1.3; reqwest 0.13.5; atomic-write-file 0.3.
 
 ## Native acceptance follow-up (2026-10-18)
 
+The first compatible published candidate (`0042b09`) exposed a stricter database
+requirement in the local Windows lifecycle: schema 31 matched, but the candidate
+could not start because this source checkout embeds CRLF migration checksums and
+the release embeds LF checksums. SQLx 0.9.0's official
+[migrator](https://raw.githubusercontent.com/launchbadge/sqlx/v0.9.0/sqlx-core/src/migrate/migrator.rs)
+and [migration source](https://raw.githubusercontent.com/launchbadge/sqlx/v0.9.0/sqlx-core/src/migrate/migration.rs)
+were checked live on 2026-10-18: startup compares every recorded version/checksum
+with its embedded migration before continuing. Those are local SQLite operations;
+no authentication or remote quota is involved. Numeric schema equality alone is
+insufficient. Maintenance protocol 2 binds the ordered migration checksum history
+and checks the database read-only before replacement. No checksum is rewritten,
+and no source checkout or existing profile is normalized implicitly. Protocol-1
+prereleases remain staging/negative-test evidence, not accepted update candidates.
+
+The new negative test corrupts, removes, or marks a migration unsuccessful and
+requires unchanged executable/database bytes and no update journal. It passes
+with the guard. Disabling only the migration-history guard made the test fail;
+restoring the exact source restored the pass. All 19 updater tests and strict
+all-target/all-feature workspace Clippy pass for this tightened contract. The
+earlier protocol-1 native lifecycle passed all three runners in
+[39121921082](https://github.com/props-nothing/jarvis-core/actions/runs/39121921082),
+but does not substitute for publication and acceptance of protocol 2.
+
 Live authority rechecked before implementing the native acceptance harness:
 
 | Contract | Exact official source | Version / operations |

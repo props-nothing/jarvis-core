@@ -82,7 +82,7 @@ impl Drop for InstallationGuard {
 }
 
 fn validate(record: &BinaryUpdate) -> Result<(), BackupError> {
-    if record.format != 1
+    if record.format != 2
         || !record.profile_data.is_absolute()
         || !valid_digest(&record.database_sha256)
         || record.database_bytes == 0

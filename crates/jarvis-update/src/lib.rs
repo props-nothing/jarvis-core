@@ -61,8 +61,9 @@ pub fn probe() -> Probe {
     Probe {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         compatibility: UpdateCompatibility {
-            maintenance: 1,
+            maintenance: 2,
             database: jarvis_storage::CURRENT_SCHEMA_VERSION,
+            database_migrations_sha256: jarvis_storage::migration_fingerprint(),
             configuration: jarvis_storage::CURRENT_CONFIG_VERSION,
             protocol: jarvis_protocol::PROTOCOL_VERSION,
         },
@@ -287,7 +288,7 @@ async fn activate_prepared(
         return Err(Error::Refused("installation changed before activation"));
     }
     let mut record = BinaryUpdate {
-        format: 1,
+        format: 2,
         id,
         profile_data: fs::canonicalize(paths.data())?,
         backup: backup.id,

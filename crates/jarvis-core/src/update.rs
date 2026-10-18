@@ -6,10 +6,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateCompatibility {
-    /// Maintenance protocol; version one requires installation locking.
+    /// Maintenance protocol; version two also binds exact migration history.
     pub maintenance: u32,
     /// SQLite schema owned by the binary.
     pub database: i64,
+    /// SHA-256 of the ordered embedded migration versions and checksums.
+    pub database_migrations_sha256: String,
     /// Configuration schema owned by the binary.
     pub configuration: u32,
     /// Local daemon protocol.
@@ -20,7 +22,13 @@ impl UpdateCompatibility {
     /// Whether switching binaries requires no schema/protocol migration.
     #[must_use]
     pub fn permits(&self, other: &Self) -> bool {
-        self.maintenance == 1 && self == other
+        self.maintenance == 2
+            && self.database_migrations_sha256.len() == 64
+            && self
+                .database_migrations_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && self == other
     }
 }
 

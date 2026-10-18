@@ -44,6 +44,15 @@ rollback. An explicit rollback checks the *current* database; the snapshot remai
 available through ADR-0241's separately invoked restore operation. Schema-changing
 updates require another compatibility decision and acceptance evidence.
 
+Maintenance protocol 2 also requires an identical SHA-256 fingerprint of ordered
+embedded SQLx migration versions and checksums, and read-only verification of every
+successful migration recorded in the current database. Numeric schema equality is
+insufficient: different source line endings can change SQLx's startup checksums.
+Reject mismatched or missing history before writing a journal or replacing bytes.
+Never rewrite migration checksums to force compatibility. The earlier protocol-1
+prerelease is refused; new journals use format 2, and unsupported retained evidence
+stays blocked for diagnosis with its original helper.
+
 Services retain the stable installed path. Only an absent definition or an exact
 JARVIS-owned definition for that path is admissible. Foreign, unreadable or drifted
 definitions are refused, including portable use of a service-owned installation.

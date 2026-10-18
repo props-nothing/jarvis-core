@@ -251,6 +251,41 @@ fn compatibility_fails_closed_on_any_changed_contract() {
     changed = contract.clone();
     changed.maintenance = 0;
     assert!(!contract.permits(&changed));
+    changed.maintenance = 1;
+    assert!(!contract.permits(&changed));
+    changed = contract.clone();
+    changed.database_migrations_sha256 = "a".repeat(64);
+    assert!(!contract.permits(&changed));
+    changed.database_migrations_sha256.clear();
+    assert!(!changed.permits(&changed));
+}
+
+#[tokio::test]
+async fn activation_refuses_divergent_migration_history_without_mutation() {
+    for statement in [
+        "UPDATE _sqlx_migrations SET checksum = zeroblob(48) WHERE version = 1",
+        "DELETE FROM _sqlx_migrations WHERE version = 1",
+        "UPDATE _sqlx_migrations SET success = FALSE WHERE version = 1",
+    ] {
+        let f = Fixture::new().await;
+        f.programs();
+        let mut connection = database_connection(&f.paths).await;
+        must(sqlx::query(statement).execute(&mut connection).await);
+        must(connection.close().await);
+        let binary_before = must(files::fingerprint(&f.target()));
+        let database = f
+            .paths
+            .data()
+            .join(jarvis_storage::DEFAULT_DATABASE_FILENAME);
+        let database_before = must(files::fingerprint(&database));
+        assert!(matches!(
+            f.activate().await,
+            Err(Error::Storage(jarvis_storage::BackupError::Incompatible))
+        ));
+        assert_eq!(must(files::fingerprint(&f.target())), binary_before);
+        assert_eq!(must(files::fingerprint(&database)), database_before);
+        assert!(must(jarvis_storage::binary_update_status(&f.install)).is_none());
+    }
 }
 
 #[tokio::test]
