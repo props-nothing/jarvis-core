@@ -43,6 +43,13 @@ The Windows test executes and inspects the registered login command without
 claiming a reboot/logon test. Hosted runners are native machines with development
 tools, not clean-machine onboarding or Authenticode/notarization evidence.
 
+The Windows path-spelling regression was reproduced before its fix: an ordinary
+8.3 path and `std::fs::canonicalize` of the same executable rendered different
+service owners. `ServicePlan::build` now resolves existing Windows executable
+paths consistently and removes only the drive-path verbatim prefix for launcher
+rendering. UNC paths retain their canonical prefix. The test checks both the
+definition and registration commands; it failed before the fix and passes after.
+
 ## Question and authority
 
 Verify an exact public release, stage one executable, and replace it while keeping

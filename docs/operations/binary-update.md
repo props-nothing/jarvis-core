@@ -86,7 +86,47 @@ previous binaries or snapshots. `install` refuses to overwrite an installation
 with update evidence. Uninstall/repair of this retained layout remains an explicit
 acceptance gate.
 
-## Acceptance limits
+## Native readiness after an offline transition
+
+`applied` means the executable and offline database checks passed. Starting the
+daemon is a separate explicit action: it can resume configured work. The updater
+does not start a trial daemon against canonical data while its journal is pending.
+
+For a current owned service, start the stable installed path through its manager:
+
+| Platform | Start after activation or rollback | Stop before maintenance |
+| --- | --- | --- |
+| Linux | `systemctl --user start jarvisd.service` | `jarvis stop`, then `systemctl --user stop jarvisd.service` |
+| macOS | `launchctl start dev.jarvis.jarvisd` | `jarvis stop` (the owned agent does not restart a successful exit) |
+| Windows | `jarvis start --no-open` | `jarvis stop` |
+
+Windows registers a per-user login command, not a Windows SCM service. For a
+portable installation use `jarvis start --no-open --root ABSOLUTE_PROFILE_ROOT`.
+Keep the same profile selection on every command. Do not force-stop busy work to
+make an update proceed; wait for its completion or explicitly cancel that work.
+
+Run `jarvis status --json` and `jarvis health --json`. Both must report `live: true`
+and `ready: true`; a successful diagnostic command alone is not a ready result.
+Compare status's daemon version, database schema, configuration schema and protocol
+with `jarvis update probe`. `jarvis service --json` must report `drift: current`
+and the intended stable binary path. A manager entry alone does not prove readiness.
+
+If startup/readiness fails, stop the selected profile and use the retained helper's
+`update rollback` command above, then repeat startup and readiness checks. Preserve
+the journal, previous binary and snapshots if rollback itself is refused. Binary
+rollback preserves the current database and does not repair an invalid configuration.
+
+The release workflow invokes `scripts/test-update-lifecycle.mjs` against the exact
+published tag. Its native mode requires a disposable hosted runner and refuses an
+existing profile/service. It checks the manager's actual process path, authenticated
+status/health, stable service definition, retained snapshot, current-data rollback,
+and recovery startup. Local portable execution is:
+
+```text
+node scripts/test-update-lifecycle.mjs ABSOLUTE_TEST_BINARY ci-COMMIT VERSION
+```
+
+## Evidence limits
 
 Windows local tests and real signed staging evidence are in the
 [research record](../research/integrations/binary-update.md). Native CI includes

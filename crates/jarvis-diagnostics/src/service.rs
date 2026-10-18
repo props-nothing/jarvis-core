@@ -185,7 +185,7 @@ impl ServicePlan {
         Ok(Self {
             kind,
             definition_path,
-            binary_path: binary_path.to_path_buf(),
+            binary_path: launcher_path(binary_path),
             root: None,
             root_argument: None,
         })
@@ -365,6 +365,25 @@ impl ServicePlan {
     pub const fn ownership_marker(&self) -> &'static str {
         OWNERSHIP_MARKER
     }
+}
+
+// Windows's executable lookup can retain 8.3 names while the updater's ownership
+// path uses expanded names and a verbatim prefix. Resolve existing binaries for
+// both callers; an identical file must not look like a different service owner.
+fn launcher_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if let Some(text) = resolved.to_str()
+            && let Some(drive_path) = text.strip_prefix(r"\\?\")
+            && drive_path.as_bytes().get(1) == Some(&b':')
+        {
+            return PathBuf::from(drive_path);
+        }
+        resolved
+    }
+    #[cfg(not(windows))]
+    path.to_path_buf()
 }
 
 /// One command an install or uninstall runs.
@@ -617,6 +636,21 @@ mod tests {
             ),
             Err(ServiceError::RelativeBinary)
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn service_ownership_survives_canonical_windows_path_spelling() {
+        let directory = TempDirectory::new();
+        let binary = directory.0.join("jarvis.exe");
+        fs::write(&binary, b"path fixture").unwrap_or_else(|error| panic!("{error}"));
+        let canonical = fs::canonicalize(&binary).unwrap_or_else(|error| panic!("{error}"));
+        let ordinary = ServicePlan::build(ServiceKind::native(), &binary, None)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let resolved = ServicePlan::build(ServiceKind::native(), &canonical, None)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(ordinary.render(), resolved.render());
+        assert_eq!(ordinary.install_steps(), resolved.install_steps());
     }
 
     #[test]
