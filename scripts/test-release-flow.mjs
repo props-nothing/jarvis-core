@@ -101,6 +101,14 @@ test('workflow wiring gates all packaging paths and keeps builds read-only', () 
   assert.match(install, /os: \[ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest\]/);
   assert.match(install, /node scripts\/test-published-install.mjs "\$RELEASE_TAG" "\$PACKAGE_VERSION"/);
   assert.doesNotMatch(install, /id-token: write|contents: write/);
+  const update = job('verify-update');
+  assert.match(update, /needs: \[source, draft\]/);
+  assert.match(update, /needs\.draft\.result == 'success'/);
+  assert.match(update, /uses: \.\/\.github\/workflows\/update-acceptance.yml/);
+  assert.match(update, /tag: \$\{\{ needs\.draft\.outputs\.tag \}\}/);
+  assert.match(update, /version: \$\{\{ needs\.draft\.outputs\.version \}\}/);
+  assert.match(update, /source_sha: \$\{\{ needs\.source\.outputs\.sha \}\}/);
+  assert.doesNotMatch(update, /id-token: write|contents: write/);
   for (const line of (workflow + ci).split('\n').filter(line => /uses:/.test(line) && !line.includes('./'))) {
     assert.match(line, /@[0-9a-f]{40}(?:\s|$)/);
   }

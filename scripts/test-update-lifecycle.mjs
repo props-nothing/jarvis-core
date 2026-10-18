@@ -11,7 +11,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const [sourceArg, tag, version, mode] = process.argv.slice(2);
-assert.match(tag ?? '', /^ci-[0-9a-f]{40}$/);
+assert.match(tag ?? '', /^(ci-[0-9a-f]{40}|v\d+\.\d+\.\d+)$/);
 assert.match(version ?? '', /^\d+\.\d+\.\d+$/);
 assert.ok(mode === undefined || mode === '--native-service');
 const native = mode === '--native-service';
@@ -36,7 +36,6 @@ if (!native) Object.assign(env, { HOME: home, USERPROFILE: home,
   APPDATA: path.join(home, 'roaming'), LOCALAPPDATA: path.join(home, 'local'),
   XDG_CONFIG_HOME: path.join(home, 'config'), XDG_DATA_HOME: path.join(home, 'data'),
   XDG_STATE_HOME: path.join(home, 'state'), XDG_CACHE_HOME: path.join(home, 'cache') });
-env.UPDATE_ACCEPTANCE_BINARY = target;
 const scoped = native ? [] : ['--root', profile];
 const configDir = !native ? path.join(profile, 'config') : windows ? path.join(env.APPDATA, 'JARVIS')
   : mac ? path.join(home, 'Library', 'Application Support', 'JARVIS') : path.join(env.XDG_CONFIG_HOME ?? path.join(home, '.config'), 'jarvis');
@@ -102,8 +101,10 @@ async function start() {
 function verifyManager() {
   assert.equal(JSON.parse(ok(target, ['service', '--json'])).drift, 'current');
   if (windows) {
-    const processes = JSON.parse(ps("@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $env:UPDATE_ACCEPTANCE_BINARY -and $_.CommandLine -match 'daemon' } | Select-Object ProcessId,ExecutablePath) | ConvertTo-Json -Compress"));
-    const list = Array.isArray(processes) ? processes : [processes];
+    // CIM expands short (8.3) paths; compare resolved paths, not their spelling.
+    // -InputObject also preserves [] when no process matches, for a useful failure.
+    const processes = JSON.parse(ps("ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter \"Name = 'jarvis.exe'\" | Where-Object { $_.ExecutablePath -and $_.CommandLine -match 'daemon' } | Select-Object ProcessId,ExecutablePath)"));
+    const list = processes.filter(process => samePath(process.ExecutablePath, target));
     assert.equal(list.length, 1); assert.ok(samePath(list[0].ExecutablePath, target));
     assert.ok(ok('reg', ['query', registry, '/v', 'JARVIS']).includes('Start-Process'));
   } else {

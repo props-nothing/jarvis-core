@@ -51,6 +51,15 @@ Activation does not rewrite, start or stop service-manager definitions. Native
 service reconciliation/readiness and clean-machine lifecycle remain acceptance
 gates; version/protocol and offline checks are not live daemon readiness.
 
+Live readiness follows settlement through an explicit startup action. This avoids
+letting a trial daemon resume canonical work while an update is still pending.
+Check authenticated status/health, schema/protocol/version, and the native manager's
+actual process path. If readiness fails, stop the profile and explicitly roll back
+the binary; preserve newer database content. The release acceptance gate performs
+this sequence on disposable native runners. Its distinct source-built previous
+image and publisher-verified candidate exercise real executable replacement; this
+is not evidence of a schema migration or of two different package versions.
+
 ## Consequences
 
 Update records are local integrity evidence, not an adversarial-owner boundary.
